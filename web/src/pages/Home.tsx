@@ -1,12 +1,16 @@
-import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useCallback, useEffect, useState } from 'react'
+import { Link, useNavigate } from 'react-router-dom'
 import { Boom } from '@/components/Boom'
 import { JobThread } from '@/components/JobThread'
 import { TextComposer } from '@/components/TextComposer'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
+import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from '@/components/ui/item'
 import questionnaire from '@/data/questionnaire/v1.json'
 import { api } from '@/lib/api'
-import { sendAudio, sendText, type Job } from '@/lib/jobs'
+import { listJobs, sendAudio, sendText, type Job } from '@/lib/jobs'
 import { setupPush, type PushSetup } from '@/lib/push'
 import type { Recording } from '@/lib/recorder'
 import { useMicrophone, type MicStatus } from '@/lib/useMicrophone'
@@ -57,6 +61,32 @@ const micDot: Record<MicStatus, string> = {
   unsupported: 'bg-muted-foreground',
 }
 
+// The sidebar reads the same statuses the thread does, in the user's words.
+const jobLabel: Record<Job['status'], string> = {
+  queued: 'Waiting',
+  processing: 'Transcribing…',
+  clarifying: 'Needs your answer',
+  complete: 'Done',
+  failed: "Didn't catch that",
+}
+
+// Failing is the only status worth colour: everything else is still in flight,
+// which the user already knows.
+const jobVariant: Record<Job['status'], 'default' | 'secondary' | 'destructive' | 'outline'> = {
+  queued: 'secondary',
+  processing: 'secondary',
+  clarifying: 'default',
+  complete: 'outline',
+  failed: 'destructive',
+}
+
+// What the user first said, which is the only title a Job has until System-One
+// writes one. An untranscribed clip has no words yet.
+function preview(job: Job): string {
+  const said = job.conversation.find((message) => message.role === 'user' && message.text)
+  return said?.text ?? 'Voice clip'
+}
+
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.'
 }
@@ -69,6 +99,7 @@ export default function Home() {
   const [capture, setCapture] = useState<Capture>({ kind: 'idle' })
   const [recorded, setRecorded] = useState(0)
   const [landed, setLanded] = useState(false)
+  const [open, setOpen] = useState<Job[]>([])
 
   // Setup is not done until the current questionnaire version is finished.
   useEffect(() => {
@@ -88,6 +119,21 @@ export default function Home() {
       live = false
     }
   }, [])
+
+  // The sidebar is the only way back to a capture, and nothing closes a Job
+  // until the agent has read it, so it refreshes itself rather than waiting for
+  // a navigation. Five seconds is plenty for a transcript to land.
+  const refreshOpen = useCallback(() => {
+    void listJobs()
+      .then(setOpen)
+      .catch((err: unknown) => console.warn('Blurt: open jobs failed', err))
+  }, [])
+
+  useEffect(() => {
+    refreshOpen()
+    const timer = window.setInterval(refreshOpen, 5000)
+    return () => window.clearInterval(timer)
+  }, [refreshOpen])
 
   // The recording clock doubles as the cap: one interval decides when the clip
   // has run out of time and hands it to the sender.
@@ -158,6 +204,8 @@ export default function Home() {
     setCapture({ kind: 'sending' })
     try {
       setCapture({ kind: 'thread', job: await sendAudio(captured) })
+      // Show it in the sidebar now rather than up to a poll later.
+      refreshOpen()
     } catch (err) {
       // Keep the blob: retrying should not mean speaking again.
       setCapture({ kind: 'failed', message: messageOf(err), recording: captured })
@@ -168,6 +216,8 @@ export default function Home() {
   async function submitText(value: string): Promise<boolean> {
     try {
       setCapture({ kind: 'thread', job: await sendText(value) })
+      // Show it in the sidebar now rather than up to a poll later.
+      refreshOpen()
       return true
     } catch (err) {
       setCapture({ kind: 'failed', message: messageOf(err) })
@@ -205,7 +255,36 @@ export default function Home() {
           <span className="font-bold tracking-wide">Blurt</span>
         </div>
         <h2 className="hidden text-xs uppercase tracking-[0.12em] text-muted-foreground md:block">Waiting on you</h2>
-        <p className="hidden text-sm text-muted-foreground md:block">Clarification threads show up here.</p>
+        {open.length === 0 ? (
+          <p className="hidden text-sm text-muted-foreground md:block">Clarification threads show up here.</p>
+        ) : (
+          // Mobile keeps the same list as a horizontal strip: the sidebar is
+          // just a top bar there, and hiding it would leave nothing to tap.
+          <ItemGroup
+            data-testid="open-jobs"
+            aria-label="Open conversations"
+            className="min-w-0 flex-1 flex-row gap-2 overflow-x-auto md:min-h-0 md:flex-col md:overflow-y-auto"
+          >
+            {open.map((job) => (
+              <Item
+                key={job.jobId}
+                asChild
+                variant="outline"
+                size="sm"
+                className="max-w-[13rem] shrink-0 md:max-w-none"
+              >
+                <Link to={`/jobs/${job.jobId}`} data-testid="open-job">
+                  <ItemContent>
+                    <ItemTitle className="w-full truncate">{preview(job)}</ItemTitle>
+                  </ItemContent>
+                  <ItemActions>
+                    <Badge variant={jobVariant[job.status]}>{jobLabel[job.status]}</Badge>
+                  </ItemActions>
+                </Link>
+              </Item>
+            ))}
+          </ItemGroup>
+        )}
         <div
           data-testid="push-status"
           className="ml-auto flex items-center gap-2 text-xs text-muted-foreground md:ml-0 md:mt-auto md:border-t md:border-border md:pt-4"
@@ -246,7 +325,7 @@ export default function Home() {
             )}
           </div>
 
-          <div className="flex flex-col items-center gap-4 rounded-xl border border-border bg-card/80 p-5">
+          <Card className="items-center gap-4 bg-card/80 p-5">
             {capture.kind === 'thread' ? (
               <JobThread job={capture.job} onReset={resetCapture} />
             ) : (
@@ -267,10 +346,10 @@ export default function Home() {
             )}
 
             {failed && (
-              <div className="flex flex-col items-center gap-2">
-                <p role="alert" data-testid="capture-error" className="text-sm text-destructive">
-                  {failed.message}
-                </p>
+              <div className="flex w-full flex-col items-center gap-2">
+                <Alert variant="destructive" data-testid="capture-error">
+                  <AlertDescription className="text-destructive">{failed.message}</AlertDescription>
+                </Alert>
                 {failed.recording && (
                   <Button type="button" data-testid="retry-upload" onClick={() => void upload(failed.recording!)}>
                     Retry upload
@@ -278,7 +357,7 @@ export default function Home() {
                 )}
               </div>
             )}
-          </div>
+          </Card>
 
           <TextComposer disabled={capture.kind === 'recording'} focus={landed} onSend={submitText} />
 

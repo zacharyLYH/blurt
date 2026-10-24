@@ -234,7 +234,7 @@ func (w *Worker) fail(ctx context.Context, job store.Job, audio string, attempt 
 		Title:    "Blurt couldn't hear that",
 		Body:     FallbackMessage,
 		Tag:      fmt.Sprintf("job-%d", job.JobID),
-		Navigate: "/home",
+		Navigate: fmt.Sprintf("/jobs/%d", job.JobID),
 	})
 	if err != nil {
 		// Push is best effort; the Job already shows the fallback.

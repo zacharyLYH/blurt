@@ -133,6 +133,21 @@ func (s *Server) createTextJob(w http.ResponseWriter, r *http.Request, user stor
 	writeJSON(w, http.StatusCreated, map[string]any{"job": job})
 }
 
+// listJobs backs the open-conversation sidebar: every Job that is not closed
+// yet, newest first, scoped to the caller.
+func (s *Server) listJobs(w http.ResponseWriter, r *http.Request, user store.User) {
+	if s.Jobs == nil {
+		writeError(w, http.StatusNotImplemented, "not_implemented", "Capture is not configured.")
+		return
+	}
+	jobs, err := s.Jobs.OpenJobs(r.Context(), user.UserID)
+	if err != nil {
+		s.fail(w, "list open jobs", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
+}
+
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request, user store.User) {
 	if s.Jobs == nil {
 		writeError(w, http.StatusNotImplemented, "not_implemented", "Capture is not configured.")

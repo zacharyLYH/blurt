@@ -1,5 +1,6 @@
-import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import Home from './pages/Home'
+import Job from './pages/Job'
 import Login from './pages/Login'
 import Permissions from './pages/Permissions'
 import Questionnaire from './pages/Questionnaire'
@@ -19,7 +20,12 @@ function Protected({ children }: { children: React.ReactNode }) {
 // module, so a reload or a later visit asks again — and it runs ahead of the
 // questionnaire, because setup is where the app explains what it needs.
 function Gated({ children }: { children: React.ReactNode }) {
-  if (!permissionsChecked()) return <Navigate to="/permissions" replace />
+  const location = useLocation()
+  // A notification can deep-link into the app, so the gate remembers where the
+  // user was headed instead of dropping them on Home.
+  if (!permissionsChecked()) {
+    return <Navigate to="/permissions" replace state={{ from: location.pathname }} />
+  }
   return <>{children}</>
 }
 
@@ -57,6 +63,7 @@ export default function App() {
               </Protected>
             }
           />
+          <Route path="/jobs/:jobId" element={<Protected><Gated><Job /></Gated></Protected>} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </BrowserRouter>

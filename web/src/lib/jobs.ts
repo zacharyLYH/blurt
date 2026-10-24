@@ -44,6 +44,11 @@ export function getJob(jobId: number): Promise<Job> {
   return api<JobEnvelope>(`/api/jobs/${jobId}`).then((reply) => reply.job)
 }
 
+// The open-conversation sidebar: every Job the agent has not closed yet.
+export function listJobs(): Promise<Job[]> {
+  return api<{ jobs: Job[] }>('/api/jobs').then((reply) => reply.jobs)
+}
+
 // A Job is settled for the UI once the transcript is in, or once it has failed.
 // A transcribed Job stays queued for the agent, so status alone is not enough.
 export function isSettled(job: Job): boolean {

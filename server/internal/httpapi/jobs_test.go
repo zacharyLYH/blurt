@@ -195,3 +195,62 @@ func TestJobIsScopedToItsOwner(t *testing.T) {
 		t.Fatalf("foreign job status = %d, want 404: %s", status, body)
 	}
 }
+
+// The sidebar lists what is still open, newest first, so a capture stays
+// reachable after the user moves on.
+func TestListOpenJobsNewestFirst(t *testing.T) {
+	client, base, mailer, _ := newClient(t)
+	login(t, client, base, "lam@example.com", mailer)
+
+	for _, text := range []string{"Buy glue.", "Book the flight."} {
+		if status, body := call(t, client, http.MethodPost, base+"/api/jobs",
+			map[string]string{"text": text}); status != http.StatusCreated {
+			t.Fatalf("create %q status = %d: %s", text, status, body)
+		}
+	}
+
+	status, body := call(t, client, http.MethodGet, base+"/api/jobs", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list status = %d: %s", status, body)
+	}
+	var reply struct {
+		Jobs []store.Job `json:"jobs"`
+	}
+	if err := json.Unmarshal(body, &reply); err != nil {
+		t.Fatalf("decode jobs: %v", err)
+	}
+	if len(reply.Jobs) != 2 {
+		t.Fatalf("jobs = %+v, want 2", reply.Jobs)
+	}
+	if reply.Jobs[0].Conversation[0].Text != "Book the flight." {
+		t.Fatalf("newest first = %+v", reply.Jobs[0].Conversation)
+	}
+}
+
+// An empty sidebar is [] rather than null, so the client can map over it, and
+// one user never sees another's Jobs.
+func TestListOpenJobsIsEmptyAndScoped(t *testing.T) {
+	first, base, mailer, _ := newClient(t)
+	login(t, first, base, "lam@example.com", mailer)
+	if status, body := call(t, first, http.MethodPost, base+"/api/jobs",
+		map[string]string{"text": "Mine."}); status != http.StatusCreated {
+		t.Fatalf("create status = %d: %s", status, body)
+	}
+
+	second, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookie jar: %v", err)
+	}
+	other := &http.Client{Jar: second}
+	login(t, other, base, "other@example.com", mailer)
+	status, body := call(t, other, http.MethodGet, base+"/api/jobs", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list status = %d: %s", status, body)
+	}
+	if strings.Contains(string(body), "Mine.") {
+		t.Fatalf("another user's job leaked into the sidebar: %s", body)
+	}
+	if !strings.Contains(string(body), `"jobs":[]`) {
+		t.Fatalf("empty sidebar = %s, want an empty array", body)
+	}
+}

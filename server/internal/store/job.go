@@ -97,6 +97,37 @@ func (s *JobStore) ByID(ctx context.Context, userID, jobID int64) (Job, error) {
 		FROM Job WHERE JobId = ? AND UserId = ?`, jobID, userID))
 }
 
+// openJobsLimit caps the sidebar so a pile of Jobs cannot make Home unbounded.
+const openJobsLimit = 50
+
+// OpenJobs backs the open-conversation sidebar: every Job the agent has not
+// closed yet, newest first. Failed Jobs stay in because the PRD keeps them
+// visible for recovery, and a transcribed Job stays because nothing has read it
+// yet. The slice is never nil so the reply is [] rather than null.
+func (s *JobStore) OpenJobs(ctx context.Context, userID int64) ([]Job, error) {
+	rows, err := s.read.QueryContext(ctx, `
+		SELECT JobId, UserId, Status, RetryCount, Conversation, CreatedAt
+		FROM Job WHERE UserId = ? AND Status <> ?
+		ORDER BY CreatedAt DESC, JobId DESC LIMIT ?`, userID, JobComplete, openJobsLimit)
+	if err != nil {
+		return nil, fmt.Errorf("list open jobs: %w", err)
+	}
+	defer rows.Close()
+
+	jobs := []Job{}
+	for rows.Next() {
+		job, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list open jobs: %w", err)
+	}
+	return jobs, nil
+}
+
 // ClaimTranscription takes one queued Job whose user has no other Job in
 // flight. The JSON filter is the audio pending marker: a user message with an
 // Audio reference and no Text yet. Jobs already transcribed are left for the

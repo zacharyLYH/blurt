@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { Button } from '@/components/ui/button'
+import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 
 interface ComposerProps {
@@ -32,21 +33,23 @@ export function TextComposer({ disabled, focus, onSend }: ComposerProps) {
   }
 
   return (
-    <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3 rounded-xl border border-border bg-card/80 p-3">
-      <Textarea
-        ref={ref}
-        data-testid="capture-text"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        placeholder={disabled ? 'Finish the clip first…' : 'Or type it…'}
-        rows={2}
-        aria-label="Blurt text input"
-      />
-      <div className="flex justify-end">
-        <Button type="submit" data-testid="send-text" disabled={disabled || busy || !text.trim()}>
-          {busy ? 'Sending…' : 'Send'}
-        </Button>
-      </div>
-    </form>
+    <Card className="gap-3 bg-card/80 p-3">
+      <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3">
+        <Textarea
+          ref={ref}
+          data-testid="capture-text"
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder={disabled ? 'Finish the clip first…' : 'Or type it…'}
+          rows={2}
+          aria-label="Blurt text input"
+        />
+        <div className="flex justify-end">
+          <Button type="submit" data-testid="send-text" disabled={disabled || busy || !text.trim()}>
+            {busy ? 'Sending…' : 'Send'}
+          </Button>
+        </div>
+      </form>
+    </Card>
   )
 }

@@ -46,6 +46,8 @@ Blurt runs a permission gate on **every app entry** (App.tsx `Gated`), ahead of 
 
 That surprises tests: `page.goto(...)`, `page.reload()`, and even `signIn()` (whose first line is a `goto`) all start a new entry, so what used to land on `/home` or `/questionnaire` lands on `/permissions` instead. Symptom is an `expect(page).toHaveURL(/\/home$/)` timing out with `Received string: ".../permissions"`.
 
+The gate hands the user on to the path they asked for once they continue (it carries `from` in the redirect state), so a deep link survives the bounce — but you still see `/permissions` for a moment mid-test.
+
 Use the helper, which is tolerant because the gate only shows while something still needs attention:
 
 ```ts

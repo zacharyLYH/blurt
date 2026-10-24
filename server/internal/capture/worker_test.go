@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -178,6 +179,11 @@ func TestWorkerFailsAfterThreeAttempts(t *testing.T) {
 	}
 	if f.pusher.calls != 1 || f.pusher.message.Body != FallbackMessage {
 		t.Fatalf("push = %+v", f.pusher)
+	}
+	// The notification opens that Job rather than Home: the fallback copy is
+	// only useful next to the clip it belongs to.
+	if want := fmt.Sprintf("/jobs/%d", job.JobID); f.pusher.message.Navigate != want {
+		t.Fatalf("push navigate = %q, want %q", f.pusher.message.Navigate, want)
 	}
 	if file, err := f.audio.Open(stored.Conversation[0].Audio); err == nil {
 		file.Close()

@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item'
 import { markPermissionsChecked, requestMicrophone, type PermissionState } from '@/lib/permissions'
 import { setupPush, type PushSetup } from '@/lib/push'
 
@@ -27,6 +28,9 @@ const pushLabel: Record<PushSetup, string> = {
 // way to notice is to ask again as early as possible.
 export default function Permissions() {
   const navigate = useNavigate()
+  // This screen runs on every app entry, so a deep link from a notification
+  // lands here first: whatever path the user asked for is where Continue goes.
+  const from = (useLocation().state as { from?: string } | null)?.from ?? '/home'
   const [mic, setMic] = useState<Step>('checking')
   const [push, setPush] = useState<PushSetup>('pending')
 
@@ -58,8 +62,8 @@ export default function Permissions() {
   useEffect(() => {
     if (mic !== 'granted' || push !== 'ready') return
     markPermissionsChecked()
-    navigate('/home', { replace: true })
-  }, [mic, push, navigate])
+    navigate(from, { replace: true })
+  }, [mic, push, navigate, from])
 
   // Browsers only prompt while a permission is unset. Once denied, the app can
   // do nothing but say so: the user has to change it in site settings.
@@ -70,7 +74,7 @@ export default function Permissions() {
 
   function continueOn() {
     markPermissionsChecked()
-    navigate('/home', { replace: true })
+    navigate(from, { replace: true })
   }
 
   const micBlocked = mic === 'denied'
@@ -86,35 +90,45 @@ export default function Permissions() {
         </CardHeader>
 
         <CardContent className="flex flex-col gap-4">
-          <div data-testid="permissions-mic" className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
-            <div>
-              <p className="text-sm font-medium">Microphone</p>
-              <p className="text-xs text-muted-foreground">
+          <Item
+            data-testid="permissions-mic"
+            variant="outline"
+            size="sm"
+            className="items-start justify-between gap-3 p-3"
+          >
+            <ItemContent>
+              <ItemTitle>Microphone</ItemTitle>
+              <ItemDescription className="text-xs">
                 {micBlocked
                   ? 'Blocked. Allow the microphone for this site in your browser settings, then try again.'
                   : 'So you can blurt without typing.'}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions className="shrink-0">
               <span className="text-xs text-muted-foreground">{stateLabel[mic]}</span>
               {(micBlocked || mic === 'prompt') && (
                 <Button type="button" variant="ghost" size="sm" data-testid="permissions-mic-retry" onClick={askMic}>
                   Try again
                 </Button>
               )}
-            </div>
-          </div>
+            </ItemActions>
+          </Item>
 
-          <div data-testid="permissions-notifications" className="flex items-start justify-between gap-4 rounded-lg border border-border p-3">
-            <div>
-              <p className="text-sm font-medium">Notifications</p>
-              <p className="text-xs text-muted-foreground">
+          <Item
+            data-testid="permissions-notifications"
+            variant="outline"
+            size="sm"
+            className="items-start justify-between gap-3 p-3"
+          >
+            <ItemContent>
+              <ItemTitle>Notifications</ItemTitle>
+              <ItemDescription className="text-xs">
                 {push === 'denied'
                   ? 'Blocked. Allow notifications for this site in your browser settings.'
                   : 'So Blurt can nudge you at the right time.'}
-              </p>
-            </div>
-            <div className="flex shrink-0 items-center gap-2">
+              </ItemDescription>
+            </ItemContent>
+            <ItemActions className="shrink-0">
               <span className="text-xs text-muted-foreground">{pushLabel[push]}</span>
               {(push === 'pending' || push === 'denied') && (
                 <Button
@@ -127,8 +141,8 @@ export default function Permissions() {
                   Turn on
                 </Button>
               )}
-            </div>
-          </div>
+            </ItemActions>
+          </Item>
 
           <Button type="button" size="lg" data-testid="permissions-continue" onClick={continueOn}>
             Continue

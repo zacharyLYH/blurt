@@ -75,6 +75,7 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/push/subscribe", s.requireUser(s.subscribePush))
 	mux.HandleFunc("POST /api/push", s.requireUser(s.sendPush))
 	mux.HandleFunc("POST /api/jobs", s.requireUser(s.createJob))
+	mux.HandleFunc("GET /api/jobs", s.requireUser(s.listJobs))
 	mux.HandleFunc("GET /api/jobs/{jobId}", s.requireUser(s.getJob))
 	// Wrong method on a real Job path gets 405, not the generic 501 below.
 	mux.HandleFunc("/api/jobs/{jobId}", methodNotAllowed(http.MethodGet))
@@ -95,7 +96,7 @@ var knownRoutes = map[string]string{
 	"/api/push/key":         http.MethodGet,
 	"/api/push/subscribe":   http.MethodPost,
 	"/api/push":             http.MethodPost,
-	"/api/jobs":             http.MethodPost,
+	"/api/jobs":             http.MethodGet + ", " + http.MethodPost,
 }
 
 // csrf requires an allowed Origin (or Referer) on unsafe methods. Cookies
