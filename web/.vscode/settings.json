@@ -1,0 +1,3 @@
+{
+  "typescript.tsconfig": "./tsconfig.e2e.json"
+}

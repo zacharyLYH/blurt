@@ -1,0 +1,33 @@
+# E2E override: the same images as production, but the server runs on
+# throwaway values and the app is published on a dedicated port so a running
+# dev stack on 9998 never collides. Always merged over the base file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
+#     -p blurt-e2e up --build
+#
+# Test-only values: never used by a real deployment.
+services:
+  server:
+    environment:
+      BLURT_DATA_DIR: /data
+      BLURT_BIND: ":8080"
+      BLURT_PUBLIC_ORIGINS: http://localhost:9977
+      BLURT_SESSION_SECRET: e2e-session-secret-0123456789abcdef
+      # base64 of 32 zero bytes
+      BLURT_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
+      # Dev login: the PIN is fixed (123456) and nothing is mailed, so the
+      # stack needs no mailbox at all. The dev .env is still loaded, so blank
+      # its real App Password instead of carrying it into a test container.
+      BLURT_FAKE_PIN: "true"
+      BLURT_SMTP_PASSWORD: ""
+      BLURT_VAPID_PUBLIC_KEY: BPCRZS3Lfu-TYCCcyqO99WCNWKGt_JCnjO1U67-6qVHrPWnRjs1IGxle6v7Vv2RK89T3Dwj_itMGWtCv-up64XQ
+      BLURT_VAPID_PRIVATE_KEY: m6UconuCpzkrbd1fui1DQb_GXOEGCjue8mhRAzVvak0
+      BLURT_VAPID_SUBJECT: mailto:e2e@example.com
+    # Lets the Go push sender reach the relay the e2e suite runs on the host
+    # (web/e2e/push.spec.ts) through host.docker.internal, on Linux and Desktop.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+# The published port comes from BLURT_WEB_PORT, set by playwright.config.ts
+# (default 9977). Compose appends port lists when merging, so overriding
+# `ports` here would leave the dev port bound too.

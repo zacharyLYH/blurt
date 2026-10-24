@@ -1,0 +1,12 @@
+import { cn } from '@/lib/utils'
+
+function Label({ className, ...props }: React.ComponentProps<'label'>) {
+  return (
+    <label
+      className={cn('flex select-none items-center gap-2 text-sm font-medium text-muted-foreground', className)}
+      {...props}
+    />
+  )
+}
+
+export { Label }

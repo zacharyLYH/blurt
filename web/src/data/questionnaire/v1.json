@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "title": "A few things about you",
+  "intro": "Blurt uses these answers as Memory. You can correct them any time by blurting.",
+  "questions": [
+    {
+      "id": "timezone",
+      "prompt": "What time zone are you usually in?",
+      "placeholder": "Asia/Singapore"
+    },
+    {
+      "id": "waking_hours",
+      "prompt": "When do you usually wake up and go to sleep?",
+      "placeholder": "Wake 7am, sleep 11:30pm"
+    },
+    {
+      "id": "work_hours",
+      "prompt": "When do you usually work, and where?",
+      "placeholder": "Weekdays 9am–6pm at the office"
+    },
+    {
+      "id": "home",
+      "prompt": "Where is home, and how do you usually get back?",
+      "placeholder": "Tampines, by MRT from Raffles Place"
+    },
+    {
+      "id": "quiet_hours",
+      "prompt": "When should Blurt never interrupt you?",
+      "placeholder": "During meals and after 11pm"
+    }
+  ]
+}

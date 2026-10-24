@@ -1,0 +1,49 @@
+# Blurt production stack. nginx (web) serves the built PWA and proxies
+# /api + /health to the Go server, which has no host port of its own.
+# SQLite lives on the blurt-data volume, so `docker compose down` keeps data
+# and only `down -v` throws it away.
+#
+#   make start-no-reset
+#   curl http://localhost:9998/health
+services:
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    env_file:
+      # Optional so e2e runs on a checkout without a local .env; the server
+      # still panics if required settings are missing.
+      - path: .env
+        required: false
+    volumes:
+      - blurt-data:/data
+    networks:
+      - blurt-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    ports:
+      # Only the machine running Blurt reaches nginx; a tunnel or reverse
+      # proxy fronts blurt.bytesbylyh.dev at this port.
+      - "127.0.0.1:${BLURT_WEB_PORT:-9998}:8080"
+    depends_on:
+      server:
+        condition: service_healthy
+    networks:
+      - blurt-net
+    restart: unless-stopped
+
+volumes:
+  blurt-data:
+
+networks:
+  blurt-net:

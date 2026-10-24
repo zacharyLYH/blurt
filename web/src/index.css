@@ -1,0 +1,66 @@
+@import "tailwindcss";
+
+/* Blurt is dark-only: shadcn tokens live on :root, no .dark toggle. */
+:root {
+  --background: oklch(0.18 0.02 300);
+  --foreground: oklch(0.96 0.01 85);
+  --card: oklch(0.22 0.03 295);
+  --card-foreground: oklch(0.96 0.01 85);
+  --popover: oklch(0.22 0.03 295);
+  --popover-foreground: oklch(0.96 0.01 85);
+  --primary: oklch(0.78 0.14 75);
+  --primary-foreground: oklch(0.24 0.04 70);
+  --secondary: oklch(0.26 0.035 295);
+  --secondary-foreground: oklch(0.96 0.01 85);
+  --muted: oklch(0.26 0.035 295);
+  --muted-foreground: oklch(0.68 0.02 300);
+  --accent: oklch(0.26 0.035 295);
+  --accent-foreground: oklch(0.96 0.01 85);
+  --destructive: oklch(0.7 0.16 25);
+  --border: oklch(0.32 0.03 295);
+  --input: oklch(0.32 0.03 295);
+  --ring: oklch(0.78 0.14 75);
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  body {
+    margin: 0;
+    background:
+      radial-gradient(900px 600px at 15% -10%, oklch(0.28 0.05 290) 0%, transparent 60%),
+      radial-gradient(700px 500px at 110% 20%, oklch(0.3 0.06 75) 0%, transparent 55%),
+      var(--background);
+    color: var(--foreground);
+    font-family: ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+}

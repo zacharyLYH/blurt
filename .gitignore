@@ -1,0 +1,21 @@
+# Local runtime secrets
+.env
+
+# Backend
+server/data/
+server/blurt.db
+server/blurt.db-wal
+server/blurt.db-shm
+
+# Frontend
+node_modules/
+web/dist/
+web/node_modules/
+
+# Editors / OS
+.DS_Store
+*.log
+
+# E2E
+web/test-results/
+web/playwright-report/

@@ -33,6 +33,7 @@ Talking points and structure:
 3. USE SHADCN COMPONENTS AND TAILWIND CSS. Prioritize using fleshed out and polished ShadCN components found here: https://ui.shadcn.com/docs/components
 4. TAILWIND CSS RESPONSIVE DESIGN IS MOBILE FIRST. Custom styles are for larger screens, non-custom are assumed to be for mobile screens.
 5. MOCK API BEHAVIOR. Do not spin up a real golang server. Just mock the API behavior your test expects! Keeps code decoupled and even allows us to test API failure / edge cases much easier!
+6. NPM RUN LINT must not have any errors.
 
 # Agent learnings
 Anytime you have a tough time doing something and learn of a thing that can help future agents expedite this process, you should document it as a skill. These are some examples of things that should be skills:
