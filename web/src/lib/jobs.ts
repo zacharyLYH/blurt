@@ -22,6 +22,15 @@ interface JobEnvelope {
   job: Job
 }
 
+// A sidebar row: what the list renders, not the whole thread. The server sends
+// the preview, so polling the sidebar never pulls a full transcript.
+export interface JobSummary {
+  jobId: number
+  status: JobStatus
+  preview: string
+  createdAt: string
+}
+
 export function sendAudio(recording: Recording): Promise<Job> {
   return api<JobEnvelope>('/api/jobs', {
     method: 'POST',
@@ -44,9 +53,9 @@ export function getJob(jobId: number): Promise<Job> {
   return api<JobEnvelope>(`/api/jobs/${jobId}`).then((reply) => reply.job)
 }
 
-// The open-conversation sidebar: every Job the agent has not closed yet.
-export function listJobs(): Promise<Job[]> {
-  return api<{ jobs: Job[] }>('/api/jobs').then((reply) => reply.jobs)
+// The open-conversation sidebar: one row per Job the agent has not closed yet.
+export function listJobs(): Promise<JobSummary[]> {
+  return api<{ jobs: JobSummary[] }>('/api/jobs').then((reply) => reply.jobs)
 }
 
 // A Job is settled for the UI once the transcript is in, or once it has failed.

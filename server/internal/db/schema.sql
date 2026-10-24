@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS Job (
     CreatedAt    TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_job_queue ON Job(Status, CreatedAt);
+-- Every hot Job query filters on the owner: the sidebar lists one user's open
+-- conversations, and the claim checks whether that same user already has a Job
+-- in flight.
+CREATE INDEX IF NOT EXISTS idx_job_user ON Job(UserId, Status, CreatedAt);
 
 CREATE TABLE IF NOT EXISTS Reminder (
     ReminderId           INTEGER PRIMARY KEY,

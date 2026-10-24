@@ -3,12 +3,27 @@ import { Button } from '@/components/ui/button'
 import { getJob, isSettled, type Job } from '@/lib/jobs'
 import { cn } from '@/lib/utils'
 
+interface JobThreadProps {
+  job: Job
+  onReset: () => void
+  // Called once the thread stops changing, so a list that does not poll can
+  // refresh on that event instead of on a timer.
+  onSettled?: () => void
+}
+
 // JobThread shows a capture's conversation and polls until the transcript has
 // landed or the Job has failed. It owns the polling because it is only mounted
 // while a thread is on screen.
-export function JobThread({ job: created, onReset }: { job: Job; onReset: () => void }) {
+export function JobThread({ job: created, onReset, onSettled }: JobThreadProps) {
   const [job, setJob] = useState(created)
   const settled = isSettled(job)
+
+  // The event a non-polling list waits for. It also fires for a thread that was
+  // already settled when it mounted, which is harmless: the caller's own
+  // refresh is idempotent.
+  useEffect(() => {
+    if (settled) onSettled?.()
+  }, [settled, onSettled])
 
   useEffect(() => {
     if (settled) return

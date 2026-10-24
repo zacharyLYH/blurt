@@ -10,7 +10,7 @@ import { Card } from '@/components/ui/card'
 import { Item, ItemActions, ItemContent, ItemGroup, ItemTitle } from '@/components/ui/item'
 import questionnaire from '@/data/questionnaire/v1.json'
 import { api } from '@/lib/api'
-import { listJobs, sendAudio, sendText, type Job } from '@/lib/jobs'
+import { listJobs, sendAudio, sendText, type Job, type JobSummary } from '@/lib/jobs'
 import { setupPush, type PushSetup } from '@/lib/push'
 import type { Recording } from '@/lib/recorder'
 import { useMicrophone, type MicStatus } from '@/lib/useMicrophone'
@@ -80,13 +80,6 @@ const jobVariant: Record<Job['status'], 'default' | 'secondary' | 'destructive' 
   failed: 'destructive',
 }
 
-// What the user first said, which is the only title a Job has until System-One
-// writes one. An untranscribed clip has no words yet.
-function preview(job: Job): string {
-  const said = job.conversation.find((message) => message.role === 'user' && message.text)
-  return said?.text ?? 'Voice clip'
-}
-
 function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : 'Something went wrong.'
 }
@@ -99,7 +92,7 @@ export default function Home() {
   const [capture, setCapture] = useState<Capture>({ kind: 'idle' })
   const [recorded, setRecorded] = useState(0)
   const [landed, setLanded] = useState(false)
-  const [open, setOpen] = useState<Job[]>([])
+  const [open, setOpen] = useState<JobSummary[]>([])
 
   // Setup is not done until the current questionnaire version is finished.
   useEffect(() => {
@@ -120,9 +113,9 @@ export default function Home() {
     }
   }, [])
 
-  // The sidebar is the only way back to a capture, and nothing closes a Job
-  // until the agent has read it, so it refreshes itself rather than waiting for
-  // a navigation. Five seconds is plenty for a transcript to land.
+  // The sidebar is the only way back to a capture. It refreshes on the events that
+  // can change it — app entry, a new capture, a thread settling — instead of on a
+  // timer: with no agent, nothing else moves a Job.
   const refreshOpen = useCallback(() => {
     void listJobs()
       .then(setOpen)
@@ -131,8 +124,6 @@ export default function Home() {
 
   useEffect(() => {
     refreshOpen()
-    const timer = window.setInterval(refreshOpen, 5000)
-    return () => window.clearInterval(timer)
   }, [refreshOpen])
 
   // The recording clock doubles as the cap: one interval decides when the clip
@@ -275,7 +266,7 @@ export default function Home() {
               >
                 <Link to={`/jobs/${job.jobId}`} data-testid="open-job">
                   <ItemContent>
-                    <ItemTitle className="w-full truncate">{preview(job)}</ItemTitle>
+                    <ItemTitle className="w-full truncate">{job.preview || 'Voice clip'}</ItemTitle>
                   </ItemContent>
                   <ItemActions>
                     <Badge variant={jobVariant[job.status]}>{jobLabel[job.status]}</Badge>
@@ -327,7 +318,7 @@ export default function Home() {
 
           <Card className="items-center gap-4 bg-card/80 p-5">
             {capture.kind === 'thread' ? (
-              <JobThread job={capture.job} onReset={resetCapture} />
+              <JobThread job={capture.job} onReset={resetCapture} onSettled={refreshOpen} />
             ) : (
               <Boom
                 session={session}

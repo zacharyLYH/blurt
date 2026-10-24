@@ -83,6 +83,42 @@ func TestClaimTranscriptionPipeline(t *testing.T) {
 	}
 }
 
+// A Job with a second clip must be claimable again. The claim used to also
+// require that the Job carried no successful transcription Trace, which stranded
+// every clip after the first one in the same conversation — exactly what a voice
+// reply to a clarification will be.
+func TestClaimTranscribesASecondClipInTheSameJob(t *testing.T) {
+	jobs, _, userID := newJobStack(t)
+	ctx := context.Background()
+
+	job, err := jobs.Create(ctx, userID,
+		Message{Role: "user", Audio: "aaaa0000aaaa0000.wav"},
+		Message{Role: "user", Audio: "cccc0000cccc0000.wav"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+
+	claimed, ok, err := jobs.ClaimTranscription(ctx)
+	if err != nil || !ok {
+		t.Fatalf("claim first clip: ok=%v err=%v", ok, err)
+	}
+	if audio, ok := claimed.PendingAudio(); !ok || audio != "aaaa0000aaaa0000.wav" {
+		t.Fatalf("first pending audio = %q ok=%v", audio, ok)
+	}
+	if err := jobs.SaveTranscript(ctx, job.JobID, "aaaa0000aaaa0000.wav", "buy glue",
+		map[string]any{"outcome": "ok"}); err != nil {
+		t.Fatalf("save transcript: %v", err)
+	}
+
+	claimed, ok, err = jobs.ClaimTranscription(ctx)
+	if err != nil || !ok {
+		t.Fatalf("claim second clip: ok=%v err=%v", ok, err)
+	}
+	if audio, ok := claimed.PendingAudio(); !ok || audio != "cccc0000cccc0000.wav" {
+		t.Fatalf("second pending audio = %q ok=%v", audio, ok)
+	}
+}
+
 func TestJobReadIsScopedToOwner(t *testing.T) {
 	jobs, _, userID := newJobStack(t)
 	ctx := context.Background()

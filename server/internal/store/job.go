@@ -100,25 +100,44 @@ func (s *JobStore) ByID(ctx context.Context, userID, jobID int64) (Job, error) {
 // openJobsLimit caps the sidebar so a pile of Jobs cannot make Home unbounded.
 const openJobsLimit = 50
 
+// OpenJob is one row of the open-conversation sidebar. It carries the preview
+// the list renders instead of the whole Conversation: the sidebar polls this,
+// and a transcript can be two thousand characters long. An untranscribed clip
+// has no words yet, so its preview is empty and the client supplies its own copy.
+type OpenJob struct {
+	JobID     int64  `json:"jobId"`
+	Status    string `json:"status"`
+	Preview   string `json:"preview"`
+	CreatedAt string `json:"createdAt"`
+}
+
 // OpenJobs backs the open-conversation sidebar: every Job the agent has not
 // closed yet, newest first. Failed Jobs stay in because the PRD keeps them
 // visible for recovery, and a transcribed Job stays because nothing has read it
 // yet. The slice is never nil so the reply is [] rather than null.
-func (s *JobStore) OpenJobs(ctx context.Context, userID int64) ([]Job, error) {
+func (s *JobStore) OpenJobs(ctx context.Context, userID int64) ([]OpenJob, error) {
 	rows, err := s.read.QueryContext(ctx, `
-		SELECT JobId, UserId, Status, RetryCount, Conversation, CreatedAt
-		FROM Job WHERE UserId = ? AND Status <> ?
-		ORDER BY CreatedAt DESC, JobId DESC LIMIT ?`, userID, JobComplete, openJobsLimit)
+		SELECT j.JobId, j.Status, j.CreatedAt,
+		       COALESCE((
+		         SELECT json_extract(m.value, '$.text')
+		         FROM json_each(j.Conversation) m
+		         WHERE json_extract(m.value, '$.role') = 'user'
+		           AND COALESCE(json_extract(m.value, '$.text'), '') <> ''
+		         ORDER BY m.key LIMIT 1
+		       ), '') AS Preview
+		FROM Job j
+		WHERE j.UserId = ? AND j.Status <> ?
+		ORDER BY j.CreatedAt DESC, j.JobId DESC LIMIT ?`, userID, JobComplete, openJobsLimit)
 	if err != nil {
 		return nil, fmt.Errorf("list open jobs: %w", err)
 	}
 	defer rows.Close()
 
-	jobs := []Job{}
+	jobs := []OpenJob{}
 	for rows.Next() {
-		job, err := scanJob(rows)
-		if err != nil {
-			return nil, err
+		var job OpenJob
+		if err := rows.Scan(&job.JobID, &job.Status, &job.CreatedAt, &job.Preview); err != nil {
+			return nil, fmt.Errorf("scan open job: %w", err)
 		}
 		jobs = append(jobs, job)
 	}
@@ -129,9 +148,10 @@ func (s *JobStore) OpenJobs(ctx context.Context, userID int64) ([]Job, error) {
 }
 
 // ClaimTranscription takes one queued Job whose user has no other Job in
-// flight. The JSON filter is the audio pending marker: a user message with an
-// Audio reference and no Text yet. Jobs already transcribed are left for the
-// agent, which does not exist in this slice.
+// flight. The audio pending marker — a user message with an Audio reference and
+// no Text yet — is the only condition. Saving a transcript clears the marker for
+// that clip and leaves any later clip matching, so a second voice turn in the
+// same conversation is claimable too.
 func (s *JobStore) ClaimTranscription(ctx context.Context) (Job, bool, error) {
 	job, err := scanJob(s.write.QueryRowContext(ctx, `
 		UPDATE Job SET Status = ?
@@ -147,13 +167,9 @@ func (s *JobStore) ClaimTranscription(ctx context.Context) (Job, bool, error) {
 				  AND json_extract(m.value, '$.audio') IS NOT NULL
 				  AND json_extract(m.value, '$.audio') <> ''
 				  AND COALESCE(json_extract(m.value, '$.text'), '') = '')
-			  AND NOT EXISTS (
-				SELECT 1 FROM Trace t
-				WHERE t.JobId = j.JobId AND t.Stage = ?
-				  AND json_extract(t.Detail, '$.outcome') = 'ok')
 			ORDER BY j.CreatedAt LIMIT 1)
 		RETURNING JobId, UserId, Status, RetryCount, Conversation, CreatedAt`,
-		JobProcessing, JobQueued, JobProcessing, transcriptionStage))
+		JobProcessing, JobQueued, JobProcessing))
 	if errors.Is(err, ErrNotFound) {
 		return Job{}, false, nil
 	}
@@ -164,8 +180,8 @@ func (s *JobStore) ClaimTranscription(ctx context.Context) (Job, bool, error) {
 }
 
 // SaveTranscript fills the audio message's text and hands the Job back to the
-// queue. Text and Trace commit together, so the worker's claim rule (no ok
-// Trace) and the transcript itself can never disagree.
+// queue. Text and Trace commit together, so the claim marker — the very text the
+// worker writes — and the transcript can never disagree.
 func (s *JobStore) SaveTranscript(ctx context.Context, jobID int64, audio, text string, detail map[string]any) error {
 	_, err := s.mutate(ctx, jobID, detail, func(job *Job) error {
 		for i := range job.Conversation {
@@ -192,7 +208,9 @@ func (s *JobStore) RetryTranscription(ctx context.Context, jobID int64, attempt 
 }
 
 // RequeueInterrupted treats a crash mid-transcription as a failed attempt, as
-// the PRD requires, so a Job left in processing is not invisible forever.
+// the PRD requires, so a Job left in processing is not invisible forever. The
+// audio pending marker is the rule here too: a Job whose clip already has text
+// was never left mid-flight, whatever traces it carries.
 func (s *JobStore) RequeueInterrupted(ctx context.Context) (int64, error) {
 	res, err := s.write.ExecContext(ctx, `
 		UPDATE Job SET Status = ?, RetryCount = RetryCount + 1
@@ -202,12 +220,8 @@ func (s *JobStore) RequeueInterrupted(ctx context.Context) (int64, error) {
 			WHERE json_extract(m.value, '$.role') = 'user'
 			  AND json_extract(m.value, '$.audio') IS NOT NULL
 			  AND json_extract(m.value, '$.audio') <> ''
-			  AND COALESCE(json_extract(m.value, '$.text'), '') = '')
-		  AND NOT EXISTS (
-			SELECT 1 FROM Trace t
-			WHERE t.JobId = Job.JobId AND t.Stage = ?
-			  AND json_extract(t.Detail, '$.outcome') = 'ok')`,
-		JobQueued, JobProcessing, transcriptionStage)
+			  AND COALESCE(json_extract(m.value, '$.text'), '') = '')`,
+		JobQueued, JobProcessing)
 	if err != nil {
 		return 0, fmt.Errorf("requeue interrupted jobs: %w", err)
 	}

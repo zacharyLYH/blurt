@@ -214,7 +214,7 @@ func TestListOpenJobsNewestFirst(t *testing.T) {
 		t.Fatalf("list status = %d: %s", status, body)
 	}
 	var reply struct {
-		Jobs []store.Job `json:"jobs"`
+		Jobs []store.OpenJob `json:"jobs"`
 	}
 	if err := json.Unmarshal(body, &reply); err != nil {
 		t.Fatalf("decode jobs: %v", err)
@@ -222,8 +222,38 @@ func TestListOpenJobsNewestFirst(t *testing.T) {
 	if len(reply.Jobs) != 2 {
 		t.Fatalf("jobs = %+v, want 2", reply.Jobs)
 	}
-	if reply.Jobs[0].Conversation[0].Text != "Book the flight." {
-		t.Fatalf("newest first = %+v", reply.Jobs[0].Conversation)
+	// Newest first, and each row carries the preview the sidebar renders rather
+	// than the whole conversation the list would otherwise have to poll for.
+	if reply.Jobs[0].Preview != "Book the flight." || reply.Jobs[1].Preview != "Buy glue." {
+		t.Fatalf("previews = %q, %q", reply.Jobs[0].Preview, reply.Jobs[1].Preview)
+	}
+	if reply.Jobs[0].Status != store.JobQueued || reply.Jobs[0].CreatedAt == "" {
+		t.Fatalf("row = %+v", reply.Jobs[0])
+	}
+}
+
+// An untranscribed clip has no words yet, so its row carries an empty preview
+// and the client falls back to its own copy.
+func TestListOpenJobsHasNoPreviewBeforeTranscription(t *testing.T) {
+	client, base, mailer, _ := newClient(t)
+	login(t, client, base, "lam@example.com", mailer)
+
+	if status, body := upload(t, client, base+"/api/jobs", "audio/wav", "800", wavBytes(16000, 1)); status != http.StatusCreated {
+		t.Fatalf("upload status = %d: %s", status, body)
+	}
+
+	status, body := call(t, client, http.MethodGet, base+"/api/jobs", nil)
+	if status != http.StatusOK {
+		t.Fatalf("list status = %d: %s", status, body)
+	}
+	var reply struct {
+		Jobs []store.OpenJob `json:"jobs"`
+	}
+	if err := json.Unmarshal(body, &reply); err != nil {
+		t.Fatalf("decode jobs: %v", err)
+	}
+	if len(reply.Jobs) != 1 || reply.Jobs[0].Preview != "" {
+		t.Fatalf("jobs = %+v, want one row with an empty preview", reply.Jobs)
 	}
 }
 
