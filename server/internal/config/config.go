@@ -55,6 +55,15 @@ type STT struct {
 	Model  string
 }
 
+// Decision is the laya model Blurt asks for typed decisions; today that is the
+// transcript-quality gate. It shares the STT gateway, so the URL and key fall
+// back to the STT ones and only the model differs.
+type Decision struct {
+	URL    string
+	APIKey string
+	Model  string
+}
+
 // fakeSTTModes are the dev failure-injection modes. They mirror BLURT_FAKE_PIN:
 // useful locally and in e2e, fatal on a public host.
 // fakeSTTModes are the dev failure-injection modes. They mirror BLURT_FAKE_PIN:
@@ -79,6 +88,9 @@ type Config struct {
 	SMTP    SMTP
 	VAPID   VAPID
 	STT     STT
+	// Decision is the typed-decision gateway. An empty URL turns the gate off
+	// rather than failing boot: it is an advisory filter, not a hard dependency.
+	Decision Decision
 }
 
 // Load reads the environment and returns every problem it finds at once.
@@ -152,6 +164,28 @@ func Load() (*Config, error) {
 		}
 	} else if err := checkHTTPURL(cfg.STT.URL); err != nil {
 		problems = append(problems, "BLURT_STT_URL "+err.Error())
+	}
+
+	// laya shares the STT gateway, so only the model is required to differ. With
+	// no URL the gate is simply skipped, which is how a fake-STT stack runs.
+	cfg.Decision = Decision{
+		URL:    opt("BLURT_DECISION_URL"),
+		APIKey: opt("BLURT_DECISION_API_KEY"),
+		Model:  opt("BLURT_DECISION_MODEL"),
+	}
+	if cfg.Decision.Model == "" {
+		cfg.Decision.Model = "laya"
+	}
+	if cfg.Decision.URL == "" {
+		cfg.Decision.URL = cfg.STT.URL
+	}
+	if cfg.Decision.APIKey == "" {
+		cfg.Decision.APIKey = cfg.STT.APIKey
+	}
+	if cfg.Decision.URL != "" {
+		if err := checkHTTPURL(cfg.Decision.URL); err != nil {
+			problems = append(problems, "BLURT_DECISION_URL "+err.Error())
+		}
 	}
 
 	cfg.VAPID = VAPID{

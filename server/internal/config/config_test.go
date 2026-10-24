@@ -223,3 +223,44 @@ func TestSTTRequiresURLUnlessFake(t *testing.T) {
 		t.Fatalf("STT model = %q, want default phonon", cfg.STT.Model)
 	}
 }
+
+// laya shares the STT gateway: a deploy that sets only BLURT_STT_* still gets a
+// working gate, and with the fake on there is no gateway, so the gate is off.
+func TestDecisionDefaultsToSTTGateway(t *testing.T) {
+	setValid(t)
+	t.Setenv("BLURT_STT_API_KEY", "stt-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Decision.Model != "laya" {
+		t.Fatalf("decision model = %q, want the default laya", cfg.Decision.Model)
+	}
+	if cfg.Decision.URL != cfg.STT.URL || cfg.Decision.APIKey != cfg.STT.APIKey {
+		t.Fatalf("decision gateway = %+v, want the STT gateway", cfg.Decision)
+	}
+
+	// The fake has no gateway to ask, so the gate stays off rather than failing
+	// the boot.
+	t.Setenv("BLURT_FAKE_STT", "true")
+	t.Setenv("BLURT_STT_URL", "")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load with the fake: %v", err)
+	}
+	if cfg.Decision.URL != "" {
+		t.Fatalf("decision URL = %q, want empty so the gate is skipped", cfg.Decision.URL)
+	}
+	if cfg.Decision.Model != "laya" {
+		t.Fatalf("decision model = %q, want laya even with no gateway", cfg.Decision.Model)
+	}
+
+	// An explicit override still has to be a usable URL.
+	t.Setenv("BLURT_FAKE_STT", "false")
+	t.Setenv("BLURT_STT_URL", "https://stt.example.com/v1/infer")
+	t.Setenv("BLURT_DECISION_URL", "not-a-url")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "BLURT_DECISION_URL") {
+		t.Fatalf("Load with a malformed decision URL: %v", err)
+	}
+}

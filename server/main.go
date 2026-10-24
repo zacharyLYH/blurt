@@ -17,6 +17,7 @@ import (
 	"blurt/internal/capture"
 	"blurt/internal/config"
 	"blurt/internal/db"
+	"blurt/internal/decision"
 	"blurt/internal/httpapi"
 	"blurt/internal/mail"
 	"blurt/internal/push"
@@ -52,6 +53,8 @@ func main() {
 		"stt_configured", cfg.STT.URL != "",
 		"stt_model", cfg.STT.Model,
 		"fake_stt", cfg.FakeSTT,
+		"decision_model", cfg.Decision.Model,
+		"gate_on", cfg.Decision.URL != "",
 	)
 
 	// BLURT_FAKE_PIN is the dev way to sign in without a mailbox: the PIN is
@@ -85,8 +88,15 @@ func main() {
 	} else {
 		transcriber = stt.NewHTTP(cfg.STT)
 	}
+	// The gate is advisory, so it stays a nil interface when no decision gateway
+	// is configured and the worker skips it.
+	var gate decision.Decider
+	if cfg.Decision.URL != "" {
+		gate = decision.NewHTTP(cfg.Decision)
+	}
 	worker := &capture.Worker{
 		Jobs: jobs, Audio: audio, STT: transcriber, Pusher: notifier, Model: cfg.STT.Model,
+		Gate: gate, GateModel: cfg.Decision.Model,
 	}
 
 	srv := &http.Server{
