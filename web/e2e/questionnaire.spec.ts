@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { completeQuestionnaire, fillQuestionnaire, signIn, uniqueEmail } from './helpers'
+import { completeQuestionnaire, fillQuestionnaire, passPermissions, signIn, uniqueEmail } from './helpers'
 
 // Real browser, real Go server, real SQLite, real session cookie, real PIN
 // minted by the server (fixed by BLURT_FAKE_PIN, never mailed). No mocks.
@@ -7,11 +7,14 @@ test('questionnaire gates home, saves answers, and remembers completion', async 
   const email = uniqueEmail('questionnaire')
 
   await signIn(page, { name: 'Q', email })
+  await passPermissions(page)
 
   // Unfinished setup cannot reach home.
   await expect(page).toHaveURL(/\/questionnaire$/)
   await expect(page.getByText('What time zone are you usually in?')).toBeVisible()
   await page.goto('/home')
+  // A full page load is a new entry, so the gate runs again.
+  await passPermissions(page)
   await expect(page).toHaveURL(/\/questionnaire$/)
 
   await completeQuestionnaire(page)
@@ -22,12 +25,15 @@ test('questionnaire gates home, saves answers, and remembers completion', async 
 
   // Completion is server state: a reload keeps the gate open.
   await page.reload()
+  await passPermissions(page)
   await expect(page).toHaveURL(/\/home$/)
 
   // A brand new session for the same email also skips the questionnaire.
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page).toHaveURL(/\/login$/)
   await signIn(page, { name: 'Q', email })
+  // signIn starts with a full page load, so the gate runs again.
+  await passPermissions(page)
   await expect(page).toHaveURL(/\/home$/)
 
   const again = await (await page.request.get('/api/user')).json()
@@ -38,6 +44,7 @@ test('questionnaire gates home, saves answers, and remembers completion', async 
 // expiry), but the UI path is the same: a 401 sends the user back to login.
 test('missing session during setup drops back to login', async ({ page, context }) => {
   await signIn(page, { name: 'Q2', email: uniqueEmail('sessionless') })
+  await passPermissions(page)
   await expect(page).toHaveURL(/\/questionnaire$/)
 
   await fillQuestionnaire(page)

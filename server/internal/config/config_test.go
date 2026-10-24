@@ -37,6 +37,7 @@ func setValid(t *testing.T) {
 		"BLURT_VAPID_PUBLIC_KEY":  publicKey,
 		"BLURT_VAPID_PRIVATE_KEY": privateKey,
 		"BLURT_VAPID_SUBJECT":     "mailto:sender@example.com",
+		"BLURT_STT_URL":           "https://stt.example.com/v1/audio/transcriptions",
 	}
 	for name, value := range env {
 		t.Setenv(name, value)
@@ -183,6 +184,8 @@ func TestLoadRejectsMalformedSecrets(t *testing.T) {
 	t.Setenv("BLURT_VAPID_PUBLIC_KEY", "not base64!")
 	t.Setenv("BLURT_FAKE_PIN", "yes please")
 	t.Setenv("BLURT_PUBLIC_ORIGINS", "https://blurt.bytesbylyh.dev/app")
+	t.Setenv("BLURT_FAKE_STT", "yes please")
+	t.Setenv("BLURT_STT_URL", "not-a-url")
 
 	_, err := Load()
 	if err == nil {
@@ -191,9 +194,32 @@ func TestLoadRejectsMalformedSecrets(t *testing.T) {
 	for _, want := range []string{
 		"BLURT_SMTP_PORT", "BLURT_SESSION_SECRET",
 		"BLURT_VAPID_PUBLIC_KEY", "BLURT_FAKE_PIN", "BLURT_PUBLIC_ORIGINS",
+		"BLURT_FAKE_STT", "BLURT_STT_URL",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Fatalf("error missing %q:\n%s", want, err)
 		}
+	}
+}
+
+// Real STT is required in production; the fake is the local/e2e escape hatch.
+func TestSTTRequiresURLUnlessFake(t *testing.T) {
+	setValid(t)
+	t.Setenv("BLURT_STT_URL", "")
+
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "BLURT_STT_URL is required") {
+		t.Fatalf("Load without an STT URL: %v", err)
+	}
+
+	t.Setenv("BLURT_FAKE_STT", "true")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load with BLURT_FAKE_STT: %v", err)
+	}
+	if !cfg.FakeSTT {
+		t.Fatal("FakeSTT = false, want true")
+	}
+	if cfg.STT.Model != "phonon" {
+		t.Fatalf("STT model = %q, want default phonon", cfg.STT.Model)
 	}
 }

@@ -46,8 +46,32 @@ export async function fillQuestionnaire(page: Page): Promise<void> {
 }
 
 export async function completeQuestionnaire(page: Page): Promise<void> {
+  await passPermissions(page)
   await expect(page).toHaveURL(/\/questionnaire$/)
   await fillQuestionnaire(page)
   await page.getByTestId('questionnaire-submit').click()
   await expect(page).toHaveURL(/\/home$/)
+}
+
+// The permission gate runs on every app entry (and on every full page load),
+// ahead of the questionnaire. It is tolerant because the gate only appears while
+// something still needs attention, so callers do not have to know which load
+// they are on.
+export async function passPermissions(page: Page): Promise<void> {
+  const gate = page.getByTestId('permissions-continue')
+  await gate.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined)
+  if (await gate.isVisible()) await gate.click()
+}
+
+// A revoked microphone, or one that was never granted. A page cannot un-grant a
+// permission, so the init script rejects getUserMedia instead; without this,
+// --use-fake-ui-for-media-stream auto-accepts.
+export async function denyMicrophone(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    if (!navigator.mediaDevices) return
+    Object.defineProperty(navigator.mediaDevices, 'getUserMedia', {
+      configurable: true,
+      value: () => Promise.reject(new DOMException('denied', 'NotAllowedError')),
+    })
+  })
 }

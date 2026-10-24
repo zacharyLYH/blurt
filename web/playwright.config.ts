@@ -17,6 +17,12 @@ export default defineConfig({
     // Local runs reuse installed Chrome; CI installs Playwright's chromium.
     channel: process.env.CI ? 'chromium' : 'chrome',
     trace: 'retain-on-failure',
+    // Capture tests need a microphone. Chromium's fake device gives a stable
+    // stream; per-test init scripts can still force a permission denial.
+    permissions: ['microphone'],
+    launchOptions: {
+      args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
+    },
   },
   webServer: {
     command:

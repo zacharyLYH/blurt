@@ -19,6 +19,9 @@ services:
       # stack needs no mailbox at all. The dev .env is still loaded, so blank
       # its real App Password instead of carrying it into a test container.
       BLURT_FAKE_PIN: "true"
+      # phonon is a network dependency; e2e uses the deterministic fake so the
+      # capture path can be exercised without the gateway.
+      BLURT_FAKE_STT: "true"
       BLURT_SMTP_PASSWORD: ""
       BLURT_VAPID_PUBLIC_KEY: BPCRZS3Lfu-TYCCcyqO99WCNWKGt_JCnjO1U67-6qVHrPWnRjs1IGxle6v7Vv2RK89T3Dwj_itMGWtCv-up64XQ
       BLURT_VAPID_PRIVATE_KEY: m6UconuCpzkrbd1fui1DQb_GXOEGCjue8mhRAzVvak0

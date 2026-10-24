@@ -14,12 +14,14 @@ import (
 	"time"
 
 	"blurt/internal/auth"
+	"blurt/internal/capture"
 	"blurt/internal/config"
 	"blurt/internal/db"
 	"blurt/internal/httpapi"
 	"blurt/internal/mail"
 	"blurt/internal/push"
 	"blurt/internal/store"
+	"blurt/internal/stt"
 )
 
 func main() {
@@ -47,6 +49,9 @@ func main() {
 		"smtp_port", cfg.SMTP.Port,
 		"smtp_from", cfg.SMTP.From,
 		"vapid_subject", cfg.VAPID.Subject,
+		"stt_configured", cfg.STT.URL != "",
+		"stt_model", cfg.STT.Model,
+		"fake_stt", cfg.FakeSTT,
 	)
 
 	// BLURT_FAKE_PIN is the dev way to sign in without a mailbox: the PIN is
@@ -65,6 +70,25 @@ func main() {
 	}
 
 	sessions := store.NewSessionStore(handle.Write, handle.Read)
+	notifier := &push.Notifier{Sessions: sessions, Sender: push.NewSender(cfg.VAPID)}
+	audio, err := capture.NewStore(cfg.DataDir)
+	if err != nil {
+		panic(err)
+	}
+	jobs := store.NewJobStore(handle.Write, handle.Read)
+
+	// The fake is the local/e2e escape hatch, exactly like BLURT_FAKE_PIN.
+	var transcriber stt.Transcriber
+	if cfg.FakeSTT {
+		slog.Warn("BLURT_FAKE_STT is on: transcripts are synthetic — never do this on a public host")
+		transcriber = stt.NewFake(stt.FakeOK)
+	} else {
+		transcriber = stt.NewHTTP(cfg.STT)
+	}
+	worker := &capture.Worker{
+		Jobs: jobs, Audio: audio, STT: transcriber, Pusher: notifier, Model: cfg.STT.Model,
+	}
+
 	srv := &http.Server{
 		Addr: cfg.Bind,
 		Handler: httpapi.New(httpapi.Deps{
@@ -73,7 +97,9 @@ func main() {
 			Sessions:       sessions,
 			Pins:           auth.NewPinStore(5*time.Minute, fixedPIN),
 			Mailer:         mailer,
-			Pusher:         &push.Notifier{Sessions: sessions, Sender: push.NewSender(cfg.VAPID)},
+			Pusher:         notifier,
+			Jobs:           jobs,
+			Audio:          audio,
 			VAPIDPublicKey: cfg.VAPID.PublicKey,
 			AllowedOrigins: cfg.PublicOrigins,
 		}),
@@ -85,6 +111,8 @@ func main() {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	go worker.Run(ctx)
 
 	go func() {
 		slog.Info("listening", "addr", cfg.Bind)

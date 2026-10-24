@@ -1,7 +1,7 @@
 import { expect, test } from '@playwright/test'
 import { BASE_URL } from './env'
 import { deliverPush } from './fake-relay'
-import { completeQuestionnaire, signIn, uniqueEmail } from './helpers'
+import { completeQuestionnaire, passPermissions, signIn, uniqueEmail } from './helpers'
 
 // Runs against the real docker stack (nginx + Go server), with only the push
 // transport played by the test. These are the guarantees the PWA depends on:
@@ -43,6 +43,8 @@ test.describe('service worker', () => {
 
     // Setup is done: the gate stays open when the app is loaded again.
     await page.goto('/home')
+    // A full page load is a new app entry, so the permission check runs again.
+    await passPermissions(page)
     await expect(page).toHaveURL(/\/home$/)
     await expect(page.getByTestId('home-heading')).toContainText('Hi E2E')
   })

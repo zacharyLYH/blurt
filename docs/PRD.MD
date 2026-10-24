@@ -82,13 +82,14 @@ Travel context informs new Reminders only. A device-zone change does not modify 
 Prerequisite: an admin creates the initial User row.
 
 1. User enters their name and receives a login email with a PIN.
-2. User provides model settings and API key on the setup page.
-3. User completes a questionnaire; answers become Memory.
-4. On app start, check microphone availability and permission. If unavailable or off, show a conversation thread with text input; do not leave the user stuck.
-5. With a microphone, user records, reviews, and sends. Wide screens open the conversation/Home view.
-6. If clarification is needed, send a push notification. Clicking it opens that Job in a familiar chat-style conversation page.
-7. The sidebar lists Jobs awaiting clarification. Remove completed Jobs from that list. The conversation transcript remains available through history.
-8. Users can answer by text or audio, cancel recording, and correct Blurt through the same interface.
+2. Before the questionnaire, Blurt asks for microphone and notification permission, and re-checks both on every app entry so a revoked permission is surfaced rather than silently assumed.
+3. User provides model settings and API key on the setup page.
+4. User completes a questionnaire; answers become Memory.
+5. With a microphone, user records and sends. Wide screens open the conversation/Home view.
+6. If the microphone is unavailable or off, show a conversation thread with text input; do not leave the user stuck.
+7. If clarification is needed, send a push notification. Clicking it opens that Job in a familiar chat-style conversation page.
+8. The sidebar lists Jobs awaiting clarification. Remove completed Jobs from that list. The conversation transcript remains available through history.
+9. Users can answer by text or audio, cancel recording, and correct Blurt through the same interface.
 
 ### Conversation UI
 
@@ -101,7 +102,7 @@ Use a familiar chat layout: message history, composer, and a sidebar of open cla
 - **Storage**: SQLite; FTS5 for BM25; sqlite-vec in phase 2.
 - **Frontier LLM**: main planner for captures, clarification, corrections, and emission.
 - **System-One**: self-hosted Kev-4B with temperature scaling; supporting tasks outside consequential decisions.
-- **Speech-to-text**: phonon2.
+- **Speech-to-text**: phonon, behind a self-hosted gateway.
 - **Embedder**: bge-small-en-v1.5, phase 2.
 
 ```text
@@ -225,7 +226,9 @@ One report per notification. The linked Trace identifies the Reminder and owning
 
 ### Ingress and transcription
 
-Audio is Opus, 16 kHz mono, around 24 kbps. Upload one binary blob on send and keep it temporarily for retry. Save the Job and return; STT and agent run asynchronously.
+Audio is mono 16 kHz PCM WAV, around 32 KB/s. Upload one binary blob on send and keep it temporarily for retry. Save the Job and return; STT and agent run asynchronously.
+
+Capture pins the browser audio graph to 16 kHz mono, then rewrites whatever the browser encoded — WebM/Opus on Chrome, AAC on Safari — into mono 16 kHz PCM WAV, which is the only shape the transcription gateway accepts. The server re-verifies that shape from the blob header, and the blob is capped at one minute. phonon is called over the gateway's own route, not an OpenAI-compatible one: one JSON body carrying a base64 WAV data URI, `{"output": {"text": "..."}}` back. The bearer key is required; a missing or wrong key is a 401 and a permanent failure.
 
 Convert speech to English. If STT fails or the clip is not legible, reply in the Job Conversation: “I couldn't process that. Please say it again or type it.” Send a push notification. System-One may provide transcript-quality signals or alternate entity spellings; the frontier LLM decides whether the user needs to repeat.
 
@@ -338,6 +341,8 @@ Admin creates users. Login uses an email PIN over SMTP. PIN lasts five minutes, 
 On success, create a Session and opaque HttpOnly, Secure, SameSite=Lax cookie. Session lasts weeks and slides on use. No access/refresh token dance. Delete the Session to revoke it.
 
 Request PIN only without a valid session. SameSite and origin check cover CSRF. Nginx rate-limits ingress. Audio duration cap protects STT and LLM spend.
+
+Permissions are asked on every entry because a browser never reports a revocation on its own. Once a user denies one, no page can prompt again, so the gate surfaces it with what to do about it instead of asking: the user is never trapped, and the text composer remains the fallback.
 
 User enters model provider, model, endpoint if needed, and API key on setup page. Store API key encrypted at rest; no `.env` model configuration.
 

@@ -1,7 +1,9 @@
 import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom'
 import Home from './pages/Home'
 import Login from './pages/Login'
+import Permissions from './pages/Permissions'
 import Questionnaire from './pages/Questionnaire'
+import { permissionsChecked } from './lib/permissions'
 import { UserProvider, useUser } from './lib/user'
 
 function Protected({ children }: { children: React.ReactNode }) {
@@ -13,6 +15,14 @@ function Protected({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// Gated runs the permission check once per app entry — the flag lives in the
+// module, so a reload or a later visit asks again — and it runs ahead of the
+// questionnaire, because setup is where the app explains what it needs.
+function Gated({ children }: { children: React.ReactNode }) {
+  if (!permissionsChecked()) return <Navigate to="/permissions" replace />
+  return <>{children}</>
+}
+
 export default function App() {
   return (
     <UserProvider>
@@ -20,10 +30,20 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route
+            path="/permissions"
+            element={
+              <Protected>
+                <Permissions />
+              </Protected>
+            }
+          />
+          <Route
             path="/questionnaire"
             element={
               <Protected>
-                <Questionnaire />
+                <Gated>
+                  <Questionnaire />
+                </Gated>
               </Protected>
             }
           />
@@ -31,7 +51,9 @@ export default function App() {
             path="/home"
             element={
               <Protected>
-                <Home />
+                <Gated>
+                  <Home />
+                </Gated>
               </Protected>
             }
           />

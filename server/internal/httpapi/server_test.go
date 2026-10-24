@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"blurt/internal/auth"
+	"blurt/internal/capture"
 	"blurt/internal/db"
 	"blurt/internal/httpapi"
 	"blurt/internal/push"
@@ -128,6 +129,10 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { handle.Close() })
+	audio, err := capture.NewStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("open audio store: %v", err)
+	}
 
 	server := httptest.NewServer(httpapi.New(httpapi.Deps{
 		DB:             handle.Write,
@@ -136,6 +141,8 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 		Pins:           pins,
 		Mailer:         mailer,
 		Pusher:         pusher,
+		Jobs:           store.NewJobStore(handle.Write, handle.Read),
+		Audio:          audio,
 		VAPIDPublicKey: testVAPIDPublicKey,
 		AllowedOrigins: []string{testOrigin},
 	}))

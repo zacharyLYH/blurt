@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { BASE_URL } from './env'
-import { DEV_PIN, completeQuestionnaire, signIn, uniqueEmail } from './helpers'
+import { DEV_PIN, completeQuestionnaire, passPermissions, signIn, uniqueEmail } from './helpers'
 
 // Real backend, no mail: BLURT_FAKE_PIN fixes the code, so this proves the
 // server's CSRF guard, cookie flags, and PIN rules against the real stack.
@@ -65,5 +65,7 @@ test('a live session skips the login form', async ({ page }) => {
   await completeQuestionnaire(page)
 
   await page.goto('/login')
+  // A full page load is a new app entry, so the permission check runs again.
+  await passPermissions(page)
   await expect(page).toHaveURL(/\/home$/)
 })
