@@ -6,7 +6,6 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { api } from '@/lib/api'
-import { setupPush } from '@/lib/push'
 import { useUser, type UserEnvelope } from '@/lib/user'
 
 type Step = 'identify' | 'pin'
@@ -61,9 +60,8 @@ export default function Login() {
     }
 
     setUser(signedIn.user)
-    // First login is also first push setup. Must start inside this submit
-    // gesture so the browser accepts the permission prompt.
-    void setupPush({ prompt: true })
+    // The permission gate (App.tsx) takes over from here and runs ahead of the
+    // questionnaire, so signing in and asking for permissions stay separate.
     navigate('/home', { replace: true })
   }
 

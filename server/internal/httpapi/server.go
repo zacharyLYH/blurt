@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"blurt/internal/auth"
+	"blurt/internal/capture"
 	"blurt/internal/push"
 	"blurt/internal/store"
 )
@@ -43,6 +44,10 @@ type Deps struct {
 	Mailer   PINMailer
 	// Pusher sends notifications to the user's devices.
 	Pusher Pusher
+	// Jobs and Audio make up the capture path. Nil is valid for tests that do
+	// not exercise it; the handlers answer 501 instead of panicking.
+	Jobs  *store.JobStore
+	Audio *capture.Store
 	// VAPIDPublicKey is handed to browsers when they create a push
 	// subscription. The private half stays inside the sender.
 	VAPIDPublicKey string
@@ -69,6 +74,10 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/push/key", s.pushKey)
 	mux.HandleFunc("POST /api/push/subscribe", s.requireUser(s.subscribePush))
 	mux.HandleFunc("POST /api/push", s.requireUser(s.sendPush))
+	mux.HandleFunc("POST /api/jobs", s.requireUser(s.createJob))
+	mux.HandleFunc("GET /api/jobs/{jobId}", s.requireUser(s.getJob))
+	// Wrong method on a real Job path gets 405, not the generic 501 below.
+	mux.HandleFunc("/api/jobs/{jobId}", methodNotAllowed(http.MethodGet))
 	// Unbuilt endpoints stay explicit instead of 404 so the frontend can
 	// tell "not yet" apart from "wrong URL".
 	mux.HandleFunc("/api/", notImplemented)
@@ -86,6 +95,7 @@ var knownRoutes = map[string]string{
 	"/api/push/key":         http.MethodGet,
 	"/api/push/subscribe":   http.MethodPost,
 	"/api/push":             http.MethodPost,
+	"/api/jobs":             http.MethodPost,
 }
 
 // csrf requires an allowed Origin (or Referer) on unsafe methods. Cookies
@@ -177,6 +187,14 @@ func notImplemented(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeError(w, http.StatusNotImplemented, "not_implemented", "Not implemented yet.")
+}
+
+// methodNotAllowed answers a real dynamic path used with the wrong method.
+func methodNotAllowed(allowed string) http.HandlerFunc {
+	return func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Allow", allowed)
+		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
+	}
 }
 
 func writeError(w http.ResponseWriter, code int, slug, message string) {

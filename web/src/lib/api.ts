@@ -15,7 +15,9 @@ export class ApiError extends Error {
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers)
-  if (init.body !== undefined && !headers.has('Content-Type')) {
+  // JSON helpers pass a string; a Blob keeps the caller's Content-Type (the
+  // audio blob's own type), which is part of the capture contract.
+  if (typeof init.body === 'string' && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
 

@@ -46,6 +46,21 @@ type VAPID struct {
 	Subject    string
 }
 
+// STT is the phonon gateway Blurt sends captures to. The route is the
+// gateway's own /v1/infer, not an OpenAI-compatible one: a base64 WAV data URI
+// in, {"output": {"text": "..."}} out.
+type STT struct {
+	URL    string
+	APIKey string
+	Model  string
+}
+
+// fakeSTTModes are the dev failure-injection modes. They mirror BLURT_FAKE_PIN:
+// useful locally and in e2e, fatal on a public host.
+// fakeSTTModes are the dev failure-injection modes. They mirror BLURT_FAKE_PIN:
+// useful locally and in e2e, fatal on a public host.
+var fakeSTTModes = map[string]bool{"ok": true, "error": true, "illegible": true, "flaky": true}
+
 // Config is the fully resolved runtime configuration.
 type Config struct {
 	DataDir       string   // SQLite lives here; mounted as a docker volume
@@ -56,8 +71,14 @@ type Config struct {
 	// FakePIN is dev only: login accepts a fixed PIN and no mail is sent, so a
 	// local stack needs no mailbox. Never set it on a public host.
 	FakePIN bool
+	// FakeSTT is dev only: a deterministic transcriber replaces the phonon
+	// gateway so capture can be exercised without it. Never set it on a public
+	// host. The failure-injection modes are unit-test only; the switch stays a
+	// bool so it reads the same way as BLURT_FAKE_PIN.
+	FakeSTT bool
 	SMTP    SMTP
 	VAPID   VAPID
+	STT     STT
 }
 
 // Load reads the environment and returns every problem it finds at once.
@@ -112,6 +133,27 @@ func Load() (*Config, error) {
 
 	cfg.FakePIN = envBool(&problems, "BLURT_FAKE_PIN")
 
+	// phonon is reached over the gateway's own transcription route. The fake is
+	// the local/e2e escape hatch, so a real URL is required otherwise.
+	cfg.FakeSTT = envBool(&problems, "BLURT_FAKE_STT")
+	cfg.STT = STT{
+		URL:    opt("BLURT_STT_URL"),
+		APIKey: opt("BLURT_STT_API_KEY"),
+		Model:  opt("BLURT_STT_MODEL"),
+	}
+	// The gateway serves exactly one audio model and rejects any other id, so
+	// the default must be the id it answers to.
+	if cfg.STT.Model == "" {
+		cfg.STT.Model = "phonon"
+	}
+	if cfg.STT.URL == "" {
+		if !cfg.FakeSTT {
+			problems = append(problems, "BLURT_STT_URL is required unless BLURT_FAKE_STT is true")
+		}
+	} else if err := checkHTTPURL(cfg.STT.URL); err != nil {
+		problems = append(problems, "BLURT_STT_URL "+err.Error())
+	}
+
 	cfg.VAPID = VAPID{
 		PublicKey:  req("BLURT_VAPID_PUBLIC_KEY"),
 		PrivateKey: req("BLURT_VAPID_PRIVATE_KEY"),
@@ -128,6 +170,15 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration:\n  %s", strings.Join(problems, "\n  "))
 	}
 	return cfg, nil
+}
+
+// checkHTTPURL rejects a typo at boot instead of failing every transcription.
+func checkHTTPURL(raw string) error {
+	parsed, err := url.Parse(raw)
+	if err != nil || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.Host == "" {
+		return fmt.Errorf("must be an http(s) URL")
+	}
+	return nil
 }
 
 // parseOrigins splits the comma-separated allowlist. Localhost defaults are
