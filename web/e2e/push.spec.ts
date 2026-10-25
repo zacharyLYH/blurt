@@ -1,59 +1,17 @@
 import { createECDH, randomBytes } from 'node:crypto'
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http'
 
 import { expect, test, type APIRequestContext } from '@playwright/test'
 
 import { BASE_URL, ciTimeout } from './env'
 import { DEV_PIN, uniqueEmail } from './helpers'
+import { withRelay } from './relay'
 
-// Real backend, real store, real sender. Only the relay is ours: the Go
-// container POSTs to a server on the host through host.docker.internal, exactly
-// as it would to FCM or Apple. That makes the encrypted body, the VAPID
-// signature, and the pruning behaviour observable.
+// Real backend, real store, real sender. Only the relay is ours: the Go container POSTs to
+// a server on the host through host.docker.internal, exactly as it would to FCM or Apple.
+// That makes the encrypted body, the VAPID signature, and the pruning behaviour observable.
 //
-// The endpoint must be plain http for the host relay, which the subscription
-// guard allows for localhost and host.docker.internal only.
-
-interface Captured {
-  headers: IncomingMessage['headers']
-  body: Buffer
-}
-
-// startRelay answers every push with one status and records what arrived.
-async function startRelay(status: number) {
-  const captured: Captured[] = []
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    const chunks: Buffer[] = []
-    req.on('data', (chunk: Buffer) => chunks.push(chunk))
-    req.on('end', () => {
-      captured.push({ headers: req.headers, body: Buffer.concat(chunks) })
-      res.writeHead(status).end()
-    })
-  })
-  await new Promise<void>((resolve) => server.listen(0, '0.0.0.0', resolve))
-  const { port } = server.address() as { port: number }
-  return {
-    endpoint: `http://host.docker.internal:${port}/push`,
-    captured,
-    close: () =>
-      new Promise<void>((resolve) => {
-        // The sender keeps connections alive, so close() alone would wait.
-        server.closeAllConnections()
-        server.close(() => resolve())
-      }),
-  }
-}
-
-// withRelay runs a test body against a relay that answers every push with one
-// status, and always shuts it down: a body cannot forget the teardown.
-async function withRelay(status: number, run: (endpoint: string, captured: Captured[]) => Promise<void>) {
-  const relay = await startRelay(status)
-  try {
-    await run(relay.endpoint, relay.captured)
-  } finally {
-    await relay.close()
-  }
-}
+// The endpoint must be plain http for the host relay, which the subscription guard allows
+// for localhost and host.docker.internal only.
 
 // clientKeys mints the device half of a subscription exactly as a browser
 // would, so the server's own key checks run against a real P-256 point.

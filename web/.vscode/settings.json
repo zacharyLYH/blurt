@@ -1,3 +1,6 @@
 {
-  "typescript.tsconfig": "./tsconfig.e2e.json"
+  // Use the workspace's own TypeScript instead of the editor's bundle: @types/node 26 needs a
+  // newer compiler than some editors ship, and a mismatch shows up as unresolved `node:*`
+  // imports rather than as a clear version error.
+  "typescript.tsdk": "node_modules/typescript/lib"
 }

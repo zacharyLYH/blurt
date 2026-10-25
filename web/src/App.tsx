@@ -5,6 +5,7 @@ import JobReply from './pages/JobReply'
 import Login from './pages/Login'
 import Permissions from './pages/Permissions'
 import Questionnaire from './pages/Questionnaire'
+import Reminders from './pages/Reminders'
 import { permissionsChecked } from './lib/permissions'
 import { UserProvider, useUser } from './lib/user'
 
@@ -68,6 +69,9 @@ export default function App() {
           {/* The boom for one Job's spoken reply. A route of its own, so the
               browser's back gesture is the way out of it. */}
           <Route path="/jobs/:jobId/reply" element={<Protected><Gated><JobReply /></Gated></Protected>} />
+          {/* What is scheduled and what already happened. A notification opens straight
+              into it, so it is a route of its own rather than a panel on Home. */}
+          <Route path="/reminders" element={<Protected><Gated><Reminders /></Gated></Protected>} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </BrowserRouter>

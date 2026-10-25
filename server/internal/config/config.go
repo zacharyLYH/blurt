@@ -12,6 +12,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -108,6 +109,10 @@ type Config struct {
 	// FakeAgent is dev only: a scripted model stands in so the AgentLoop can be
 	// exercised without the gateway. Never set it on a public host.
 	FakeAgent bool
+	// FakeClock is dev only: the emitter's clock starts this far ahead, so a spec can
+	// watch a long-horizon Reminder come due without waiting for the horizon. Never
+	// set it on a public host.
+	FakeClock time.Duration
 	// Agent is the model. Unlike the gate it is not advisory — a capture with no
 	// model never becomes a record — so a URL and a model are required unless the
 	// fake is on.
@@ -214,6 +219,7 @@ func Load() (*Config, error) {
 	// capture path would accept Jobs it can never resolve, so this one is
 	// required unless the fake is on.
 	cfg.FakeAgent = envBool(&problems, "BLURT_FAKE_AGENT")
+	cfg.FakeClock = envDuration(&problems, "BLURT_FAKE_CLOCK")
 	cfg.Agent = Agent{
 		URL:      opt("BLURT_AGENT_URL"),
 		APIKey:   opt("BLURT_AGENT_API_KEY"),
@@ -317,6 +323,20 @@ func envBool(problems *[]string, key string) bool {
 	value, err := strconv.ParseBool(raw)
 	if err != nil {
 		*problems = append(*problems, key+" must be true or false")
+	}
+	return value
+}
+
+// envDuration reads an optional duration, reporting a typo instead of quietly
+// leaving it off.
+func envDuration(problems *[]string, key string) time.Duration {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0
+	}
+	value, err := time.ParseDuration(raw)
+	if err != nil || value < 0 {
+		*problems = append(*problems, key+" must be a duration such as 90s")
 	}
 	return value
 }

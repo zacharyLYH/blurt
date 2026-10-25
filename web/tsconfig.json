@@ -15,7 +15,10 @@
     "noEmit": true,
     "baseUrl": ".",
     "paths": { "@/*": ["./src/*"] },
-    "types": ["vite/client"]
+    // Both trees resolve under both @types: the e2e specs import node builtins, so a project
+    // configured without "node" reports every `node:*` import as missing. tsconfig.e2e.json
+    // now adds nothing to this and exists only as a narrower entry point.
+    "types": ["node", "vite/client"]
   },
-  "include": ["src"]
+  "include": ["src", "e2e"]
 }

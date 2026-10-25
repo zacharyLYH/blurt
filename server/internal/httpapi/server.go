@@ -50,6 +50,8 @@ type Deps struct {
 	Jobs   *store.JobStore
 	Audio  *capture.Store
 	Queues *queue.Queues
+	// Reminders backs the Reminders page. Nil is valid for the same reason.
+	Reminders *store.ReminderStore
 	// VAPIDPublicKey is handed to browsers when they create a push
 	// subscription. The private half stays inside the sender.
 	VAPIDPublicKey string
@@ -79,6 +81,11 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/jobs", s.requireUser(s.createJob))
 	mux.HandleFunc("GET /api/jobs", s.requireUser(s.listJobs))
 	mux.HandleFunc("GET /api/jobs/{jobId}", s.requireUser(s.getJob))
+	// The Reminders page reads what is scheduled and what already happened, and calls
+	// one off. Cancelling is the only reminder write the user makes.
+	mux.HandleFunc("GET /api/reminders", s.requireUser(s.listReminders))
+	mux.HandleFunc("POST /api/reminders/{reminderId}/cancel", s.requireUser(s.cancelReminder))
+	mux.HandleFunc("/api/reminders/{reminderId}/cancel", methodNotAllowed(http.MethodPost))
 	// The clarification reply is one more turn in the same Conversation, so it
 	// rides the Job rather than opening a workflow of its own.
 	mux.HandleFunc("POST /api/jobs/{jobId}/messages", s.requireUser(s.replyToJob))
@@ -103,6 +110,7 @@ var knownRoutes = map[string]string{
 	"/api/push/subscribe":   http.MethodPost,
 	"/api/push":             http.MethodPost,
 	"/api/jobs":             http.MethodGet + ", " + http.MethodPost,
+	"/api/reminders":        http.MethodGet,
 }
 
 // csrf requires an allowed Origin (or Referer) on unsafe methods. Cookies

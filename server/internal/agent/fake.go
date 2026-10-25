@@ -24,7 +24,15 @@ const (
 	// word beside it: "every day", "daily", "every week" and so on. A capture that says
 	// it repeats without naming how often gets the ask rather than a one-off.
 	FakeRepeatWord = "every"
+	// FakeSoonWord marks a capture the fake resolves to the minute ahead: near enough
+	// that a spec can watch the emitter fire it, and still a future instant, which is
+	// what the check on a one-off requires.
+	FakeSoonWord = "soon"
 )
+
+// fakeSoonRe is the word "soon" on its own, so a capture that merely contains the
+// letters — "buy glue soonest" — is not read as one.
+var fakeSoonRe = regexp.MustCompile(`(?i)\bsoon\b`)
 
 // Propose is deliberately blunt and keyword-driven, so a spec can reach each branch
 // on purpose. The real model reads the same outcomes out of one schema.
@@ -33,6 +41,26 @@ func (Fake) Propose(_ context.Context, in Input) (Turn, error) {
 	if strings.Contains(capture, FakeMemoryWord) {
 		// A fact is context rather than an interruption, so it carries no clock.
 		return Turn{Writes: []Write{{Kind: KindMemory, Text: lastText(in)}}}, nil
+	}
+	if fakeSoonRe.MatchString(capture) && !namesClock(capture) {
+		// The minute ahead, in the zone the device named: a clock the fake can place
+		// without a model, and an instant that is still ahead of the run that resolved
+		// it. Nothing else in the thread identifies it as special, which is the point —
+		// the spec watches the real emitter fire an ordinary one-off.
+		loc := time.UTC
+		if loaded, err := time.LoadLocation(in.CurrentTZ); err == nil {
+			loc = loaded
+		}
+		text := eventOf(firstUserText(in))
+		if text == "" {
+			return Turn{}, nil
+		}
+		at := in.Now.In(loc).Add(time.Minute)
+		return Turn{Writes: []Write{{
+			Kind: KindReminder, Text: text, Zone: in.CurrentTZ,
+			Date: at.Format("2006-01-02"), Time: at.Format("15:04"),
+			Recurrence: RecurrenceNone, Evidence: "the user said " + capture,
+		}}}, nil
 	}
 	if !namesClock(capture) || clocksIn(capture) > 1 {
 		// No clock is a time the fake cannot pin, and two of them are more than one
@@ -138,7 +166,7 @@ func clocksIn(text string) int {
 
 // timeWordRe is the date vocabulary the fake strips from an event so the row it
 // commits matches the prompt's no-time-words contract.
-var timeWordRe = regexp.MustCompile(`(?i)\b(day after tomorrow|today|tonight|tomorrow|` +
+var timeWordRe = regexp.MustCompile(`(?i)\b(soon|day after tomorrow|today|tonight|tomorrow|` +
 	`every day|every week|every month|every year|every|daily|weekly|monthly|yearly|next|this|` +
 	`monday|tuesday|wednesday|thursday|friday|saturday|sunday|` +
 	`january|february|march|april|may|june|july|august|september|october|november|december)\b`)

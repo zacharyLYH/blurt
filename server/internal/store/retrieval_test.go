@@ -35,7 +35,7 @@ func TestReminderWindowBoundsAndOrders(t *testing.T) {
 	}
 
 	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	found, err := NewReminderStore(handle.Read).Window(ctx, userID, now.Add(-48*time.Hour), now.Add(14*24*time.Hour))
+	found, err := NewReminderStore(handle.Write, handle.Read).Window(ctx, userID, now.Add(-48*time.Hour), now.Add(14*24*time.Hour))
 	if err != nil {
 		t.Fatalf("window: %v", err)
 	}

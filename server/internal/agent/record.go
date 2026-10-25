@@ -58,6 +58,20 @@ func ruleFor(write Write, now time.Time, loc *time.Location) (store.Rule, time.T
 	return rule, at, true
 }
 
+// NextEmit is the first instant at or after now that a rule fires, in the zone the
+// Reminder stores. It is exported for the one caller outside this package: the
+// emitter, which advances a repeat with the same derivation the creation path used.
+// The instant is rebuilt from the rule and the zone every time, never carried
+// forward by a duration.
+func NextEmit(rule store.Rule, now time.Time, loc *time.Location) (time.Time, bool) {
+	hour, minute, ok := parseTime(rule.Time)
+	if !ok {
+		return time.Time{}, false
+	}
+	at := nextEmit(rule, "", now, hour, minute, loc)
+	return at, !at.IsZero()
+}
+
 // nextEmit is the first instant at or after now that the rule fires. The first
 // occurrence the model resolved is honoured while it is still ahead; otherwise
 // the pattern is walked forward one period at a time. The instant is derived from

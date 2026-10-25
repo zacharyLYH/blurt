@@ -25,6 +25,10 @@ services:
       # required, so it needs its own fake wherever STT has one.
       BLURT_FAKE_STT: "true"
       BLURT_FAKE_AGENT: "true"
+      # DEV ONLY: the emitter's clock starts this far ahead, so a spec can watch a reminder
+      # that is a minute out come due without waiting for it. e2e/emitter-clock.spec.ts
+      # overrides it past a day to make a long-horizon reminder fire for real.
+      BLURT_FAKE_CLOCK: "${BLURT_FAKE_CLOCK:-90s}"
       BLURT_SMTP_PASSWORD: ""
       BLURT_VAPID_PUBLIC_KEY: BPCRZS3Lfu-TYCCcyqO99WCNWKGt_JCnjO1U67-6qVHrPWnRjs1IGxle6v7Vv2RK89T3Dwj_itMGWtCv-up64XQ
       BLURT_VAPID_PRIVATE_KEY: m6UconuCpzkrbd1fui1DQb_GXOEGCjue8mhRAzVvak0

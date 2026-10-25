@@ -19,6 +19,7 @@ import (
 	"blurt/internal/config"
 	"blurt/internal/db"
 	"blurt/internal/decision"
+	"blurt/internal/emitter"
 	"blurt/internal/httpapi"
 	"blurt/internal/mail"
 	"blurt/internal/push"
@@ -84,6 +85,9 @@ func main() {
 		panic(err)
 	}
 	jobs := store.NewJobStore(handle.Write, handle.Read)
+	// The emitter reads the same Reminders the AgentLoop plans against, and the
+	// firing transition is the one write that is its own.
+	reminders := store.NewReminderStore(handle.Write, handle.Read)
 
 	// Both consumer groups must exist before the first producer publishes.
 	boot := context.Background()
@@ -133,7 +137,7 @@ func main() {
 	}
 	loop := &agent.AgentLoop{
 		Store:      jobs,
-		Recall:     agent.Reads{Reminders: store.NewReminderStore(handle.Read), Memories: store.NewMemoryStore(handle.Read)},
+		Recall:     agent.Reads{Reminders: reminders, Memories: store.NewMemoryStore(handle.Read)},
 		Model:      model,
 		Pusher:     notifier,
 		AgentQueue: agentQueue,
@@ -152,6 +156,7 @@ func main() {
 			Mailer:         mailer,
 			Pusher:         notifier,
 			Jobs:           jobs,
+			Reminders:      reminders,
 			Audio:          audio,
 			Queues:         &queue.Queues{TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue},
 			VAPIDPublicKey: cfg.VAPID.PublicKey,
@@ -177,6 +182,16 @@ func main() {
 		Fallback: agent.FallbackMessage, MinIdle: 1080 * time.Second,
 	}).Run(ctx)
 	go (&queue.Sweeper{Jobs: jobs, TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue}).Run(ctx)
+
+	// The emitter is the only worker that runs on a clock rather than on the user's
+	// last capture: it sweeps for Reminders whose instant has arrived.
+	emit := &emitter.Emitter{Reminders: reminders, Pusher: notifier}
+	if cfg.FakeClock > 0 {
+		slog.Warn("BLURT_FAKE_CLOCK is on: the emitter's clock is shifted forward — never do this on a public host",
+			"offset", cfg.FakeClock)
+		emit.Now = func() time.Time { return time.Now().Add(cfg.FakeClock) }
+	}
+	go emit.Run(ctx)
 
 	go func() {
 		slog.Info("listening", "addr", cfg.Bind)

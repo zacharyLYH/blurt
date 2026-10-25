@@ -208,9 +208,14 @@ export default function Home() {
             </h1>
             <p className="mt-1 text-sm text-muted-foreground">{user?.email}</p>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => void signOut()}>
-            Sign out
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="sm" data-testid="reminders-link" onClick={() => navigate('/reminders')}>
+              Reminders
+            </Button>
+            <Button variant="ghost" size="sm" onClick={() => void signOut()}>
+              Sign out
+            </Button>
+          </div>
         </header>
 
         <section className="my-auto flex w-full max-w-xl flex-col gap-5">

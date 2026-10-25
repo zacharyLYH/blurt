@@ -188,7 +188,7 @@ func newFixture(t *testing.T, turns ...Turn) *fixture {
 			AgentQueue: queue.NewMock(),
 			Loop: &AgentLoop{
 				Store:     jobs,
-				Recall:    Reads{Reminders: store.NewReminderStore(handle.Read), Memories: store.NewMemoryStore(handle.Read)},
+				Recall:    Reads{Reminders: store.NewReminderStore(handle.Write, handle.Read), Memories: store.NewMemoryStore(handle.Read)},
 				Model:     model,
 				Pusher:    pusher,
 				ModelName: "local-model",

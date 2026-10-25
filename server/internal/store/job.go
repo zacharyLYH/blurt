@@ -20,6 +20,9 @@ const (
 const (
 	TranscriptionStage = "transcription"
 	AgentStage         = "agent"
+	// NotificationStage is the emitter's two rows per firing: the attempt, written
+	// with the state change, and the delivery outcome that points back at it.
+	NotificationStage = "notification"
 )
 
 // MaxAttempts is the PRD's poison-pill limit for one processing stage.
@@ -264,7 +267,7 @@ func (s *JobStore) mutate(ctx context.Context, stage string, jobID int64, detail
 		job.Status, job.RetryCount, string(raw), now(), jobID); err != nil {
 		return Job{}, fmt.Errorf("update job: %w", err)
 	}
-	if err := recordTrace(ctx, tx, stage, jobID, detail); err != nil {
+	if _, err := recordTrace(ctx, tx, stage, jobID, 0, detail); err != nil {
 		return Job{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -273,18 +276,23 @@ func (s *JobStore) mutate(ctx context.Context, stage string, jobID int64, detail
 	return job, nil
 }
 
-// recordTrace writes within the caller's transaction, never on its own.
-func recordTrace(ctx context.Context, tx *sql.Tx, stage string, jobID int64, detail map[string]any) error {
+// recordTrace writes a Trace row and returns its id, inside the caller's
+// transaction when there is one. ReminderId is set on a notification attempt, which
+// is what ties an interruption back to the Reminder it was about; every other stage
+// leaves it null. The id is returned because a notification's TraceId is the
+// notification id the push payload carries.
+func recordTrace(ctx context.Context, q execer, stage string, jobID, reminderID int64, detail map[string]any) (int64, error) {
 	raw, err := json.Marshal(detail)
 	if err != nil {
-		return fmt.Errorf("encode trace: %w", err)
+		return 0, fmt.Errorf("encode trace: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO Trace (JobId, Timestamp, Stage, Detail) VALUES (?, ?, ?, ?)`,
-		jobID, now(), stage, string(raw)); err != nil {
-		return fmt.Errorf("record %s trace: %w", stage, err)
+	var traceID int64
+	if err := q.QueryRowContext(ctx,
+		`INSERT INTO Trace (JobId, ReminderId, Timestamp, Stage, Detail) VALUES (?, ?, ?, ?, ?) RETURNING TraceId`,
+		jobID, nullID(reminderID), now(), stage, string(raw)).Scan(&traceID); err != nil {
+		return 0, fmt.Errorf("record %s trace: %w", stage, err)
 	}
-	return nil
+	return traceID, nil
 }
 
 func scanJob(row scanner) (Job, error) {

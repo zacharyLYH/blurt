@@ -66,3 +66,29 @@ func TestFakeProposeReachesEachBranchByItsWords(t *testing.T) {
 		})
 	}
 }
+
+// "Soon" is the one branch whose clock is not the fake's own 18:00: it is the minute
+// ahead of the run, so a spec can watch the real emitter fire a reminder that is nearly
+// due without waiting for a fixed clock to arrive. It still has to be a write the server
+// accepts — a one-off has to be strictly ahead of the run that resolved it — and the event
+// still comes back as the user's own words, without the word that named the clock.
+func TestFakeSoonIsTheMinuteAhead(t *testing.T) {
+	turn, err := Fake{}.Propose(context.Background(), Input{
+		Conversation: []store.Message{{Role: "user", Text: "buy glue soon"}},
+		CurrentTZ:    "Asia/Singapore", Now: pinned,
+	})
+	if err != nil {
+		t.Fatalf("propose: %v", err)
+	}
+	if len(turn.Writes) != 1 {
+		t.Fatalf("writes = %+v, want one reminder", turn.Writes)
+	}
+	write := turn.Writes[0]
+	if write.Kind != KindReminder || write.Text != "buy glue" || write.Time != "18:31" ||
+		write.Date != "2026-10-24" || write.Recurrence != RecurrenceNone {
+		t.Fatalf("write = %+v, want the minute ahead as an ordinary one-off", write)
+	}
+	if missing := MissingFields(write, pinned); len(missing) != 0 {
+		t.Fatalf("missing = %v, want a write the server can commit", missing)
+	}
+}

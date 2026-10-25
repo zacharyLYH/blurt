@@ -373,7 +373,10 @@ User enters model provider, model, endpoint if needed, and API key on setup page
 - E2E: clean instance with seeded values.
 - Mock LLM at HTTP level for specific responses.
 - Real free LLM: Qwen 2.5 3B on MLX-LM, local or remote via `ngrok` with static secret.
-- Random walker generates schedules; use an injectable clock.
+- Random walker generates schedules; use an injectable clock. The emitter takes its clock as a
+  field, and `BLURT_FAKE_CLOCK` shifts it in dev, so a test can cross a long horizon without
+  waiting for it (`web/e2e/emitter-clock.spec.ts`). Go cannot be clock-faked from outside the
+  process: `time.Now` reads the vDSO, so `LD_PRELOAD`/libfaketime never reaches it.
 
 ## Known gaps
 
@@ -383,18 +386,18 @@ User enters model provider, model, endpoint if needed, and API key on setup page
 4. Time zone inference can require clarification when no clear anchor exists.
 5. BM25 only; paraphrase and ASR-mangled names may miss until vectors land.
 6. No eval yet; Trace helps debug but does not measure quality.
-7. Correction ops (replace, cancel, delete), `RelativeToReminderId`, and trip-Memory `Metadata`
-   are not built. A completed Job never revisits its own Reminder; a correction is future work
-   through its own channel.
+7. Correction ops, `RelativeToReminderId`, and trip-Memory `Metadata` are partly built: a Reminder
+   can be called off by status (never deleted, so its history stays readable), but replacing one,
+   hard-deleting it, and revisiting a completed Job are future work through their own channel.
 8. Nothing adjudicates a reworded record against what the Job already committed beyond the insert's
    own exact-text skip, the paraphrase reader is deferred, and the at-most-one-Reminder-per-Job
    guardrail is not enforced: a re-run that rewords one event can leave two records.
 
 ## Deferred
 
-Deliberately not built in this slice: record replace/cancel/delete ops, `RelativeToReminderId`,
-trip-Memory `Metadata`, the notification emitter (a resolved instant is never fired), the
-paraphrase reader, per-turn model/check Trace rows (one aggregate Trace row per step today),
+Deliberately not built in this slice: record replace and hard-delete ops, `RelativeToReminderId`,
+trip-Memory `Metadata`, context chosen by the model for a notification and notification feedback,
+the paraphrase reader, per-turn model/check Trace rows (one aggregate Trace row per step today),
 failed-recovery UI, and dump/split.
 
 ## System-One supporting work

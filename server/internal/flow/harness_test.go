@@ -113,7 +113,7 @@ func newPumpOn(t *testing.T, transcription, agentStream queue.Stream, turns ...a
 	loop := &agent.AgentLoop{
 		Store: jobs,
 		Recall: agent.Reads{
-			Reminders: store.NewReminderStore(handle.Read),
+			Reminders: store.NewReminderStore(handle.Write, handle.Read),
 			Memories:  store.NewMemoryStore(handle.Read),
 		},
 		Model: model, Pusher: pusher, AgentQueue: agentStream,
