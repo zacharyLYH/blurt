@@ -1,6 +1,6 @@
 ---
 name: laya-decisions
-description: Call the self-hosted gateway's laya model for typed decisions (the transcript-quality gate today, PostAgentCheck later). Use when a decision kind is refused, answers look cut off, or you need the exact /v1/infer contract for laya.
+description: Call the self-hosted gateway's laya model for typed decisions (the transcript-quality gate). Use when a decision kind is refused, answers look cut off, or you need the exact /v1/infer contract for laya.
 ---
 
 # laya typed decisions

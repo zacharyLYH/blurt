@@ -7,15 +7,14 @@ import (
 
 	"blurt/internal/queue"
 	"blurt/internal/store"
-	"blurt/internal/stt"
 )
 
 // A capture worker killed mid-transcription leaves its message pending, and the
 // claimer hands it back: the Job is retried, not lost. The unit tests pin the
 // claimer against a Mock; here both stages, the claimer and the restart are real.
 func TestPipelineClaimerRecoversAfterCaptureWorkerDiesMidTranscription(t *testing.T) {
-	// A Memory needs no clock, so the default transcript can commit.
-	p := newPump(t, memoryTurn("buy glue"))
+	// The clip commits once it carries a resolvable time.
+	p := newPump(t, reminderTurn("buy glue", "tomorrow at 6pm"))
 	p.captureWorker.STT = blockingTranscriber{}
 	p.start()
 	job := p.voice(t, "Asia/Singapore")
@@ -37,7 +36,7 @@ func TestPipelineClaimerRecoversAfterCaptureWorkerDiesMidTranscription(t *testin
 		t.Fatalf("status = %q, want the Job back in the queue", retried.Status)
 	}
 
-	p.captureWorker.STT = scriptedTranscriber{text: stt.FakeTranscript}
+	p.captureWorker.STT = scriptedTranscriber{text: "buy glue tomorrow at 6pm"}
 	p.startCapture()
 	p.settle(t, job.JobID, status(store.JobComplete), "the recovered Job")
 	p.stopClaimers()
@@ -73,8 +72,8 @@ func TestPipelineClaimerRecoversAfterAgentWorkerDiesMidModel(t *testing.T) {
 // republishes each to the stage its shape calls for, and the workers finish it.
 func TestPipelineSweeperRepublishesStrandedJobs(t *testing.T) {
 	p := newPump(t).
-		answer("buy glue tomorrow at 6pm", reminderTurn("buy glue", "tomorrow at 6pm")).
-		answer(stt.FakeTranscript, memoryTurn("buy glue"))
+		answer("buy glue tomorrow at 6pm", reminderTurn("buy glue", "tomorrow at 6pm"))
+	p.captureWorker.STT = scriptedTranscriber{text: "buy glue tomorrow at 6pm"}
 	p.start()
 
 	// Nothing is published for either Job: only the sweeper can find them.

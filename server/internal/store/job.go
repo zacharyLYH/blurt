@@ -303,16 +303,6 @@ func scanJob(row scanner) (Job, error) {
 	return job, nil
 }
 
-// HasReminder reports whether this Job already committed a Reminder.
-func (s *JobStore) HasReminder(ctx context.Context, jobID int64) (bool, error) {
-	var count int
-	if err := s.read.QueryRowContext(ctx,
-		`SELECT count(*) FROM Reminder WHERE SourceJobId = ?`, jobID).Scan(&count); err != nil {
-		return false, fmt.Errorf("has reminder: %w", err)
-	}
-	return count > 0, nil
-}
-
 // AppendTurn adds the user's own turn and hands the Job back to the agent
 // stream with a fresh attempt budget.
 func (s *JobStore) AppendTurn(ctx context.Context, userID, jobID int64, message Message, detail map[string]any) (Job, error) {
@@ -336,6 +326,18 @@ func (s *JobStore) AppendTurn(ctx context.Context, userID, jobID int64, message 
 		job.RetryCount, job.Status = 0, JobOpen
 		return nil
 	})
+}
+
+// TagMemory writes the search features the tagger generated for one committed Memory. It
+// updates the row in place rather than inserting, so the record the user's capture already
+// made is what becomes findable, and the schema's own trigger keeps the FTS index in step. A
+// Job's Memory is unique by (SourceJobId, Text), which is how the row is found.
+func (s *JobStore) TagMemory(ctx context.Context, jobID int64, text, tags string) error {
+	if _, err := s.write.ExecContext(ctx,
+		`UPDATE Memory SET Tags = ? WHERE SourceJobId = ? AND Text = ?`, tags, jobID, text); err != nil {
+		return fmt.Errorf("tag memory: %w", err)
+	}
+	return nil
 }
 
 // CommitAgentStep writes one step atomically.

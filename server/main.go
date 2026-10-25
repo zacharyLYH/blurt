@@ -125,31 +125,20 @@ func main() {
 	// The model rides the same gateway as phonon and laya, so the fake is the
 	// local/e2e escape hatch that keeps the AgentLoop exercisable without one.
 	var model agent.Model
-	var tagger agent.Tagger
 	if cfg.FakeAgent {
 		slog.Warn("BLURT_FAKE_AGENT is on: the model is scripted — never do this on a public host")
-		model, tagger = agent.Fake{}, agent.FakeTagger{}
+		model = agent.Fake{}
 	} else {
-		gateway := agent.NewGateway(cfg.Agent)
-		// Tags are a second, single-purpose call on the same model. The records
-		// schema is measured to break down when it grows, so the features never
-		// ride in it.
-		model, tagger = gateway, gateway
+		model = agent.NewGateway(cfg.Agent)
 	}
 	loop := &agent.AgentLoop{
 		Store:      jobs,
 		Recall:     agent.Reads{Reminders: store.NewReminderStore(handle.Read), Memories: store.NewMemoryStore(handle.Read)},
 		Model:      model,
-		Tagger:     tagger,
 		Pusher:     notifier,
 		AgentQueue: agentQueue,
 		ModelName:  cfg.Agent.Model,
 		MaxTurns:   cfg.Agent.MaxTurns,
-	}
-	// The fallback reader is laya, the same classifier the transcript gate uses, and only a configured
-	// gateway has one. With none, the deterministic lints are the whole of PostAgentCheck.
-	if gate != nil {
-		loop.Fallback = agent.Laya{Decider: gate}
 	}
 	agentWorker := &agent.AgentWorker{Jobs: jobs, Loop: loop, AgentQueue: agentQueue}
 

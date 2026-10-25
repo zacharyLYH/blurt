@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// One step commits the records, the assistant turn, the status and the trace
+// One step commits the Reminder, the assistant turn, the status and the trace
 // together, and a repeated step adds nothing: the Conversation is what a re-planned
 // turn reads, so the same proposal must not leave two Reminders behind.
 func TestCommitAgentStepIsAtomicAndSkipsRepeats(t *testing.T) {
@@ -21,10 +21,9 @@ func TestCommitAgentStepIsAtomicAndSkipsRepeats(t *testing.T) {
 			Text: "Buy glue", Timezone: "Asia/Singapore",
 			LocalDateTime: "2026-10-25T18:00", EmitAtUtc: "2026-10-25T10:00:00Z",
 		}},
-		Memories: []Memory{{Text: "Milk is cheaper at store A"}},
-		Reply:    Message{Text: "Reminder set."},
-		Status:   JobComplete,
-		Detail:   map[string]any{"outcome": JobComplete},
+		Reply:  Message{Text: "Reminder set."},
+		Status: JobComplete,
+		Detail: map[string]any{"outcome": JobComplete},
 	}
 	if _, err := jobs.CommitAgentStep(ctx, job.JobID, step); err != nil {
 		t.Fatalf("commit: %v", err)
@@ -68,13 +67,11 @@ func TestCommitAgentStepIsAtomicAndSkipsRepeats(t *testing.T) {
 	if _, err := jobs.CommitAgentStep(ctx, job.JobID, step); err != nil {
 		t.Fatalf("recommit: %v", err)
 	}
-	for _, table := range []string{"Reminder", "Memory"} {
-		var count int
-		if err := handle.Read.QueryRow(`SELECT count(*) FROM ` + table).Scan(&count); err != nil {
-			t.Fatalf("count %s: %v", table, err)
-		}
-		if count != 1 {
-			t.Fatalf("%s rows = %d, want 1 after a repeated step", table, count)
-		}
+	var reminders int
+	if err := handle.Read.QueryRow(`SELECT count(*) FROM Reminder`).Scan(&reminders); err != nil {
+		t.Fatalf("count reminders: %v", err)
+	}
+	if reminders != 1 {
+		t.Fatalf("Reminder rows = %d, want 1 after a repeated step", reminders)
 	}
 }

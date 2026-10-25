@@ -24,6 +24,12 @@ type scripted struct {
 	errs   []error
 	blocks bool
 	inputs []agent.Input
+	// tags is what the tagger answers for every fact, so a flow can assert what the
+	// generated features do to retrieval.
+	tags []string
+	// tagErr makes the tagger fail, so a flow can assert what a capture does when
+	// its features cannot be generated at all.
+	tagErr error
 }
 
 func (s *scripted) Propose(ctx context.Context, in agent.Input) (agent.Turn, error) {
@@ -55,7 +61,7 @@ func (s *scripted) Propose(ctx context.Context, in agent.Input) (agent.Turn, err
 	return turn, nil
 }
 
-func (s *scripted) Ask(ctx context.Context, _ agent.Input) (string, error) {
+func (s *scripted) Question(ctx context.Context, _ agent.Input, _ []agent.Field) (string, error) {
 	s.mu.Lock()
 	block := s.blocks
 	s.mu.Unlock()
@@ -70,6 +76,17 @@ func (s *scripted) planned() []agent.Input {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return append([]agent.Input(nil), s.inputs...)
+}
+
+// Tags is the tagger port: one fixed answer for every fact, so a flow can assert what
+// the generated features do to retrieval.
+func (s *scripted) Tags(_ context.Context, _ string) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tagErr != nil {
+		return nil, s.tagErr
+	}
+	return s.tags, nil
 }
 
 // captureOf is the newest user turn's words, which is what a text-keyed answer
@@ -129,29 +146,28 @@ func (blockingDecider) Decide(ctx context.Context, _ string, _ decision.Question
 	return nil, ctx.Err()
 }
 
-// fixedTagger is the Tagger port with one answer, so a flow can assert what the
-// generated features do to retrieval.
-type fixedTagger struct{ tags []string }
-
-func (f *fixedTagger) Tags(_ context.Context, _ string) ([]string, error) { return f.tags, nil }
-
 // wireMessage is the one chat message a prompt assertion reads.
 type wireMessage struct {
 	Role    string `json:"role"`
 	Content string `json:"content"`
 }
 
-// gatewayCall is the part of a gateway request a prompt assertion needs.
+// gatewayCall is the part of a gateway request a prompt assertion needs: the schema
+// it asked for, which is what tells the records turn from the question turn, and the
+// messages the model read.
 type gatewayCall struct {
+	Schema   string
 	Messages []wireMessage
 }
 
-// gatewayScript stands in for the real gateway: it answers the records turn with
-// the answers a test scripts, and records every request so a prompt can be read
-// back. The question turn gets one fixed sentence, so a clarified flow still runs.
+// gatewayScript stands in for the real gateway: it answers the records turn with the
+// answers a test scripts, the tags turn with the features a test scripts, and the
+// question turn with one fixed sentence, so a clarified flow still runs. Every request
+// is recorded, so a prompt can be read back.
 type gatewayScript struct {
 	mu       sync.Mutex
 	records  []string
+	tags     string
 	requests []gatewayCall
 }
 
@@ -173,10 +189,19 @@ func newGatewayScript(t *testing.T, records ...string) (*httptest.Server, *gatew
 		_ = json.Unmarshal(raw, &body)
 
 		script.mu.Lock()
-		script.requests = append(script.requests, gatewayCall{Messages: body.Payload.Messages})
+		script.requests = append(script.requests,
+			gatewayCall{Schema: body.Payload.ResponseFormat.JSONSchema.Name, Messages: body.Payload.Messages})
 		content := `{"question":"When should I remind you?"}`
-		if body.Payload.ResponseFormat.JSONSchema.Name != "question" && len(script.records) > 0 {
-			content, script.records = script.records[0], script.records[1:]
+		// Only the records turn draws on the scripted answers; the question turn has
+		// its one sentence, and the tags turn carries whatever a test set.
+		switch body.Payload.ResponseFormat.JSONSchema.Name {
+		case "records":
+			if len(script.records) > 0 {
+				content, script.records = script.records[0], script.records[1:]
+			}
+		case "tags":
+			raw, _ := json.Marshal(map[string]string{"tags": script.tags})
+			content = string(raw)
 		}
 		script.mu.Unlock()
 		_, _ = w.Write(gatewayEnvelope(content))
@@ -195,19 +220,47 @@ func gatewayEnvelope(content string) []byte {
 	return body
 }
 
-// call returns the one request whose last message is the captured turn.
+// asked is how many questions the model was asked to write. The cap is what stops a Job
+// from spending a call on a question it has already asked twice, so a flow asserts it here.
+func (s *gatewayScript) asked() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	count := 0
+	for _, call := range s.requests {
+		if call.Schema == "question" {
+			count++
+		}
+	}
+	return count
+}
+
+// call returns the one request whose last message is the captured turn. Any schema
+// matches: one capture is proposed and, when it needs it, asked about at the same words.
 func (s *gatewayScript) call(t *testing.T, capture string) gatewayCall {
+	t.Helper()
+	return s.callFor(t, capture, "")
+}
+
+// questionCall is the request the question writer got for one capture, which is how a
+// flow reads what the model was told was still missing.
+func (s *gatewayScript) questionCall(t *testing.T, capture string) gatewayCall {
+	t.Helper()
+	return s.callFor(t, capture, "question")
+}
+
+func (s *gatewayScript) callFor(t *testing.T, capture, schema string) gatewayCall {
 	t.Helper()
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, call := range s.requests {
-		if len(call.Messages) == 0 {
+		if len(call.Messages) == 0 || (schema != "" && call.Schema != schema) {
 			continue
 		}
 		if strings.HasSuffix(call.Messages[len(call.Messages)-1].Content, "capture: "+capture) {
 			return call
 		}
 	}
-	t.Fatalf("no prompt carried the capture %q; saw %d requests", capture, len(s.requests))
+	t.Fatalf("no prompt (schema %q) carried the capture %q; saw %d requests",
+		schema, capture, len(s.requests))
 	return gatewayCall{}
 }

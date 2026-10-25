@@ -25,34 +25,43 @@ import (
 // started repeating itself.
 const maxOutputTokens = 200
 
-// Write kinds. A capture can propose either, or neither, and each one is checked
-// and committed on its own.
+// Write kinds. A capture can propose a Reminder, a Memory, or both, and each one
+// is checked and committed on its own.
 const (
 	KindReminder = "reminder"
 	KindMemory   = "memory"
 )
 
-// Write is one record the model proposed. Which fields matter is the kind's
-// business: a Reminder is human time plus a zone, a Memory is text.
+// RecurrenceNone is a one-off: the write names one local date and time. Every
+// other value is a store.Rule frequency.
+const RecurrenceNone = "none"
+
+// Write is one record the model proposed, in the fields it is confident about.
+// Everything else is empty, and MissingFields names what that leaves the user to say.
 type Write struct {
 	Kind       string
 	Text       string
-	Timezone   string
-	TimePhrase string
+	Zone       string // IANA zone the user meant
+	Date       string // ISO date YYYY-MM-DD, empty when unresolved
+	Time       string // HH:MM 24-hour, empty when unresolved
+	Recurrence string // RecurrenceNone, or a store.Rule frequency
+	Evidence   string // the user's own words for the time and the zone
 }
 
-// Check is one verdict a proposed write earned. The loop hands these back on the
-// next turn so the model can revise, instead of the user being asked about
-// something a second attempt could have fixed.
-type Check struct {
-	Write Write
-	Code  string
-	Field string
-}
+// Field names the piece of a write the server could not accept, and so the piece
+// the question asks the user about.
+type Field string
 
-// Turn is one model reply: the sentence the user reads, and what to commit.
+const (
+	FieldEvent      Field = "event"
+	FieldZone       Field = "zone"
+	FieldDate       Field = "date"
+	FieldTime       Field = "time"
+	FieldRecurrence Field = "recurrence"
+)
+
+// Turn is one model reply: what it proposes to commit.
 type Turn struct {
-	Say    string
 	Writes []Write
 }
 
@@ -65,30 +74,23 @@ type Input struct {
 	Conversation []store.Message
 	// CurrentTZ anchors the zone the model should copy into a write.
 	CurrentTZ string
+	// Now is the loop's clock, in the zone above: what "tomorrow" and the
+	// after-now checks hang off. A relative capture cannot be resolved to a date
+	// without it, and a test pins it.
+	Now time.Time
 	// Nearby and Remembered are what recall found for this capture.
 	Nearby     []store.Reminder
 	Remembered []store.Memory
-	// Checks are the previous turn's refusals, empty on the first turn.
-	Checks []Check
-	// Accepted are the writes that checked out in the same turn. The question
-	// writer reads them beside the refusals, so a refusal can be attributed to
-	// its own words and a surviving sibling is not proposed again.
-	Accepted []Write
+	// Missing is what the question writer is being asked to ask about.
+	Missing []Field
 }
 
-// Model is Blurt's one model, asked two ways: for the records a capture becomes, and for the one
-// question the user has to answer when a capture cannot be finished. An interface so the
-// AgentLoop's checking and committing are testable without a model, and so a test can fault either
-// answer.
+// Model is Blurt's one model, asked three ways: for the records a capture becomes, for the one
+// question the user answers when MissingFields cannot finish it, and for the search features of a
+// committed Memory.
 type Model interface {
 	Propose(ctx context.Context, in Input) (Turn, error)
-	Ask(ctx context.Context, in Input) (string, error)
-}
-
-// Tagger is the second, single-purpose call: the search features of one Memory. An interface so the
-// loop's tagging is testable without a model, and nil is valid — with no tagger a Memory simply
-// carries no features, which is how the loop behaved before tags existed.
-type Tagger interface {
+	Question(ctx context.Context, in Input, missing []Field) (string, error)
 	Tags(ctx context.Context, text string) ([]string, error)
 }
 
@@ -234,9 +236,11 @@ func (h *Gateway) Propose(ctx context.Context, in Input) (Turn, error) {
 	return turnOf(parsed), nil
 }
 
-// Ask writes the question the user has to answer: the same route and the same model as the records
-// turn, with one string to fill instead of five.
-func (h *Gateway) Ask(ctx context.Context, in Input) (string, error) {
+// Question writes the question the user has to answer: the same route and the
+// same model as the records turn, with one string to fill instead of six, and the
+// fields MissingFields could not accept named in the prompt.
+func (h *Gateway) Question(ctx context.Context, in Input, missing []Field) (string, error) {
+	in.Missing = missing
 	content, finish, err := h.call(ctx, messages(questionPrompt, in), "question", questionSchema)
 	if err != nil {
 		return "", err
@@ -250,7 +254,8 @@ func (h *Gateway) Ask(ctx context.Context, in Input) (string, error) {
 
 // Tags names the search features of one fact, so a later capture worded nothing like it can still
 // find it. The call carries no conversation and no retrieval — the fact is the whole input — and the
-// answer is one string the server splits and normalizes.
+// answer is one string the server splits and normalizes. A Memory is the only record that carries
+// them, and they are generated on creation, which is what makes them features rather than text.
 func (h *Gateway) Tags(ctx context.Context, text string) ([]string, error) {
 	content, finish, err := h.call(ctx, []wireMessage{
 		{Role: "system", Content: tagsPrompt},

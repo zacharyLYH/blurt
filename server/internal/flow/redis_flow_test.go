@@ -8,7 +8,6 @@ import (
 
 	"blurt/internal/queue"
 	"blurt/internal/store"
-	"blurt/internal/stt"
 )
 
 // The broker-level flow: a restart re-runs group creation (Redis answers
@@ -41,7 +40,7 @@ func TestRedisFlowClaimerRecoversAfterCaptureWorkerDies(t *testing.T) {
 	// The blocking transcriber is installed before the loop starts: the worker
 	// reads its STT without a lock, so a write after start races the goroutine
 	// that is about to read it.
-	p := newRedisPump(t, memoryTurn(stt.FakeTranscript))
+	p := newRedisPump(t, reminderTurn("buy glue", "tomorrow at 6pm"))
 	p.captureWorker.STT = blockingTranscriber{}
 	p.start()
 	job := p.voice(t, "Asia/Singapore")
@@ -59,7 +58,7 @@ func TestRedisFlowClaimerRecoversAfterCaptureWorkerDies(t *testing.T) {
 
 	// The recovered Job re-enters the transcription stream; a restarted capture
 	// worker finishes it and hands it to the agent.
-	p.captureWorker.STT = scriptedTranscriber{text: stt.FakeTranscript}
+	p.captureWorker.STT = scriptedTranscriber{text: "buy glue tomorrow at 6pm"}
 	p.startCapture()
 	p.settle(t, job.JobID, status(store.JobComplete), "the recovered Job")
 	p.stopClaimers()

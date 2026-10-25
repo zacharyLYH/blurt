@@ -10,6 +10,7 @@ import (
 	"net/http/cookiejar"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -167,6 +168,40 @@ func (p *pump) outcomes(t *testing.T, jobID int64, stage string) []string {
 	return outcomes
 }
 
+// lastTrace is the newest Trace row's detail for one stage: what the last run of that
+// stage recorded about itself.
+func (p *pump) lastTrace(t *testing.T, jobID int64) map[string]any {
+	t.Helper()
+	rows := p.traces(t, jobID, store.AgentStage)
+	if len(rows) == 0 {
+		t.Fatalf("no agent trace for job %d", jobID)
+	}
+	return rows[len(rows)-1]
+}
+
+// traceField and traceFields read one diagnostic off a Trace detail — the model's own
+// words for the time, or the fields the user still owes — and traceCount reads one of
+// its numbers, which JSON decoding leaves a float64.
+func traceField(detail map[string]any, key string) string {
+	value, _ := detail[key].(string)
+	return value
+}
+
+func traceFields(detail map[string]any, key string) []string {
+	raw, _ := detail[key].([]any)
+	fields := make([]string, 0, len(raw))
+	for _, field := range raw {
+		name, _ := field.(string)
+		fields = append(fields, name)
+	}
+	return fields
+}
+
+func traceCount(detail map[string]any, key string) int {
+	count, _ := detail[key].(float64)
+	return int(count)
+}
+
 // drain asserts a stage stream has nothing left to hand a worker.
 func (p *pump) drain(t *testing.T, stream queue.Stream, what string) {
 	t.Helper()
@@ -203,6 +238,20 @@ func (p *pump) reminders(t *testing.T) int {
 func (p *pump) memories(t *testing.T) int {
 	t.Helper()
 	return p.count(t, `SELECT count(*) FROM Memory`)
+}
+
+// tagged waits for the background tagger to leave its features on one committed Memory. The
+// run closes on the commit, so a flow can no longer read that column the moment it settles.
+func (p *pump) tagged(t *testing.T, text string) string {
+	t.Helper()
+	var tags string
+	p.soon(t, func() bool {
+		if err := p.handle.Read.QueryRow(`SELECT Tags FROM Memory WHERE Text = ?`, text).Scan(&tags); err != nil {
+			t.Fatalf("read memory: %v", err)
+		}
+		return tags != ""
+	}, "the Memory's generated tags")
+	return tags
 }
 
 // plannedFor returns the turn the loop planned for one capture, so a retrieval
@@ -273,15 +322,25 @@ func (p *pump) answer(capture string, turn agent.Turn) *pump {
 	return p
 }
 
-// reminderTurn is the shape a clear capture commits.
+// reminderTurn is the shape a clear capture commits. Its "tomorrow at Npm" phrase
+// resolves against the pinned clock, so the write carries the zone, date and time
+// MissingFields needs before it will commit.
 func reminderTurn(text, phrase string) agent.Turn {
-	return agent.Turn{Say: "Reminder set.", Writes: []agent.Write{{
-		Kind: agent.KindReminder, Text: text, Timezone: "Asia/Singapore", TimePhrase: phrase}}}
+	hour, err := strconv.Atoi(strings.TrimSuffix(phrase[strings.LastIndexByte(phrase, ' ')+1:], "pm"))
+	if err != nil {
+		panic("flow: reminderTurn phrase must end in an evening hour, got " + phrase)
+	}
+	return agent.Turn{Writes: []agent.Write{{
+		Kind: agent.KindReminder, Text: text, Zone: "Asia/Singapore",
+		Date: pinned.AddDate(0, 0, 1).Format("2006-01-02"), Time: strconv.Itoa(hour+12) + ":00",
+		Recurrence: agent.RecurrenceNone, Evidence: phrase,
+	}}}
 }
 
-// memoryTurn is the shape a fact commits; it needs no clock.
+// memoryTurn is the shape a fact commits: text and nothing else, because a Memory is
+// context for a later Reminder rather than an interruption of its own.
 func memoryTurn(text string) agent.Turn {
-	return agent.Turn{Say: "Noted.", Writes: []agent.Write{{Kind: agent.KindMemory, Text: text}}}
+	return agent.Turn{Writes: []agent.Write{{Kind: agent.KindMemory, Text: text}}}
 }
 
 // httpOrigin must be in the API's allowed origins: the CSRF guard rejects unsafe

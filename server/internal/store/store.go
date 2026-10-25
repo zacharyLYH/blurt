@@ -29,6 +29,16 @@ func nullID(id int64) any {
 	return id
 }
 
+// nullText keeps an empty human time out of a nullable column: a recurring
+// Reminder has neither a local date time nor a one-off instant, and NULL is what
+// says so rather than an empty string that reads like a stored time.
+func nullText(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 // timestamp is the single text format used for every UTC column.
 func timestamp(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)

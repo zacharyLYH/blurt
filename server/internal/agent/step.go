@@ -27,8 +27,10 @@ func (r *run) step(ctx context.Context, status, reply string, reminders []store.
 	return nil
 }
 
-// trace is the Trace row's payload: the model, how the run went, and how long it
-// took. Refusals ride along because they are what a re-plan or a question is about.
+// trace is the Trace row's payload: the model, how the run went, how long it took,
+// what the model said it read the time and zone from, and what the user is still
+// owed. Evidence and missing ride here rather than on the record, because they are
+// diagnostics about one attempt and not part of what was committed.
 func (r *run) trace(outcome string) map[string]any {
 	detail := map[string]any{
 		"model":      r.loop.ModelName,
@@ -37,25 +39,16 @@ func (r *run) trace(outcome string) map[string]any {
 		"outcome":    outcome,
 		"durationMs": r.loop.now().Sub(r.started).Milliseconds(),
 	}
-	if len(r.refused) > 0 {
-		detail["refused"] = r.refused
+	// What the model said it read the time from rides the Trace, so a reader can
+	// check the answer against the user's own words. Only a Reminder carries it.
+	for _, write := range r.writes {
+		if write.Evidence != "" {
+			detail["evidence"] = write.Evidence
+			break
+		}
 	}
-	if len(r.dropped) > 0 {
-		detail["dropped"] = r.dropped
-	}
-	if len(r.readings) > 0 {
-		detail["fallback"] = r.readings
+	if len(r.missing) > 0 {
+		detail["missing"] = r.missing
 	}
 	return detail
-}
-
-// replyFor stands in when the model committed records but said nothing about them, so a completed Job
-// does not close on the user's own words alone: the Conversation is what the Job's history shows, and
-// with no Reminders view yet it is the only place a commit is visible.
-func (r *run) replyFor() string {
-	if len(r.reminders) > 0 {
-		return "Reminder set."
-	}
-	// Committing is reached only with something accepted, so this is the Memory case.
-	return "Noted."
 }

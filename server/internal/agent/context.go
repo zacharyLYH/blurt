@@ -30,9 +30,16 @@ func (l *AgentLoop) propose(ctx context.Context, in Input) (Turn, error) {
 	return l.Model.Propose(callCtx, in)
 }
 
+// questionModel is one bounded call to the question writer.
+func (l *AgentLoop) questionModel(ctx context.Context, in Input, missing []Field) (string, error) {
+	callCtx, cancel := context.WithTimeout(ctx, l.proposeTimeout())
+	defer cancel()
+	return l.Model.Question(callCtx, in, missing)
+}
+
 // input assembles one turn's context. A retrieval failure is logged and dropped
-// rather than failing the Job: context is advisory, exactly like the transcript
-// gate, so a working capture never depends on a working index.
+// rather than failing the Job: context is advisory, so a working capture never
+// depends on a working index.
 func (r *run) input(ctx context.Context) Input {
 	in := r.askInput()
 	nearby, err := r.loop.Recall.Nearby(ctx, r.job.UserID,
@@ -49,19 +56,12 @@ func (r *run) input(ctx context.Context) Input {
 	return in
 }
 
-// askModel is one bounded call to the question writer.
-func (l *AgentLoop) askModel(ctx context.Context, in Input) (string, error) {
-	askCtx, cancel := context.WithTimeout(ctx, l.proposeTimeout())
-	defer cancel()
-	return l.Model.Ask(askCtx, in)
-}
-
-// askInput is the part of a turn that needs no retrieval: what the user said, the zone anchor, and
-// the refusals. The records turn starts from it and adds what recall found; the question writer reads
-// it as it is.
+// askInput is the part of a turn that needs no retrieval: what the user said, the
+// zone anchor and the clock, and what is still missing. The records turn starts
+// from it and adds what recall found; the question writer reads it as it is.
 func (r *run) askInput() Input {
 	return Input{Conversation: r.job.Conversation, CurrentTZ: currentTZ(r.job),
-		Checks: r.refused, Accepted: r.passed}
+		Now: r.started, Missing: r.missing}
 }
 
 // captureText is everything the user has said in this Job, which is what Memory

@@ -41,10 +41,7 @@ func TestPipelineSlowTranscriptionRetriesThenFails(t *testing.T) {
 // must not stop a capture. The transcript is still saved, and the reason lands
 // in the Trace.
 func TestPipelineSlowClassifierStillSavesTheTranscript(t *testing.T) {
-	// A Memory needs no clock, so the capture can commit on the transcript the
-	// default fake returns even though that transcript names no time.
-	p := newPump(t, agent.Turn{Say: "Noted.", Writes: []agent.Write{{
-		Kind: agent.KindMemory, Text: "buy glue"}}})
+	p := newPump(t, reminderTurn("buy glue", "tomorrow at 6pm"))
 	p.captureWorker.Gate = blockingDecider{}
 	p.captureWorker.GateTimeout = 20 * time.Millisecond
 	p.start()

@@ -21,7 +21,7 @@ No Profile table, pinned set, ontology, or weekly rewrite. Memory is the only re
 1. One ingress: voice or text for capture, clarification, and correction.
 2. Save a Reminder only when its intended local time and zone are clear.
 3. The human-time rule is authoritative. UTC firing times are derived and rebuildable.
-4. The server computes UTC and recurrence. The LLM returns human time and a zone, never UTC.
+4. The server computes UTC and recurrence. The LLM returns a local date, a local time, an IANA zone and a recurrence pattern, never UTC.
 5. The scheduler compares derived UTC firing times with the server UTC clock. Device clock does not control firing.
 6. When the agent finds a conflict or ambiguity, it asks. The question and answer live in the Job Conversation. Keep the existing Reminder active until the user confirms a change.
 7. Each run either asks or commits. A question commits nothing; a question-free run commits the items that passed.
@@ -209,7 +209,7 @@ Append-only diagnostic events, always linked to a Job.
 
 - `TraceId`, `JobId`, `ReminderId` (nullable), `Timestamp` (UTC), `Stage`, `Detail`
 
-Trace transcription, model turns, PostAgentCheck results, clarification transitions, and notification attempts. Store model, duration, outcome, and useful diagnostics in `Detail`; never log secrets. Order by `Timestamp`, then `TraceId` for ties.
+Trace transcription, model turns, PostAgentCheck results, clarification transitions, and notification attempts. Store model, duration, outcome, the model's evidence for the time and zone, the fields still missing, and useful diagnostics in `Detail`; never log secrets. Order by `Timestamp`, then `TraceId` for ties.
 
 Each notification attempt has a Trace row with its `ReminderId`. Its `TraceId` is the notification ID in the push link, identifying one firing even for recurring reminders.
 
@@ -234,61 +234,55 @@ Convert speech to English. If STT fails or the clip is not legible, reply in the
 
 ### Agent loop
 
-The frontier LLM is the only model. It reads the full Job Conversation and relevant Reminder/Memory context, then proposes to create, replace, cancel, or delete records, ask the user, or clarify the request. A trip statement creates or updates Memory like any other fact.
+The frontier LLM is the only model. It reads the full Job Conversation and relevant Reminder/Memory context, then proposes the records to write, or proposes nothing, which is the Job asking. A trip statement creates Memory like any other fact.
 
-Allow multiple model turns. Start with a configurable budget of 5 turns and an eight-minute hard timeout; stop when resolved or when either budget is reached. Tune from Trace data. Failed Jobs remain visible for recovery.
+One model turn proposes the records, on an eight-minute hard timeout. There is no revise loop: a
+field the check cannot accept is a question for the user, not another turn. Tune from Trace data.
+Failed Jobs remain visible for recovery.
 
-Inputs: Job Conversation, `current_tz`, relevant Reminder/Memory results, and the previous turn's
-refusals. `current_tz` is the device's IANA zone when no stronger anchor exists. Neither `now_local`
-nor `now_utc` is sent: handed a clock, a constrained decoder invents a time from it, so the model
-copies the user's own words for when and the server resolves them.
+Inputs: Job Conversation, `current_tz`, `now_local`, relevant Reminder/Memory results, and — for the
+question turn only — the fields still missing. `current_tz` is the device's IANA zone when no stronger
+anchor exists. `now_local` is sent because the model resolves "tomorrow at 6pm" into a date and a time
+itself; the server still parses both, checks the instant is ahead, and derives every UTC value and
+recurrence instant from the zone and the pattern.
 
 1. Search Reminders from two days before to fourteen days after the target date. If target is unknown, use now. Search Memory with BM25 over the Conversation and tags; include relevant trip Memory by dates and zone.
 2. The frontier LLM resolves each item and proposes the records to write. Retrieval is
    prefetched by the server rather than asked for through tools — this model's own tool
    choices measured unreliable, and the results are context either way.
 3. Run `PostAgentCheck` on each proposed write before it commits.
-4. If a check flags an issue, pass its result into the next AgentLoop turn. The Trace keeps
-   it; the Conversation keeps only what the user reads. The LLM may revise the proposal or ask the user. Keep the existing record active until checks pass and the user confirms any change.
-5. Commit passing items when the run ends question-free. Which record a turn proposes is read off the fields
-   it filled — reminder, memory, or both — so nothing asks the model to name an operation.
-6. When time, zone, target, recurrence, or correction is ambiguous, append the question to Conversation, set `clarifying`, and send a push.
-7. The Trace keeps the run: the model, the turn count, the refusals and the outcome. The
-   Conversation keeps the turns the user reads. A write this Job already committed is
-   skipped, so a re-planned turn cannot leave the same record twice.
+4. If it names any field, the Job asks about exactly those fields and commits nothing. There is no
+   repair turn: the Trace keeps what was missing, and the Conversation keeps only what the user reads.
+5. Commit the records when the run ends question-free. Which record a turn proposes is read off the fields
+   it filled — a Reminder, a Memory, or both — so nothing asks the model to name an operation.
+6. When text, zone, date, time or recurrence is missing, or the instant is already behind us, append the question to Conversation, set `clarifying`, and send a push.
+7. The Trace keeps the run: the model, the turn count, the fields that were missing, the model's
+   evidence for the time and zone, and the outcome. The Conversation keeps the turns the user reads.
+   A record this Job already committed is skipped, so a re-run cannot leave the same record twice.
 8. When no clarification remains and all writes finish, set Job to `complete` and remove it from the open-conversation sidebar.
 
 ### PostAgentCheck
 
-Checks a proposed write before it commits, and never edits one. Input is the write the
-model proposed — its text, its zone, and the user's own words for when — plus the checks
-the server can run without a model.
+Checks a proposed write before it commits, and never edits one. It is deterministic — the
+implementation is `MissingFields` — and the whole of it is a list of fields the server cannot
+accept as they stand; that list is what the question asks the user for.
 
-- **Schema lint**: which fields the write filled. A write that names no text is refused, and the
-  shape carries at most one Reminder and one Memory per turn. Per Job, at most one Reminder ever:
-  a second proposal is refused as `job_reminder_exists` on `kind`.
-- **Event lint**: the record's words must all come from the capture, and a Reminder's event must not name a clock. Both fields are asked for in the user's own words, and the time is asked for in the phrase the server resolves.
-- **Time lint**: the zone loads as IANA, and the time phrase resolves against the device zone anchor. The model copies the user's words for when and the server resolves them, so a fire time is never the model's arithmetic; a phrase naming no time Blurt can pin is refused rather than guessed.
-- **Plan consistency**: one event proposed at two different times is refused rather than dropped, and a record this Job already committed is skipped, so a re-planned turn cannot leave the same record twice.
+- **Event**: a write with no text is refused as `event`.
+- **Zone**: the zone must load as IANA, and an empty zone is refused too, because `LoadLocation("")` answers UTC and would pin a reminder to a zone the user never named.
+- **Recurrence**: the pattern must be one of `none`, `daily`, `weekly`, `monthly`, `yearly`.
+- **One-off**: a date and a time are both required, and the local instant must be ahead of the server clock. A date the calendar does not have is refused rather than rolled.
+- **Repeat**: a time is required; the date is optional for `daily` and required for `weekly`, `monthly` and `yearly`, because that first occurrence is where the rule reads its weekday, day of month, or month and day from.
 
-A refusal returns to the AgentLoop as a code and a field — `time_unresolved` on
-`timePhrase`, for instance. The next turn revises against it, and when the turn budget
-runs out the Job asks the user.
-
-A record that paraphrases the capture — “call mother” for “call mum” — is the one case the
-lints cannot settle, so it goes to the fallback reader: the self-hosted classifier, asked one
-choice question with `supported`, `contradicted`, or `unknown`. It is asked only where a lint
-abstained, and acted on only when it is decisive: a split answer abstains, and an abstention
-leaves the lint's refusal standing. `contradicted` is the one refusal no further model turn
-can settle, so the Job asks the user at once rather than spending its budget on it.
+The check commits nothing: the Job asks about exactly the fields it named. There is no repair turn
+and no reader behind it — the self-hosted paraphrase classifier that used to adjudicate a reworded
+record is deferred, because the structured fields gave the server enough to check on its own.
 
 Deferred: ownership and state lint (a record belongs to the Job that committed it by
-construction, and the correction operations the rest of it needs are not built) and recurrence
-shape lint.
+construction, and the correction operations the rest of it needs are not built).
 
 Guardrails:
 
-- Server computes `EmitAtUtc` and `NextEmitAtUtc`; model emits human time plus zone only.
+- Server computes `EmitAtUtc` and `NextEmitAtUtc`; the model emits a local date, a local time, a zone and a recurrence pattern.
 - Relative reminders inherit the referenced Reminder's zone unless user specifies otherwise.
 - Never change an existing Reminder's zone based only on device-zone movement or a travel statement.
 - Commit clear items when the run leaves no question; keep ambiguous items in the same conversation for clarification.
@@ -392,14 +386,16 @@ User enters model provider, model, endpoint if needed, and API key on setup page
 7. Correction ops (replace, cancel, delete), `RelativeToReminderId`, and trip-Memory `Metadata`
    are not built. A completed Job never revisits its own Reminder; a correction is future work
    through its own channel.
-8. One event reworded so that both texts are fallback-supported in a single run can slip past
-   the conflict key. The at-most-one-Reminder guardrail bounds the harm.
+8. Nothing adjudicates a reworded record against what the Job already committed beyond the insert's
+   own exact-text skip, the paraphrase reader is deferred, and the at-most-one-Reminder-per-Job
+   guardrail is not enforced: a re-run that rewords one event can leave two records.
 
 ## Deferred
 
 Deliberately not built in this slice: record replace/cancel/delete ops, `RelativeToReminderId`,
-recurring reminders, trip-Memory `Metadata`, per-turn model/check Trace rows (one aggregate Trace
-row per step today), failed-recovery UI, and dump/split.
+trip-Memory `Metadata`, the notification emitter (a resolved instant is never fired), the
+paraphrase reader, per-turn model/check Trace rows (one aggregate Trace row per step today),
+failed-recovery UI, and dump/split.
 
 ## System-One supporting work
 
