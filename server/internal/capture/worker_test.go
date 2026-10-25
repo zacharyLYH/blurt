@@ -12,6 +12,7 @@ import (
 	"blurt/internal/db"
 	"blurt/internal/decision"
 	"blurt/internal/push"
+	"blurt/internal/queue"
 	"blurt/internal/store"
 	"blurt/internal/stt"
 )
@@ -29,7 +30,7 @@ func (p *recordedPush) NotifyUser(_ context.Context, userID int64, msg push.Mess
 }
 
 type fixture struct {
-	worker *Worker
+	worker *TranscriptionWorker
 	jobs   *store.JobStore
 	audio  *Store
 	handle *db.DB
@@ -56,9 +57,10 @@ func newFixture(t *testing.T, mode string) *fixture {
 	}
 	pusher := &recordedPush{}
 	return &fixture{
-		worker: &Worker{
+		worker: &TranscriptionWorker{
 			Jobs: store.NewJobStore(handle.Write, handle.Read), Audio: audio,
 			STT: stt.NewFake(mode), Pusher: pusher, Model: "phonon",
+			TranscriptionQueue: queue.NewMock(), AgentQueue: queue.NewMock(),
 		},
 		jobs:   store.NewJobStore(handle.Write, handle.Read),
 		audio:  audio,
@@ -82,6 +84,23 @@ func (f *fixture) audioJob(t *testing.T) store.Job {
 		t.Fatalf("create job: %v", err)
 	}
 	return job
+}
+
+// take consumes the next message, which the routing assertions need.
+func take(t *testing.T, stream queue.Stream) (int64, int) {
+	t.Helper()
+	jobID, attempt, _, err := stream.Consume(context.Background())
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	return jobID, attempt
+}
+
+func empty(t *testing.T, stream queue.Stream) {
+	t.Helper()
+	if _, _, _, err := stream.Consume(context.Background()); err != queue.ErrEmpty {
+		t.Fatalf("consume = %v, want ErrEmpty", err)
+	}
 }
 
 func (f *fixture) load(t *testing.T, jobID int64) store.Job {
@@ -108,25 +127,42 @@ func (f *fixture) trace(t *testing.T, jobID int64) map[string]any {
 }
 
 func TestWorkerSavesTranscriptAndDropsAudio(t *testing.T) {
-	f := newFixture(t, "ok")
-	job := f.audioJob(t)
-	audioName := job.Conversation[0].Audio
+	cases := []struct {
+		name  string
+		gate  string
+		label string
+	}{
+		{"without a gate", "", ""},
+		{"after the gate passes the request", requestLabel, requestLabel},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t, "ok")
+			if test.gate != "" {
+				f.worker.Gate = &fakeDecider{label: test.gate}
+				f.worker.GateModel = "laya"
+			}
+			job := f.audioJob(t)
+			audioName := job.Conversation[0].Audio
 
-	f.worker.process(context.Background(), job)
+			f.worker.process(context.Background(), job, 1)
 
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobQueued || stored.Conversation[0].Text != stt.FakeTranscript {
-		t.Fatalf("stored job = %+v", stored)
-	}
-	if file, err := f.audio.Open(audioName); err == nil {
-		file.Close()
-		t.Fatal("audio blob survived a successful transcription")
-	}
-	if outcome := f.trace(t, job.JobID)["outcome"]; outcome != "ok" {
-		t.Fatalf("trace outcome = %v, want ok", outcome)
-	}
-	if f.pusher.calls != 0 {
-		t.Fatalf("push calls = %d, want 0", f.pusher.calls)
+			stored := f.load(t, job.JobID)
+			if stored.Status != store.JobOpen || stored.Conversation[0].Text != stt.FakeTranscript {
+				t.Fatalf("stored job = %+v", stored)
+			}
+			if file, err := f.audio.Open(audioName); err == nil {
+				file.Close()
+				t.Fatal("audio blob survived a successful transcription")
+			}
+			detail := f.trace(t, job.JobID)
+			if detail["outcome"] != "ok" || test.label != "" && detail["label"] != test.label {
+				t.Fatalf("trace = %v", detail)
+			}
+			if f.pusher.calls != 0 {
+				t.Fatalf("push calls = %d, want 0", f.pusher.calls)
+			}
+		})
 	}
 }
 
@@ -136,9 +172,9 @@ func TestWorkerRetriesThenSucceeds(t *testing.T) {
 	job := f.audioJob(t)
 	audioName := job.Conversation[0].Audio
 
-	f.worker.process(context.Background(), job)
+	f.worker.process(context.Background(), job, 1)
 	afterFirst := f.load(t, job.JobID)
-	if afterFirst.Status != store.JobQueued || afterFirst.RetryCount != 1 {
+	if afterFirst.Status != store.JobOpen || afterFirst.RetryCount != 1 {
 		t.Fatalf("after first attempt = %+v", afterFirst)
 	}
 	if file, err := f.audio.Open(audioName); err != nil {
@@ -147,9 +183,9 @@ func TestWorkerRetriesThenSucceeds(t *testing.T) {
 		file.Close()
 	}
 
-	f.worker.process(context.Background(), afterFirst)
+	f.worker.process(context.Background(), afterFirst, 2)
 	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobQueued || stored.Conversation[0].Text != stt.FakeTranscript {
+	if stored.Status != store.JobOpen || stored.Conversation[0].Text != stt.FakeTranscript {
 		t.Fatalf("after retry = %+v", stored)
 	}
 	if file, err := f.audio.Open(audioName); err == nil {
@@ -164,9 +200,9 @@ func TestWorkerFailsAfterThreeAttempts(t *testing.T) {
 	f := newFixture(t, "error")
 	job := f.audioJob(t)
 
-	for i := 0; i < 3; i++ {
+	for i := 1; i <= 3; i++ {
 		job = f.load(t, job.JobID)
-		f.worker.process(context.Background(), job)
+		f.worker.process(context.Background(), job, i)
 	}
 
 	stored := f.load(t, job.JobID)
@@ -191,44 +227,6 @@ func TestWorkerFailsAfterThreeAttempts(t *testing.T) {
 	}
 }
 
-// A blank transcript is permanent: retrying the same unintelligible clip just
-// burns STT spend.
-func TestWorkerRejectsIllegibleClip(t *testing.T) {
-	f := newFixture(t, "illegible")
-	job := f.audioJob(t)
-
-	f.worker.process(context.Background(), job)
-
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobFailed || stored.RetryCount != 1 {
-		t.Fatalf("stored job = %+v", stored)
-	}
-	if outcome := f.trace(t, job.JobID)["outcome"]; outcome != "illegible" {
-		t.Fatalf("trace outcome = %v, want illegible", outcome)
-	}
-}
-
-func TestRequeueInterruptedCountsAnAttempt(t *testing.T) {
-	f := newFixture(t, "ok")
-	job := f.audioJob(t)
-	if _, err := f.handle.Write.Exec(`UPDATE Job SET Status = ? WHERE JobId = ?`,
-		store.JobProcessing, job.JobID); err != nil {
-		t.Fatalf("mark processing: %v", err)
-	}
-
-	count, err := f.jobs.RequeueInterrupted(context.Background())
-	if err != nil {
-		t.Fatalf("RequeueInterrupted: %v", err)
-	}
-	if count != 1 {
-		t.Fatalf("requeued = %d, want 1", count)
-	}
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobQueued || stored.RetryCount != 1 {
-		t.Fatalf("stored job = %+v", stored)
-	}
-}
-
 // fakeDecider stands in for the gateway so the gate's policy is tested without
 // it: it labels every question, or fails outright.
 type fakeDecider struct {
@@ -248,56 +246,52 @@ func (f *fakeDecider) Decide(_ context.Context, _ string, questions decision.Que
 	return answers, nil
 }
 
-// A noise verdict is permanent: the same clip cannot become a request on a
-// retry, so it takes the illegible path — fallback, permanent failure, push,
-// and no blob left behind.
-func TestWorkerRejectsNoiseTranscript(t *testing.T) {
-	f := newFixture(t, "ok")
-	f.worker.Gate = &fakeDecider{label: noiseLabel}
-	f.worker.GateModel = "laya"
-	job := f.audioJob(t)
+// A blank transcript and a noise verdict are both permanent: retrying the same
+// clip cannot help, so both take the fallback path and leave no blob behind.
+func TestWorkerRejectsUnusableTranscript(t *testing.T) {
+	cases := []struct {
+		name    string
+		mode    string
+		gate    string
+		outcome string
+	}{
+		{"illegible", "illegible", "", "illegible"},
+		{"noise", "ok", noiseLabel, "noise"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t, test.mode)
+			if test.gate != "" {
+				f.worker.Gate = &fakeDecider{label: test.gate}
+				f.worker.GateModel = "laya"
+			}
+			job := f.audioJob(t)
 
-	f.worker.process(context.Background(), job)
+			f.worker.process(context.Background(), job, 1)
 
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobFailed || stored.RetryCount != 1 {
-		t.Fatalf("stored job = %+v", stored)
-	}
-	last := stored.Conversation[len(stored.Conversation)-1]
-	if last.Role != "assistant" || last.Text != FallbackMessage {
-		t.Fatalf("fallback = %+v", last)
-	}
-	detail := f.trace(t, job.JobID)
-	if detail["outcome"] != "noise" || detail["label"] != noiseLabel || detail["gateModel"] != "laya" {
-		t.Fatalf("trace = %v", detail)
-	}
-	if f.pusher.calls != 1 {
-		t.Fatalf("push calls = %d, want 1", f.pusher.calls)
-	}
-	if file, err := f.audio.Open(stored.Conversation[0].Audio); err == nil {
-		file.Close()
-		t.Fatal("a noise job kept its audio blob")
-	}
-}
-
-// A request passes the gate and is transcribed as usual.
-func TestWorkerPassesRequestTranscript(t *testing.T) {
-	f := newFixture(t, "ok")
-	f.worker.Gate = &fakeDecider{label: requestLabel}
-	job := f.audioJob(t)
-
-	f.worker.process(context.Background(), job)
-
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobQueued || stored.Conversation[0].Text != stt.FakeTranscript {
-		t.Fatalf("stored job = %+v", stored)
-	}
-	detail := f.trace(t, job.JobID)
-	if detail["outcome"] != "ok" || detail["label"] != requestLabel {
-		t.Fatalf("trace = %v", detail)
-	}
-	if f.pusher.calls != 0 {
-		t.Fatalf("push calls = %d, want 0", f.pusher.calls)
+			stored := f.load(t, job.JobID)
+			if stored.Status != store.JobFailed || stored.RetryCount != 1 {
+				t.Fatalf("stored job = %+v", stored)
+			}
+			last := stored.Conversation[len(stored.Conversation)-1]
+			if last.Role != "assistant" || last.Text != FallbackMessage {
+				t.Fatalf("fallback = %+v", last)
+			}
+			detail := f.trace(t, job.JobID)
+			if detail["outcome"] != test.outcome {
+				t.Fatalf("trace = %v", detail)
+			}
+			if test.gate != "" && (detail["label"] != test.gate || detail["gateModel"] != "laya") {
+				t.Fatalf("trace = %v", detail)
+			}
+			if f.pusher.calls != 1 {
+				t.Fatalf("push calls = %d, want 1", f.pusher.calls)
+			}
+			if file, err := f.audio.Open(stored.Conversation[0].Audio); err == nil {
+				file.Close()
+				t.Fatal("a failed job kept its audio blob")
+			}
+		})
 	}
 }
 
@@ -308,10 +302,10 @@ func TestWorkerGateErrorFailsOpen(t *testing.T) {
 	f.worker.Gate = &fakeDecider{err: errors.New("decision: call laya: connection refused")}
 	job := f.audioJob(t)
 
-	f.worker.process(context.Background(), job)
+	f.worker.process(context.Background(), job, 1)
 
 	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobQueued || stored.Conversation[0].Text != stt.FakeTranscript {
+	if stored.Status != store.JobOpen || stored.Conversation[0].Text != stt.FakeTranscript {
 		t.Fatalf("stored job = %+v", stored)
 	}
 	detail := f.trace(t, job.JobID)
@@ -320,5 +314,31 @@ func TestWorkerGateErrorFailsOpen(t *testing.T) {
 	}
 	if reason, _ := detail["gateError"].(string); !strings.Contains(reason, "refused") {
 		t.Fatalf("gateError = %v", detail["gateError"])
+	}
+}
+
+// A transcription message for a Job with no pending clip — a stale reclaim, or
+// a sweeper republish — skips STT and goes straight to the agent.
+func TestWorkerSkipsTranscriptionWhenNoClipIsPending(t *testing.T) {
+	f := newFixture(t, "ok")
+	ctx := context.Background()
+	job, err := f.jobs.Create(ctx, f.userID, store.Message{Role: "user", Text: "buy glue"})
+	if err != nil {
+		t.Fatalf("create job: %v", err)
+	}
+	if err := f.worker.TranscriptionQueue.Publish(ctx, job.JobID, 1); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+
+	if !f.worker.processOne(ctx) {
+		t.Fatal("the job was not claimed")
+	}
+
+	if id, attempt := take(t, f.worker.AgentQueue); id != job.JobID || attempt != 1 {
+		t.Fatalf("agent message = %d/%d, want %d/1", id, attempt, job.JobID)
+	}
+	empty(t, f.worker.TranscriptionQueue)
+	if stored := f.load(t, job.JobID); stored.Status != store.JobOpen || len(stored.Conversation) != 1 {
+		t.Fatalf("stored = %+v, want the Job untouched", stored)
 	}
 }

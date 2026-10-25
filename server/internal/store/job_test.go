@@ -22,100 +22,70 @@ func newJobStack(t *testing.T) (*JobStore, *db.DB, int64) {
 	return NewJobStore(handle.Write, handle.Read), handle, user.UserID
 }
 
-func TestClaimTranscriptionPipeline(t *testing.T) {
-	jobs, handle, userID := newJobStack(t)
-	ctx := context.Background()
-
-	first, err := jobs.Create(ctx, userID, Message{Role: "user", Audio: "aaaa0000aaaa0000.wav"})
+func TestCreateStartsOpen(t *testing.T) {
+	jobs, _, userID := newJobStack(t)
+	job, err := jobs.Create(context.Background(), userID,
+		Message{Role: "user", Text: "buy glue"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	second, err := jobs.Create(ctx, userID, Message{Role: "user", Audio: "bbbb0000bbbb0000.wav"})
-	if err != nil {
-		t.Fatalf("create second: %v", err)
-	}
-	if _, err := jobs.Create(ctx, userID, Message{Role: "user", Text: "typed"}); err != nil {
-		t.Fatalf("create text: %v", err)
-	}
-
-	claimed, ok, err := jobs.ClaimTranscription(ctx)
-	if err != nil || !ok {
-		t.Fatalf("claim: ok=%v err=%v", ok, err)
-	}
-	if claimed.JobID != first.JobID || claimed.Status != JobProcessing {
-		t.Fatalf("claimed = %+v", claimed)
-	}
-	// One Job per user: the second waits even though its clip is ready.
-	if _, ok, err := jobs.ClaimTranscription(ctx); err != nil || ok {
-		t.Fatalf("second claim: ok=%v err=%v", ok, err)
-	}
-
-	if err := jobs.SaveTranscript(ctx, first.JobID, "aaaa0000aaaa0000.wav", "buy glue",
-		map[string]any{"outcome": "ok"}); err != nil {
-		t.Fatalf("save transcript: %v", err)
-	}
-	stored, err := jobs.ByID(ctx, userID, first.JobID)
-	if err != nil {
-		t.Fatalf("load: %v", err)
-	}
-	if stored.Status != JobQueued || stored.Conversation[0].Text != "buy glue" {
-		t.Fatalf("stored = %+v", stored)
-	}
-	// The second audio Job is claimable now; the typed Job never is, and the
-	// transcribed Job must not be claimed again (the agent poller owns it).
-	claimed, ok, err = jobs.ClaimTranscription(ctx)
-	if err != nil || !ok {
-		t.Fatalf("claim second: ok=%v err=%v", ok, err)
-	}
-	if claimed.JobID != second.JobID {
-		t.Fatalf("claimed job = %d, want %d", claimed.JobID, second.JobID)
-	}
-	if _, ok, err := jobs.ClaimTranscription(ctx); err != nil || ok {
-		t.Fatalf("claim with nothing left: ok=%v err=%v", ok, err)
-	}
-
-	var traces int
-	if err := handle.Read.QueryRow(`SELECT count(*) FROM Trace WHERE JobId = ?`, first.JobID).Scan(&traces); err != nil {
-		t.Fatalf("count traces: %v", err)
-	}
-	if traces != 1 {
-		t.Fatalf("traces = %d, want 1", traces)
+	if job.Status != JobOpen {
+		t.Fatalf("status = %q, want %q", job.Status, JobOpen)
 	}
 }
 
-// A Job with a second clip must be claimable again. The claim used to also
-// require that the Job carried no successful transcription Trace, which stranded
-// every clip after the first one in the same conversation — exactly what a voice
-// reply to a clarification will be.
-func TestClaimTranscribesASecondClipInTheSameJob(t *testing.T) {
+// Every clip gets its own transcript; the Job stays open until the last one is
+// done, then the caller sends it to the agent stream.
+func TestSaveTranscriptFillsClipsAndResetsAttempts(t *testing.T) {
 	jobs, _, userID := newJobStack(t)
 	ctx := context.Background()
-
 	job, err := jobs.Create(ctx, userID,
 		Message{Role: "user", Audio: "aaaa0000aaaa0000.wav"},
 		Message{Role: "user", Audio: "cccc0000cccc0000.wav"})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
+	if err := jobs.Retry(ctx, TranscriptionStage, job.JobID, 2, nil); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	stored, err := jobs.SaveTranscript(ctx, job.JobID, "aaaa0000aaaa0000.wav", "buy glue",
+		map[string]any{"outcome": "ok"})
+	if err != nil {
+		t.Fatalf("save first: %v", err)
+	}
+	if stored.RetryCount != 0 || stored.Conversation[0].Text != "buy glue" {
+		t.Fatalf("stored = %+v", stored)
+	}
+	if audio, ok := stored.PendingAudio(); !ok || audio != "cccc0000cccc0000.wav" {
+		t.Fatalf("pending audio = %q ok=%v", audio, ok)
+	}
+	stored, err = jobs.SaveTranscript(ctx, job.JobID, "cccc0000cccc0000.wav", "and milk",
+		map[string]any{"outcome": "ok"})
+	if err != nil {
+		t.Fatalf("save second: %v", err)
+	}
+	if stored.Status != JobOpen {
+		t.Fatalf("status = %q, want open", stored.Status)
+	}
+	if _, ok := stored.PendingAudio(); ok {
+		t.Fatal("a fully transcribed Job still has pending audio")
+	}
+}
 
-	claimed, ok, err := jobs.ClaimTranscription(ctx)
-	if err != nil || !ok {
-		t.Fatalf("claim first clip: ok=%v err=%v", ok, err)
+func TestAppendTurnRetiresAPendingClip(t *testing.T) {
+	jobs, _, userID := newJobStack(t)
+	ctx := context.Background()
+	job, err := jobs.Create(ctx, userID, Message{Role: "user", Audio: "aaaa0000aaaa0000.wav"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
 	}
-	if audio, ok := claimed.PendingAudio(); !ok || audio != "aaaa0000aaaa0000.wav" {
-		t.Fatalf("first pending audio = %q ok=%v", audio, ok)
+	stored, err := jobs.AppendTurn(ctx, userID, job.JobID,
+		Message{Text: "buy glue", TZ: "Asia/Singapore"}, nil)
+	if err != nil {
+		t.Fatalf("append: %v", err)
 	}
-	if err := jobs.SaveTranscript(ctx, job.JobID, "aaaa0000aaaa0000.wav", "buy glue",
-		map[string]any{"outcome": "ok"}); err != nil {
-		t.Fatalf("save transcript: %v", err)
-	}
-
-	claimed, ok, err = jobs.ClaimTranscription(ctx)
-	if err != nil || !ok {
-		t.Fatalf("claim second clip: ok=%v err=%v", ok, err)
-	}
-	if audio, ok := claimed.PendingAudio(); !ok || audio != "cccc0000cccc0000.wav" {
-		t.Fatalf("second pending audio = %q ok=%v", audio, ok)
+	if _, pending := stored.PendingAudio(); pending {
+		t.Fatal("typed reply kept the stale clip")
 	}
 }
 

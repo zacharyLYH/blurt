@@ -189,6 +189,35 @@ func TestForeignKeysEnforced(t *testing.T) {
 	}
 }
 
+// The queue sweeper scans Job by (Status, queued_at), so both must exist.
+// The 4-value Status CHECK is the Redis-Streams simplification: no staging
+// statuses leak into SQL.
+func TestJobSchemaMatchesTheQueueContract(t *testing.T) {
+	handle := openTestDB(t)
+	for _, def := range []string{
+		`queued_at`, `Status`, `RetryCount`,
+	} {
+		var count int
+		if err := handle.Read.QueryRow(
+			`SELECT count(*) FROM pragma_table_info('Job') WHERE name = ?`, def,
+		).Scan(&count); err != nil {
+			t.Fatalf("read column %s: %v", def, err)
+		}
+		if count != 1 {
+			t.Fatalf("Job.%s column is missing", def)
+		}
+	}
+	var hasQueuedIndex int
+	if err := handle.Read.QueryRow(
+		`SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = 'idx_job_queued'`,
+	).Scan(&hasQueuedIndex); err != nil {
+		t.Fatalf("read index: %v", err)
+	}
+	if hasQueuedIndex != 1 {
+		t.Fatal("idx_job_queued index is missing")
+	}
+}
+
 func TestMemoryFtsStaysInSync(t *testing.T) {
 	handle := openTestDB(t)
 	now := "2026-01-01T00:00:00Z"

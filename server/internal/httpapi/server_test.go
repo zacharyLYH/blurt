@@ -22,6 +22,7 @@ import (
 	"blurt/internal/db"
 	"blurt/internal/httpapi"
 	"blurt/internal/push"
+	"blurt/internal/queue"
 	"blurt/internal/store"
 )
 
@@ -107,7 +108,7 @@ const testVAPIDPublicKey = "BPCRZS3Lfu-TYCCcyqO99WCNWKGt_JCnjO1U67-6qVHrPWnRjs1I
 func newClient(t *testing.T) (*http.Client, string, *fakeMailer, *db.DB) {
 	t.Helper()
 	mailer := &fakeMailer{}
-	client, base, handle := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, nil)
+	client, base, handle, _ := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, nil)
 	return client, base, mailer, handle
 }
 
@@ -116,13 +117,32 @@ func newClient(t *testing.T) (*http.Client, string, *fakeMailer, *db.DB) {
 func newPushClient(t *testing.T) (*http.Client, string, *fakeMailer, *fakePusher, *db.DB) {
 	t.Helper()
 	mailer, pusher := &fakeMailer{}, &fakePusher{}
-	client, base, handle := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, pusher)
+	client, base, handle, _ := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, pusher)
 	return client, base, mailer, pusher, handle
+}
+
+// newQueueClient is newClient plus the queues the handlers publish to, so a test
+// can see which stream a capture was routed to.
+func newQueueClient(t *testing.T) (*http.Client, string, *fakeMailer, *db.DB, *queue.Queues) {
+	t.Helper()
+	mailer := &fakeMailer{}
+	client, base, handle, queues := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, nil)
+	return client, base, mailer, handle, queues
+}
+
+// consume takes the next message off a stage stream.
+func consume(t *testing.T, stream queue.Stream) (int64, int) {
+	t.Helper()
+	jobID, attempt, _, err := stream.Consume(context.Background())
+	if err != nil {
+		t.Fatalf("consume: %v", err)
+	}
+	return jobID, attempt
 }
 
 // newTestStack boots the API on a throwaway database. A nil mailer is the
 // BLURT_FAKE_PIN path: PINs are fixed and nothing is sent.
-func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, pusher httpapi.Pusher) (*http.Client, string, *db.DB) {
+func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, pusher httpapi.Pusher) (*http.Client, string, *db.DB, *queue.Queues) {
 	t.Helper()
 	handle, err := db.Open(t.TempDir())
 	if err != nil {
@@ -133,6 +153,7 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 	if err != nil {
 		t.Fatalf("open audio store: %v", err)
 	}
+	queues := &queue.Queues{TranscriptionQueue: queue.NewMock(), AgentQueue: queue.NewMock()}
 
 	server := httptest.NewServer(httpapi.New(httpapi.Deps{
 		DB:             handle.Write,
@@ -143,6 +164,7 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 		Pusher:         pusher,
 		Jobs:           store.NewJobStore(handle.Write, handle.Read),
 		Audio:          audio,
+		Queues:         queues,
 		VAPIDPublicKey: testVAPIDPublicKey,
 		AllowedOrigins: []string{testOrigin},
 	}))
@@ -152,7 +174,7 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 	if err != nil {
 		t.Fatalf("cookie jar: %v", err)
 	}
-	return &http.Client{Jar: jar}, server.URL, handle
+	return &http.Client{Jar: jar}, server.URL, handle, queues
 }
 
 func do(t *testing.T, client *http.Client, method, url string, body any, origin string) *http.Response {
@@ -218,6 +240,18 @@ func login(t *testing.T, client *http.Client, base, email string, mailer *fakeMa
 		t.Fatalf("decode verify-pin: %v", err)
 	}
 	return reply.User
+}
+
+// newUserClient opens a second browser session, signed in as someone else.
+func newUserClient(t *testing.T, base, email string, mailer *fakeMailer) *http.Client {
+	t.Helper()
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatalf("cookie jar: %v", err)
+	}
+	client := &http.Client{Jar: jar}
+	login(t, client, base, email, mailer)
+	return client
 }
 
 // sessionExpiry reads the single session's stored expiry, the source of truth
@@ -306,7 +340,7 @@ func TestSignedInUserCannotRequestPin(t *testing.T) {
 // Dev mode: the PIN is fixed and nothing is mailed, which is what lets a stack
 // with no mailbox sign in.
 func TestFakePINModeSkipsMail(t *testing.T) {
-	client, base, _ := newTestStack(t, auth.NewPinStore(time.Minute, auth.DevPIN), nil, nil)
+	client, base, _, _ := newTestStack(t, auth.NewPinStore(time.Minute, auth.DevPIN), nil, nil)
 
 	status, body := call(t, client, http.MethodPost, base+"/api/auth/request-pin", map[string]string{"email": "dev@example.com"})
 	if status != http.StatusOK {

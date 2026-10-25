@@ -18,6 +18,7 @@ import (
 	"blurt/internal/auth"
 	"blurt/internal/capture"
 	"blurt/internal/push"
+	"blurt/internal/queue"
 	"blurt/internal/store"
 )
 
@@ -46,8 +47,9 @@ type Deps struct {
 	Pusher Pusher
 	// Jobs and Audio make up the capture path. Nil is valid for tests that do
 	// not exercise it; the handlers answer 501 instead of panicking.
-	Jobs  *store.JobStore
-	Audio *capture.Store
+	Jobs   *store.JobStore
+	Audio  *capture.Store
+	Queues *queue.Queues
 	// VAPIDPublicKey is handed to browsers when they create a push
 	// subscription. The private half stays inside the sender.
 	VAPIDPublicKey string
@@ -77,8 +79,12 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/jobs", s.requireUser(s.createJob))
 	mux.HandleFunc("GET /api/jobs", s.requireUser(s.listJobs))
 	mux.HandleFunc("GET /api/jobs/{jobId}", s.requireUser(s.getJob))
+	// The clarification reply is one more turn in the same Conversation, so it
+	// rides the Job rather than opening a workflow of its own.
+	mux.HandleFunc("POST /api/jobs/{jobId}/messages", s.requireUser(s.replyToJob))
 	// Wrong method on a real Job path gets 405, not the generic 501 below.
 	mux.HandleFunc("/api/jobs/{jobId}", methodNotAllowed(http.MethodGet))
+	mux.HandleFunc("/api/jobs/{jobId}/messages", methodNotAllowed(http.MethodPost))
 	// Unbuilt endpoints stay explicit instead of 404 so the frontend can
 	// tell "not yet" apart from "wrong URL".
 	mux.HandleFunc("/api/", notImplemented)

@@ -1,6 +1,7 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import Home from './pages/Home'
 import Job from './pages/Job'
+import JobReply from './pages/JobReply'
 import Login from './pages/Login'
 import Permissions from './pages/Permissions'
 import Questionnaire from './pages/Questionnaire'
@@ -64,6 +65,9 @@ export default function App() {
             }
           />
           <Route path="/jobs/:jobId" element={<Protected><Gated><Job /></Gated></Protected>} />
+          {/* The boom for one Job's spoken reply. A route of its own, so the
+              browser's back gesture is the way out of it. */}
+          <Route path="/jobs/:jobId/reply" element={<Protected><Gated><JobReply /></Gated></Protected>} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </BrowserRouter>

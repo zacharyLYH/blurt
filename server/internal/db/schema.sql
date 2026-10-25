@@ -32,19 +32,20 @@ CREATE TABLE IF NOT EXISTS Session (
 );
 CREATE INDEX IF NOT EXISTS idx_session_user ON Session(UserId);
 
--- One conversation from capture through clarification.
+-- One conversation from capture through clarification. Redis streams carry the
+-- processing stage; Status only records whether the Job is running or stopped.
 CREATE TABLE IF NOT EXISTS Job (
     JobId        INTEGER PRIMARY KEY,
     UserId       INTEGER NOT NULL REFERENCES User(UserId) ON DELETE CASCADE,
-    Status       TEXT    NOT NULL CHECK (Status IN ('queued','processing','clarifying','complete','failed')),
+    Status       TEXT    NOT NULL CHECK (Status IN ('open','clarifying','complete','failed')),
     RetryCount   INTEGER NOT NULL DEFAULT 0,
     Conversation TEXT    NOT NULL DEFAULT '[]',
-    CreatedAt    TEXT    NOT NULL
+    CreatedAt    TEXT    NOT NULL,
+    queued_at    TEXT    NOT NULL
 );
-CREATE INDEX IF NOT EXISTS idx_job_queue ON Job(Status, CreatedAt);
+CREATE INDEX IF NOT EXISTS idx_job_queued ON Job(Status, queued_at);
 -- Every hot Job query filters on the owner: the sidebar lists one user's open
--- conversations, and the claim checks whether that same user already has a Job
--- in flight.
+-- conversations.
 CREATE INDEX IF NOT EXISTS idx_job_user ON Job(UserId, Status, CreatedAt);
 
 CREATE TABLE IF NOT EXISTS Reminder (
@@ -83,13 +84,21 @@ CREATE TABLE IF NOT EXISTS Memory (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_user ON Memory(UserId);
 
--- BM25 retrieval for phase 1, kept in sync by the triggers below.
+-- BM25 retrieval for phase 1, kept in sync by the triggers below. The porter
+-- tokenizer stems BOTH the indexed words and the query's, so a capture saying
+-- "groceries" reaches a Memory holding "grocery" — whether that word sits in the
+-- text or in a generated tag. That is also what makes the tagger's singular-word
+-- instruction a tidiness rule rather than a load-bearing one.
+--
+-- Porter over-stems a little ("university" and "universe" share a stem). That is
+-- the bias we want: retrieval is best effort, and the model decides which hits
+-- matter, so a missed Memory costs more than an extra one to read.
 CREATE VIRTUAL TABLE IF NOT EXISTS fts_memory USING fts5(
     text,
     tags,
     content='memory',
     content_rowid='MemoryId',
-    tokenize='unicode61 remove_diacritics 2'
+    tokenize='porter unicode61 remove_diacritics 2'
 );
 
 CREATE TRIGGER IF NOT EXISTS memory_ai AFTER INSERT ON Memory BEGIN

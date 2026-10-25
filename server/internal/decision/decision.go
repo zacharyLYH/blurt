@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"blurt/internal/config"
+	"blurt/internal/textutil"
 )
 
 // Kind is a decision shape the gateway understands. Anything else is refused
@@ -146,7 +147,7 @@ func (h *HTTP) Decide(ctx context.Context, state string, questions Questions) (D
 	}
 
 	body := request{Model: h.model}
-	body.Payload.State = truncate(state, maxStateChars)
+	body.Payload.State = textutil.Truncate(state, maxStateChars)
 	body.Payload.Questions = questions
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -222,11 +223,4 @@ func refusal(res *http.Response) *Error {
 		message = strings.TrimSpace(body.Error.Code)
 	}
 	return &Error{Status: res.StatusCode, Message: message}
-}
-
-func truncate(value string, limit int) string {
-	if len(value) <= limit {
-		return value
-	}
-	return value[:limit]
 }

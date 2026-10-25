@@ -10,6 +10,7 @@ services:
   server:
     environment:
       BLURT_DATA_DIR: /data
+      BLURT_REDIS_URL: redis://redis:6379/0
       BLURT_BIND: ":8080"
       BLURT_PUBLIC_ORIGINS: http://localhost:9977
       BLURT_SESSION_SECRET: e2e-session-secret-0123456789abcdef
@@ -20,8 +21,10 @@ services:
       # its real App Password instead of carrying it into a test container.
       BLURT_FAKE_PIN: "true"
       # phonon is a network dependency; e2e uses the deterministic fake so the
-      # capture path can be exercised without the gateway.
+      # capture path can be exercised without the gateway. The planner is
+      # required, so it needs its own fake wherever STT has one.
       BLURT_FAKE_STT: "true"
+      BLURT_FAKE_AGENT: "true"
       BLURT_SMTP_PASSWORD: ""
       BLURT_VAPID_PUBLIC_KEY: BPCRZS3Lfu-TYCCcyqO99WCNWKGt_JCnjO1U67-6qVHrPWnRjs1IGxle6v7Vv2RK89T3Dwj_itMGWtCv-up64XQ
       BLURT_VAPID_PRIVATE_KEY: m6UconuCpzkrbd1fui1DQb_GXOEGCjue8mhRAzVvak0

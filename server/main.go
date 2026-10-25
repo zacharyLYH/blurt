@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"blurt/internal/agent"
 	"blurt/internal/auth"
 	"blurt/internal/capture"
 	"blurt/internal/config"
@@ -21,6 +22,7 @@ import (
 	"blurt/internal/httpapi"
 	"blurt/internal/mail"
 	"blurt/internal/push"
+	"blurt/internal/queue"
 	"blurt/internal/store"
 	"blurt/internal/stt"
 )
@@ -44,6 +46,7 @@ func main() {
 	// shows up when a PIN is mailed.
 	slog.Info("configuration loaded",
 		"data_dir", cfg.DataDir,
+		"redis_configured", cfg.RedisURL != "",
 		"bind", cfg.Bind,
 		"public_origins", cfg.PublicOrigins,
 		"smtp_host", cfg.SMTP.Host,
@@ -55,6 +58,8 @@ func main() {
 		"fake_stt", cfg.FakeSTT,
 		"decision_model", cfg.Decision.Model,
 		"gate_on", cfg.Decision.URL != "",
+		"agent_model", cfg.Agent.Model,
+		"fake_agent", cfg.FakeAgent,
 	)
 
 	// BLURT_FAKE_PIN is the dev way to sign in without a mailbox: the PIN is
@@ -80,6 +85,23 @@ func main() {
 	}
 	jobs := store.NewJobStore(handle.Write, handle.Read)
 
+	// Both consumer groups must exist before the first producer publishes.
+	boot := context.Background()
+	transcriptionQueue, err := queue.NewRedis(boot, cfg.RedisURL, queue.Config{
+		Stream: "job.transcription", Group: "capture", Consumer: "capture-1", ClaimerID: "claimer-capture",
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer transcriptionQueue.Close()
+	agentQueue, err := queue.NewRedis(boot, cfg.RedisURL, queue.Config{
+		Stream: "job.agent", Group: "agent", Consumer: "agent-1", ClaimerID: "claimer-agent",
+	})
+	if err != nil {
+		panic(err)
+	}
+	defer agentQueue.Close()
+
 	// The fake is the local/e2e escape hatch, exactly like BLURT_FAKE_PIN.
 	var transcriber stt.Transcriber
 	if cfg.FakeSTT {
@@ -94,10 +116,42 @@ func main() {
 	if cfg.Decision.URL != "" {
 		gate = decision.NewHTTP(cfg.Decision)
 	}
-	worker := &capture.Worker{
+	transcriptionWorker := &capture.TranscriptionWorker{
 		Jobs: jobs, Audio: audio, STT: transcriber, Pusher: notifier, Model: cfg.STT.Model,
 		Gate: gate, GateModel: cfg.Decision.Model,
+		TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue,
 	}
+
+	// The model rides the same gateway as phonon and laya, so the fake is the
+	// local/e2e escape hatch that keeps the AgentLoop exercisable without one.
+	var model agent.Model
+	var tagger agent.Tagger
+	if cfg.FakeAgent {
+		slog.Warn("BLURT_FAKE_AGENT is on: the model is scripted — never do this on a public host")
+		model, tagger = agent.Fake{}, agent.FakeTagger{}
+	} else {
+		gateway := agent.NewGateway(cfg.Agent)
+		// Tags are a second, single-purpose call on the same model. The records
+		// schema is measured to break down when it grows, so the features never
+		// ride in it.
+		model, tagger = gateway, gateway
+	}
+	loop := &agent.AgentLoop{
+		Store:      jobs,
+		Recall:     agent.Reads{Reminders: store.NewReminderStore(handle.Read), Memories: store.NewMemoryStore(handle.Read)},
+		Model:      model,
+		Tagger:     tagger,
+		Pusher:     notifier,
+		AgentQueue: agentQueue,
+		ModelName:  cfg.Agent.Model,
+		MaxTurns:   cfg.Agent.MaxTurns,
+	}
+	// The fallback reader is laya, the same classifier the transcript gate uses, and only a configured
+	// gateway has one. With none, the deterministic lints are the whole of PostAgentCheck.
+	if gate != nil {
+		loop.Fallback = agent.Laya{Decider: gate}
+	}
+	agentWorker := &agent.AgentWorker{Jobs: jobs, Loop: loop, AgentQueue: agentQueue}
 
 	srv := &http.Server{
 		Addr: cfg.Bind,
@@ -110,6 +164,7 @@ func main() {
 			Pusher:         notifier,
 			Jobs:           jobs,
 			Audio:          audio,
+			Queues:         &queue.Queues{TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue},
 			VAPIDPublicKey: cfg.VAPID.PublicKey,
 			AllowedOrigins: cfg.PublicOrigins,
 		}),
@@ -122,7 +177,17 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go worker.Run(ctx)
+	go transcriptionWorker.Run(ctx)
+	go agentWorker.Run(ctx)
+	go (&queue.Claimer{
+		Stream: transcriptionQueue, Jobs: jobs, Stage: store.TranscriptionStage,
+		Fallback: capture.FallbackMessage, MinIdle: 360 * time.Second,
+	}).Run(ctx)
+	go (&queue.Claimer{
+		Stream: agentQueue, Jobs: jobs, Stage: store.AgentStage,
+		Fallback: agent.FallbackMessage, MinIdle: 1080 * time.Second,
+	}).Run(ctx)
+	go (&queue.Sweeper{Jobs: jobs, TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue}).Run(ctx)
 
 	go func() {
 		slog.Info("listening", "addr", cfg.Bind)

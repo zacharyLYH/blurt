@@ -6,6 +6,20 @@
 #   make start-no-reset
 #   curl http://localhost:9998/health
 services:
+  redis:
+    image: redis:8.10-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec"]
+    volumes:
+      - blurt-redis:/data
+    networks:
+      - blurt-net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   server:
     build:
       context: ./server
@@ -17,6 +31,9 @@ services:
         required: false
     volumes:
       - blurt-data:/data
+    depends_on:
+      redis:
+        condition: service_healthy
     networks:
       - blurt-net
     restart: unless-stopped
@@ -44,6 +61,7 @@ services:
 
 volumes:
   blurt-data:
+  blurt-redis:
 
 networks:
   blurt-net:

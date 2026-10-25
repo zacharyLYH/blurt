@@ -12,7 +12,7 @@ COMPOSE  ?= docker compose
 # already has one, so the same target works on both.
 XVFB     ?= $(shell command -v xvfb-run >/dev/null 2>&1 && echo xvfb-run -a)
 
-.PHONY: env-init start-no-reset start-reset-full stop logs e2e e2e-real
+.PHONY: env-init start-no-reset start-reset-full stop logs e2e e2e-real test-redis
 
 env-init:
 	cd server && go run ./cmd/envgen
@@ -43,3 +43,11 @@ e2e:
 # outbound network, so it is opt-in and never part of the default gate.
 e2e-real:
 	cd web && $(XVFB) BLURT_E2E_REAL_PUSH=1 npm run test:e2e -- e2e/push.real.spec.ts
+
+# Redis integration tests (server/internal/queue/redis_integration_test.go):
+# a throwaway Redis with AOF, the shape production runs. The tests skip without
+# BLURT_TEST_REDIS_URL, so the default `go test ./...` stays self-contained.
+test-redis:
+	@docker rm -f blurt-test-redis >/dev/null 2>&1 || true
+	docker run --rm -d --name blurt-test-redis -p 6399:6379 redis:8.10-alpine redis-server --appendonly yes --appendfsync everysec >/dev/null
+	@trap 'docker stop blurt-test-redis >/dev/null 2>&1 || true' EXIT; until docker exec blurt-test-redis redis-cli ping >/dev/null 2>&1; do sleep 0.2; done; cd server && BLURT_TEST_REDIS_URL=redis://localhost:6399/0 go test ./internal/queue/ ./internal/flow/ -run Redis -count=1 -v

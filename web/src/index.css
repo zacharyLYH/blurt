@@ -64,3 +64,43 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+/* The voice cue on a Job's thread: a halo that breathes and a mic that nudges
+   upward, both carrying the same "pull me up" invitation. The motion is
+   decoration — the label says what the control does — so it stops entirely for a
+   reader who has asked for less of it. */
+@keyframes voice-cue-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.12;
+    transform: scale(1.22);
+  }
+}
+
+@keyframes voice-cue-nudge {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.voice-cue-pulse {
+  animation: voice-cue-pulse 2.4s ease-in-out infinite;
+}
+
+.voice-cue-nudge {
+  animation: voice-cue-nudge 1.9s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-cue-pulse,
+  .voice-cue-nudge {
+    animation: none;
+  }
+}

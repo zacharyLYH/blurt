@@ -51,13 +51,15 @@ export function Boom({ session, recording, remainingMs, onRecord, onCancel, onSe
             }}
           />
         ))}
-        <button
+        <Button
           type="button"
           data-testid="boom-record"
+          variant="ghost"
+          size="icon"
           disabled={!session}
           onClick={recording ? undefined : onRecord}
           aria-label={recording ? 'Recording' : 'Start recording'}
-          className="relative grid size-24 place-items-center rounded-full bg-gradient-to-br from-[#ffcb6b] to-[#d9861c] text-lg font-semibold text-[#241a08] disabled:opacity-40"
+          className="relative size-24 bg-gradient-to-br from-[#ffcb6b] to-[#d9861c] text-lg font-semibold text-[#241a08] hover:bg-transparent"
         >
           {recording ? (
             <span data-testid="boom-countdown" className="tabular-nums">
@@ -69,7 +71,7 @@ export function Boom({ session, recording, remainingMs, onRecord, onCancel, onSe
               <span className="absolute left-0 top-1.5 h-3.5 w-7 rounded-b-[12px] border-2 border-t-0 border-[#241a08]" />
             </span>
           )}
-        </button>
+        </Button>
       </div>
 
       {recording && (

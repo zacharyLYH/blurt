@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"strconv"
 	"strings"
 	"testing"
@@ -62,82 +61,57 @@ func TestAudioJobStoresClipAndReturnsJob(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", status, body)
 	}
-	var reply struct {
-		Job store.Job `json:"job"`
+	job := decodeJob(t, body)
+	if job.JobID == 0 || job.Status != store.JobOpen {
+		t.Fatalf("unexpected job: %+v", job)
 	}
-	if err := json.Unmarshal(body, &reply); err != nil {
-		t.Fatalf("decode job: %v", err)
+	if len(job.Conversation) != 1 {
+		t.Fatalf("conversation = %+v", job.Conversation)
 	}
-	if reply.Job.JobID == 0 || reply.Job.Status != store.JobQueued {
-		t.Fatalf("unexpected job: %+v", reply.Job)
-	}
-	if len(reply.Job.Conversation) != 1 {
-		t.Fatalf("conversation = %+v", reply.Job.Conversation)
-	}
-	message := reply.Job.Conversation[0]
+	message := job.Conversation[0]
 	if message.Role != "user" || message.Audio == "" || message.Text != "" {
 		t.Fatalf("unexpected message: %+v", message)
 	}
 
 	// Polling is the only way the client sees the transcript arrive.
 	status, body = call(t, client, http.MethodGet,
-		base+"/api/jobs/"+strconv.FormatInt(reply.Job.JobID, 10), nil)
+		base+"/api/jobs/"+strconv.FormatInt(job.JobID, 10), nil)
 	if status != http.StatusOK {
 		t.Fatalf("GET job status = %d: %s", status, body)
 	}
-	var fetched struct {
-		Job store.Job `json:"job"`
-	}
-	if err := json.Unmarshal(body, &fetched); err != nil {
-		t.Fatalf("decode fetched job: %v", err)
-	}
-	if fetched.Job.JobID != reply.Job.JobID {
-		t.Fatalf("fetched job = %+v, want id %d", fetched.Job, reply.Job.JobID)
+	if fetched := decodeJob(t, body); fetched.JobID != job.JobID {
+		t.Fatalf("fetched job = %+v, want id %d", fetched, job.JobID)
 	}
 }
 
-// The recorder is the only writer, so anything that is not a mono 16 kHz WAV is
-// a client bug — or a stale cached client still sending Opus. Rejecting it here
-// is what makes the fallback copy honest.
-func TestAudioJobRejectsWrongFormat(t *testing.T) {
+// The recorder is the only writer: a non-mono 16 kHz WAV, a stale Opus client,
+// or a duration outside the spend guard is a client bug and is refused here.
+func TestAudioJobRejectsBadInput(t *testing.T) {
 	client, base, mailer, _ := newClient(t)
 	login(t, client, base, "lam@example.com", mailer)
 
-	for _, test := range []struct {
+	cases := []struct {
 		name        string
 		contentType string
+		duration    string
 		audio       []byte
+		status      int
+		code        string
 	}{
-		{"stereo wav", "audio/wav", wavBytes(16000, 2)},
-		{"44.1 kHz wav", "audio/wav", wavBytes(44100, 1)},
-		{"mp4 content type", "audio/mp4", wavBytes(16000, 1)},
-		{"stale opus client", "audio/webm", wavBytes(16000, 1)},
-		{"not audio at all", "audio/wav", []byte("not audio")},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			status, body := upload(t, client, base+"/api/jobs", test.contentType, "800", test.audio)
-			if status != http.StatusUnsupportedMediaType || !strings.Contains(string(body), "unsupported_audio") {
-				t.Fatalf("status = %d, body = %s", status, body)
-			}
-		})
+		{"stereo wav", "audio/wav", "800", wavBytes(16000, 2), http.StatusUnsupportedMediaType, "unsupported_audio"},
+		{"44.1 kHz wav", "audio/wav", "800", wavBytes(44100, 1), http.StatusUnsupportedMediaType, "unsupported_audio"},
+		{"mp4 content type", "audio/mp4", "800", wavBytes(16000, 1), http.StatusUnsupportedMediaType, "unsupported_audio"},
+		{"stale opus client", "audio/webm", "800", wavBytes(16000, 1), http.StatusUnsupportedMediaType, "unsupported_audio"},
+		{"not audio at all", "audio/wav", "800", []byte("not audio"), http.StatusUnsupportedMediaType, "unsupported_audio"},
+		{"missing duration", "audio/wav", "", wavBytes(16000, 1), http.StatusBadRequest, "invalid_duration"},
+		{"too short", "audio/wav", "100", wavBytes(16000, 1), http.StatusBadRequest, "invalid_duration"},
+		{"too long", "audio/wav", "180000", wavBytes(16000, 1), http.StatusBadRequest, "invalid_duration"},
+		{"not a number", "audio/wav", "soon", wavBytes(16000, 1), http.StatusBadRequest, "invalid_duration"},
 	}
-}
-
-// The duration header is the spend guard the PRD asks for. It is required
-// because the client always knows the length of its own clip.
-func TestAudioJobRequiresSaneDuration(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
-
-	for _, test := range []struct{ name, duration string }{
-		{"missing", ""},
-		{"too short", "100"},
-		{"too long", "180000"},
-		{"not a number", "soon"},
-	} {
+	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			status, body := upload(t, client, base+"/api/jobs", "audio/wav", test.duration, wavBytes(16000, 1))
-			if status != http.StatusBadRequest || !strings.Contains(string(body), "invalid_duration") {
+			status, body := upload(t, client, base+"/api/jobs", test.contentType, test.duration, test.audio)
+			if status != test.status || !strings.Contains(string(body), test.code) {
 				t.Fatalf("status = %d, body = %s", status, body)
 			}
 		})
@@ -153,13 +127,7 @@ func TestTextJobSkipsTranscription(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("status = %d, want 201: %s", status, body)
 	}
-	var reply struct {
-		Job store.Job `json:"job"`
-	}
-	if err := json.Unmarshal(body, &reply); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-	if message := reply.Job.Conversation[0]; message.Text != "Remind me to buy glue." || message.Audio != "" {
+	if message := decodeJob(t, body).Conversation[0]; message.Text != "Remind me to buy glue." || message.Audio != "" {
 		t.Fatalf("unexpected message: %+v", message)
 	}
 
@@ -176,21 +144,10 @@ func TestJobIsScopedToItsOwner(t *testing.T) {
 	if status != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", status, body)
 	}
-	var reply struct {
-		Job store.Job `json:"job"`
-	}
-	if err := json.Unmarshal(body, &reply); err != nil {
-		t.Fatalf("decode job: %v", err)
-	}
-
-	second, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("cookie jar: %v", err)
-	}
-	other := &http.Client{Jar: second}
-	login(t, other, base, "other@example.com", mailer)
+	job := decodeJob(t, body)
+	other := newUserClient(t, base, "other@example.com", mailer)
 	status, body = call(t, other, http.MethodGet,
-		base+"/api/jobs/"+strconv.FormatInt(reply.Job.JobID, 10), nil)
+		base+"/api/jobs/"+strconv.FormatInt(job.JobID, 10), nil)
 	if status != http.StatusNotFound {
 		t.Fatalf("foreign job status = %d, want 404: %s", status, body)
 	}
@@ -227,7 +184,7 @@ func TestListOpenJobsNewestFirst(t *testing.T) {
 	if reply.Jobs[0].Preview != "Book the flight." || reply.Jobs[1].Preview != "Buy glue." {
 		t.Fatalf("previews = %q, %q", reply.Jobs[0].Preview, reply.Jobs[1].Preview)
 	}
-	if reply.Jobs[0].Status != store.JobQueued || reply.Jobs[0].CreatedAt == "" {
+	if reply.Jobs[0].Status != store.JobOpen || reply.Jobs[0].CreatedAt == "" {
 		t.Fatalf("row = %+v", reply.Jobs[0])
 	}
 }
@@ -267,12 +224,7 @@ func TestListOpenJobsIsEmptyAndScoped(t *testing.T) {
 		t.Fatalf("create status = %d: %s", status, body)
 	}
 
-	second, err := cookiejar.New(nil)
-	if err != nil {
-		t.Fatalf("cookie jar: %v", err)
-	}
-	other := &http.Client{Jar: second}
-	login(t, other, base, "other@example.com", mailer)
+	other := newUserClient(t, base, "other@example.com", mailer)
 	status, body := call(t, other, http.MethodGet, base+"/api/jobs", nil)
 	if status != http.StatusOK {
 		t.Fatalf("list status = %d: %s", status, body)

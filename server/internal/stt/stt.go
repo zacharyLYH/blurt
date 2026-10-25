@@ -21,6 +21,18 @@ import (
 	"blurt/internal/config"
 )
 
+// audioPrefix declares the payload as a WAV data URI. Blurt only ever captures
+// WAV, so it is a constant rather than a parameter.
+const audioPrefix = "data:audio/wav;base64,"
+
+// FakeOK is the mode the server boots with when BLURT_FAKE_STT is on: every
+// clip comes back as FakeTranscript. The other modes exist for the worker's
+// retry and fallback tests.
+const FakeOK = "ok"
+
+// FakeTranscript is deterministic so e2e can assert on what the Job stores.
+const FakeTranscript = "Remind me to buy glue on the way home."
+
 // Transcriber is one transcription attempt. A blank result with no error means
 // the clip was not legible, which is permanent rather than retryable.
 type Transcriber interface {
@@ -34,16 +46,6 @@ type Error struct {
 	Message string
 }
 
-func (e *Error) Error() string {
-	return fmt.Sprintf("stt: %d %s", e.Status, e.Message)
-}
-
-// Retryable is false for a 4xx that a retry cannot fix (bad key, bad clip).
-func (e *Error) Retryable() bool {
-	return e.Status == http.StatusRequestTimeout || e.Status == http.StatusTooManyRequests ||
-		e.Status >= http.StatusInternalServerError
-}
-
 // HTTP calls phonon. The route is the gateway's own /v1/infer; it takes a
 // base64 WAV data URI and answers {"output": {"text": "..."}}.
 type HTTP struct {
@@ -53,20 +55,13 @@ type HTTP struct {
 	client *http.Client
 }
 
-// audioPrefix declares the payload as a WAV data URI. Blurt only ever captures
-// WAV, so it is a constant rather than a parameter.
-const audioPrefix = "data:audio/wav;base64,"
-
-func NewHTTP(cfg config.STT) *HTTP {
-	return &HTTP{
-		url:    cfg.URL,
-		apiKey: cfg.APIKey,
-		model:  cfg.Model,
-		// The gateway decodes a one-minute clip in seconds, but the host is
-		// shared and measured at 30s under load, so this is deliberately
-		// generous; the worker's attempt timeout sits just above it.
-		client: &http.Client{Timeout: 120 * time.Second},
-	}
+// Fake is the dev transcriber (BLURT_FAKE_STT). Modes inject the failures the
+// worker must survive: error is transient, illegible is a blank transcript,
+// flaky fails once then succeeds.
+type Fake struct {
+	mode  string
+	mu    sync.Mutex
+	calls int
 }
 
 // inferRequest is the gateway's body: model plus a payload object.
@@ -85,6 +80,26 @@ type inferReply struct {
 	} `json:"output"`
 }
 
+func (e *Error) Error() string {
+	return fmt.Sprintf("stt: %d %s", e.Status, e.Message)
+}
+
+// Retryable is false for a 4xx that a retry cannot fix (bad key, bad clip).
+func (e *Error) Retryable() bool {
+	return e.Status == http.StatusRequestTimeout || e.Status == http.StatusTooManyRequests ||
+		e.Status >= http.StatusInternalServerError
+}
+func NewHTTP(cfg config.STT) *HTTP {
+	return &HTTP{
+		url:    cfg.URL,
+		apiKey: cfg.APIKey,
+		model:  cfg.Model,
+		// The gateway decodes a one-minute clip in seconds, but the host is
+		// shared and measured at 30s under load, so this is deliberately
+		// generous; the worker's attempt timeout sits just above it.
+		client: &http.Client{Timeout: 120 * time.Second},
+	}
+}
 func (t *HTTP) Transcribe(ctx context.Context, audio io.Reader) (string, error) {
 	raw, err := io.ReadAll(audio)
 	if err != nil {
@@ -140,28 +155,9 @@ func refusal(res *http.Response) *Error {
 	}
 	return &Error{Status: res.StatusCode, Message: message}
 }
-
-// Fake is the dev transcriber (BLURT_FAKE_STT). Modes inject the failures the
-// worker must survive: error is transient, illegible is a blank transcript,
-// flaky fails once then succeeds.
-type Fake struct {
-	mode  string
-	mu    sync.Mutex
-	calls int
-}
-
 func NewFake(mode string) *Fake {
 	return &Fake{mode: mode}
 }
-
-// FakeOK is the mode the server boots with when BLURT_FAKE_STT is on: every
-// clip comes back as FakeTranscript. The other modes exist for the worker's
-// retry and fallback tests.
-const FakeOK = "ok"
-
-// FakeTranscript is deterministic so e2e can assert on what the Job stores.
-const FakeTranscript = "Remind me to buy glue on the way home."
-
 func (f *Fake) Transcribe(_ context.Context, audio io.Reader) (string, error) {
 	_, _ = io.Copy(io.Discard, audio)
 	f.mu.Lock()

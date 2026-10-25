@@ -28,6 +28,10 @@ const (
 	vapidPublicKeyLen = 65
 	// vapidPrivateKeyLen is a P-256 scalar.
 	vapidPrivateKeyLen = 32
+	// DefaultMaxTurns is the AgentLoop's starting budget from the PRD, tuned
+	// from Trace data later. It is exported so a loop built without one still
+	// shares this single source.
+	DefaultMaxTurns = 5
 )
 
 // SMTP describes the outbound mailbox that sends login PINs.
@@ -64,8 +68,17 @@ type Decision struct {
 	Model  string
 }
 
-// fakeSTTModes are the dev failure-injection modes. They mirror BLURT_FAKE_PIN:
-// useful locally and in e2e, fatal on a public host.
+// Agent is the model Blurt asks to turn a capture into records. The gateway's
+// /v1/infer serves many chat models, so unlike phonon and laya the model id has
+// no default and must be named. MaxTurns is the AgentLoop's per-Job budget from
+// the PRD.
+type Agent struct {
+	URL      string
+	APIKey   string
+	Model    string
+	MaxTurns int
+}
+
 // fakeSTTModes are the dev failure-injection modes. They mirror BLURT_FAKE_PIN:
 // useful locally and in e2e, fatal on a public host.
 var fakeSTTModes = map[string]bool{"ok": true, "error": true, "illegible": true, "flaky": true}
@@ -73,6 +86,7 @@ var fakeSTTModes = map[string]bool{"ok": true, "error": true, "illegible": true,
 // Config is the fully resolved runtime configuration.
 type Config struct {
 	DataDir       string   // SQLite lives here; mounted as a docker volume
+	RedisURL      string   // Redis Streams URL
 	Bind          string   // listen address, e.g. :8080
 	PublicOrigins []string // allowed browser origins: public host plus localhost
 	SessionSecret string
@@ -91,6 +105,13 @@ type Config struct {
 	// Decision is the typed-decision gateway. An empty URL turns the gate off
 	// rather than failing boot: it is an advisory filter, not a hard dependency.
 	Decision Decision
+	// FakeAgent is dev only: a scripted model stands in so the AgentLoop can be
+	// exercised without the gateway. Never set it on a public host.
+	FakeAgent bool
+	// Agent is the model. Unlike the gate it is not advisory — a capture with no
+	// model never becomes a record — so a URL and a model are required unless the
+	// fake is on.
+	Agent Agent
 }
 
 // Load reads the environment and returns every problem it finds at once.
@@ -107,6 +128,7 @@ func Load() (*Config, error) {
 
 	cfg := &Config{
 		DataDir:       req("BLURT_DATA_DIR"),
+		RedisURL:      req("BLURT_REDIS_URL"),
 		Bind:          req("BLURT_BIND"),
 		SessionSecret: req("BLURT_SESSION_SECRET"),
 	}
@@ -185,6 +207,41 @@ func Load() (*Config, error) {
 	if cfg.Decision.URL != "" {
 		if err := checkHTTPURL(cfg.Decision.URL); err != nil {
 			problems = append(problems, "BLURT_DECISION_URL "+err.Error())
+		}
+	}
+
+	// The model rides the same gateway. It is not advisory: with no URL the
+	// capture path would accept Jobs it can never resolve, so this one is
+	// required unless the fake is on.
+	cfg.FakeAgent = envBool(&problems, "BLURT_FAKE_AGENT")
+	cfg.Agent = Agent{
+		URL:      opt("BLURT_AGENT_URL"),
+		APIKey:   opt("BLURT_AGENT_API_KEY"),
+		Model:    opt("BLURT_AGENT_MODEL"),
+		MaxTurns: DefaultMaxTurns,
+	}
+	if cfg.Agent.URL == "" {
+		cfg.Agent.URL = cfg.STT.URL
+	}
+	if cfg.Agent.APIKey == "" {
+		cfg.Agent.APIKey = cfg.STT.APIKey
+	}
+	if cfg.Agent.URL == "" {
+		if !cfg.FakeAgent {
+			problems = append(problems, "BLURT_AGENT_URL is required unless BLURT_FAKE_AGENT is true")
+		}
+	} else if err := checkHTTPURL(cfg.Agent.URL); err != nil {
+		problems = append(problems, "BLURT_AGENT_URL "+err.Error())
+	}
+	if cfg.Agent.Model == "" && !cfg.FakeAgent {
+		problems = append(problems, "BLURT_AGENT_MODEL is required unless BLURT_FAKE_AGENT is true")
+	}
+	if raw := opt("BLURT_AGENT_MAX_TURNS"); raw != "" {
+		turns, err := strconv.Atoi(raw)
+		if err != nil || turns < 1 {
+			problems = append(problems, "BLURT_AGENT_MAX_TURNS must be a positive integer")
+		} else {
+			cfg.Agent.MaxTurns = turns
 		}
 	}
 

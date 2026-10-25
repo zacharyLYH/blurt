@@ -9,11 +9,23 @@ interface ComposerProps {
   // focus moves the caret here, which is where cancelling a capture lands.
   focus: boolean
   onSend: (text: string) => Promise<boolean>
+  // Home renders the capture composer and a reply composer in the same view, so
+  // both the test handles and the placeholder have to be the caller's.
+  textTestId?: string
+  sendTestId?: string
+  placeholder?: string
 }
 
 // TextComposer is the typed half of the one ingress, and the fallback whenever
 // the microphone is unusable.
-export function TextComposer({ disabled, focus, onSend }: ComposerProps) {
+export function TextComposer({
+  disabled,
+  focus,
+  onSend,
+  textTestId = 'capture-text',
+  sendTestId = 'send-text',
+  placeholder = 'Or type it…',
+}: ComposerProps) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const ref = useRef<HTMLTextAreaElement | null>(null)
@@ -37,15 +49,15 @@ export function TextComposer({ disabled, focus, onSend }: ComposerProps) {
       <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3">
         <Textarea
           ref={ref}
-          data-testid="capture-text"
+          data-testid={textTestId}
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder={disabled ? 'Finish the clip first…' : 'Or type it…'}
+          placeholder={disabled ? 'Finish the clip first…' : placeholder}
           rows={2}
           aria-label="Blurt text input"
         />
         <div className="flex justify-end">
-          <Button type="submit" data-testid="send-text" disabled={disabled || busy || !text.trim()}>
+          <Button type="submit" data-testid={sendTestId} disabled={disabled || busy || !text.trim()}>
             {busy ? 'Sending…' : 'Send'}
           </Button>
         </div>
