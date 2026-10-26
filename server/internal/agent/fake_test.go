@@ -30,7 +30,7 @@ func TestFakeProposeReachesEachBranchByItsWords(t *testing.T) {
 		{"a fact", "remember milk is cheaper at store a", 1, KindMemory, "remember milk is cheaper at store a", "", ""},
 		{"a pattern it cannot read", "clear the gutters every tuesday at 6pm", 0, "", "", "", ""},
 		{"no clock", "buy glue when I'm home", 0, "", "", "", ""},
-		{"two clocks", "dentist at 5pm and trash at 9pm", 0, "", "", "", ""},
+		{"two events", "dentist at 5pm and trash at 9pm", 0, "", "", "", ""},
 	}
 	for _, want := range cases {
 		t.Run(want.name, func(t *testing.T) {
@@ -62,6 +62,45 @@ func TestFakeProposeReachesEachBranchByItsWords(t *testing.T) {
 			// neither, because a Memory is text and nothing else.
 			if write.Kind == KindReminder && (write.Zone != "Asia/Singapore" || write.Time != FakeTime) {
 				t.Fatalf("write = %+v, want the anchor zone and the fake clock", write)
+			}
+		})
+	}
+}
+
+// A capture can name the notification clock and the event's own clock separately. The
+// fake reads the "remind me" clock as the notification time and keeps the other clock
+// in the event text, the same split the prompt asks the real model for.
+func TestFakeSplitsNotifyAndEventClocks(t *testing.T) {
+	cases := []struct {
+		name    string
+		capture string
+		text    string
+		date    string
+		clock   string
+	}{
+		{"notify first", "remind me at 5pm for dinner at 8pm tomorrow", "dinner at 8pm", "2026-10-25", "17:00"},
+		{"event first", "dinner at 8pm tomorrow, remind me at 5pm", "dinner at 8pm", "2026-10-25", "17:00"},
+		{"soon notify", "dinner at 8pm remind me soon", "dinner at 8pm", "2026-10-24", "18:31"},
+	}
+	for _, want := range cases {
+		t.Run(want.name, func(t *testing.T) {
+			turn, err := Fake{}.Propose(context.Background(), Input{
+				Conversation: []store.Message{{Role: "user", Text: want.capture}},
+				CurrentTZ:    "Asia/Singapore", Now: pinned,
+			})
+			if err != nil {
+				t.Fatalf("propose: %v", err)
+			}
+			if len(turn.Writes) != 1 {
+				t.Fatalf("writes = %+v, want one reminder", turn.Writes)
+			}
+			write := turn.Writes[0]
+			if write.Kind != KindReminder || write.Text != want.text ||
+				write.Date != want.date || write.Time != want.clock {
+				t.Fatalf("write = %+v, want %q %q %q", write, want.text, want.date, want.clock)
+			}
+			if missing := MissingFields(write, pinned); len(missing) != 0 {
+				t.Fatalf("missing = %v, want a write the server can commit", missing)
 			}
 		})
 	}

@@ -10,9 +10,10 @@ import { withRelay } from './relay'
 // the host — where it is decrypted with the device's own key, so these are the words the
 // user would read.
 //
-// The stack runs with BLURT_FAKE_CLOCK=90s (docker-compose.e2e.yml), so the emitter's clock
-// is a minute and a half ahead: a reminder the fake resolves to the minute ahead ("soon") is
-// already due when the sweep looks, and a spec does not wait out a real minute.
+// The stack runs with BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT=90s (docker-compose.e2e.yml), so
+// the emitter's clock is a minute and a half ahead: a reminder the fake resolves to the
+// minute ahead ("soon") is already due when the sweep looks, and a spec does not wait out a
+// real minute.
 
 test('a capture becomes a real push through the emitter', async ({ request }) => {
   test.setTimeout(ciTimeout(90_000))

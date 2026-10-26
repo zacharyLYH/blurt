@@ -26,8 +26,9 @@ func gatewayAnswer(t *testing.T, finish, content string) []byte {
 }
 
 // TestGatewayProposeSendsTheStructuredSchema is the transport contract: chat messages
-// plus a JSON schema rather than OpenAI tool calling, the two resolved fields pinned by
-// a pattern, recurrence an enum, and the capture last in the prompt.
+// plus a JSON schema rather than OpenAI tool calling, the clock pinned by a pattern,
+// recurrence an enum, and the capture last in the prompt. The day rides in as a token
+// the server resolves, so the answer below is a phrase and the write is a date.
 func TestGatewayProposeSendsTheStructuredSchema(t *testing.T) {
 	var got inferRequest
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +38,7 @@ func TestGatewayProposeSendsTheStructuredSchema(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		answer := `{"text":"Call mum","zone":"Asia/Singapore","date":"2026-10-25",` +
+		answer := `{"text":"Call mum","zone":"Asia/Singapore","day":"tomorrow",` +
 			`"time":"19:00","recurrence":"none","evidence":"they said tomorrow at 7pm"}`
 		_, _ = w.Write(gatewayAnswer(t, "stop", answer))
 	}))
@@ -109,38 +110,47 @@ func TestGatewayProposeSendsTheStructuredSchema(t *testing.T) {
 // turnOf is the whole shape decision: which fields the model filled is what the server
 // commits. An empty event and an empty fact propose nothing at all, and an unanswered
 // pattern reads as a one-off, because a model told to fill a declared field sometimes
-// fills nothing.
+// fills nothing. The day is the one field the server reads rather than copies, so a
+// token outside its vocabulary leaves the date empty for the question to pick up.
 func TestTurnOf(t *testing.T) {
 	cases := []struct {
 		name   string
 		parsed records
 		want   []Write
 	}{
-		{"a resolved reminder", records{Text: " Call mum ", Zone: " Asia/Singapore ", Date: "2026-10-25",
+		{"a resolved reminder", records{Text: " Call mum ", Zone: " Asia/Singapore ", Day: "tomorrow",
 			Time: "19:00", Recurrence: "none", Evidence: " they said 7pm "},
 			[]Write{{Kind: KindReminder, Text: "Call mum", Zone: "Asia/Singapore", Date: "2026-10-25",
 				Time: "19:00", Recurrence: RecurrenceNone, Evidence: "they said 7pm"}}},
-		{"a repeat", records{Text: "Trash", Zone: "Asia/Singapore", Date: "2026-10-27",
+		{"a repeat", records{Text: "Trash", Zone: "Asia/Singapore", Day: "this:tuesday",
 			Time: "19:00", Recurrence: "weekly"},
 			[]Write{{Kind: KindReminder, Text: "Trash", Zone: "Asia/Singapore", Date: "2026-10-27",
 				Time: "19:00", Recurrence: store.FrequencyWeekly}}},
+		{"a day count", records{Text: "Renew the pass", Zone: "Asia/Singapore", Day: "in:13d",
+			Time: "09:00", Recurrence: "none"},
+			[]Write{{Kind: KindReminder, Text: "Renew the pass", Zone: "Asia/Singapore",
+				Date: "2026-11-06", Time: "09:00", Recurrence: RecurrenceNone}}},
 		{"an unanswered pattern", records{Text: "Buy glue"},
 			[]Write{{Kind: KindReminder, Text: "Buy glue", Recurrence: RecurrenceNone}}},
+		{"a token the server cannot read", records{Text: "Buy glue", Zone: "Asia/Singapore",
+			Day: "when I'm home", Time: "18:00", Recurrence: "none"},
+			[]Write{{Kind: KindReminder, Text: "Buy glue", Zone: "Asia/Singapore",
+				Time: "18:00", Recurrence: RecurrenceNone}}},
 		{"a fact alone", records{MemoryText: " Milk is cheaper at store A "},
 			[]Write{{Kind: KindMemory, Text: "Milk is cheaper at store A"}}},
 		{"an event and a fact", records{Text: "Lunch at Ikea", MemoryText: "I have an Ikea voucher",
-			Zone: "Asia/Singapore", Date: "2026-10-30", Time: "13:00", Recurrence: "none"},
+			Zone: "Asia/Singapore", Day: "this:friday", Time: "13:00", Recurrence: "none"},
 			[]Write{
 				{Kind: KindReminder, Text: "Lunch at Ikea", Zone: "Asia/Singapore", Date: "2026-10-30",
 					Time: "13:00", Recurrence: RecurrenceNone},
 				{Kind: KindMemory, Text: "I have an Ikea voucher"},
 			}},
-		{"no event, no record", records{Text: "", Zone: "Asia/Singapore", Date: "2026-10-25"}, nil},
+		{"no event, no record", records{Text: "", Zone: "Asia/Singapore", Day: "tomorrow"}, nil},
 		{"blanks read as nothing", records{Text: "   ", MemoryText: "  "}, nil},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			turn := turnOf(test.parsed)
+			turn := turnOf(test.parsed, pinned)
 			if len(turn.Writes) != len(test.want) || (len(test.want) > 0 && !reflect.DeepEqual(turn.Writes, test.want)) {
 				t.Fatalf("writes = %+v, want %+v", turn.Writes, test.want)
 			}

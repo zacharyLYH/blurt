@@ -99,6 +99,49 @@ func TestNamesClock(t *testing.T) {
 	}
 }
 
+// TestResolveDay is the token vocabulary read as a calendar. A user can name any
+// offset — "in 13 days", "next next tuesday" — so no list of day words could exhaust
+// the year; the token carries the shape and the arithmetic happens here. Everything
+// outside the vocabulary is refused, which is what leaves the date empty and the Job
+// asking the user rather than firing on a day nobody said.
+func TestResolveDay(t *testing.T) {
+	cases := []struct{ name, in, want string }{
+		{"today", "today", "2026-10-24"},
+		{"tonight", "tonight", "2026-10-24"},
+		{"tomorrow", "tomorrow", "2026-10-25"},
+		{"a day count", "in:13d", "2026-11-06"},
+		{"a count of one day", "in:1d", "2026-10-25"},
+		{"a weekday still to come this week", "this:monday", "2026-10-26"},
+		{"this weekday", "this:friday", "2026-10-30"},
+		{"next weekday", "next:friday", "2026-10-30"},
+		{"a repeated next", "next:2:tuesday", "2026-11-03"},
+		{"three nexts", "next:3:tuesday", "2026-11-10"},
+		{"a month and day still to come", "on:12-01", "2026-12-01"},
+		{"a month and day that has gone", "on:03-15", "2027-03-15"},
+		{"nothing", "", ""},
+		{"prose", "when I'm home", ""},
+		{"a day the month does not have", "on:02-30", ""},
+		{"a weekday that is not one", "this:october", ""},
+		{"a count with no number", "in:d", ""},
+		{"a count of no weeks", "next:0:friday", ""},
+		{"a date where a token goes", "2026-10-25", ""},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			at, ok := resolveDay(test.in, pinned)
+			if test.want == "" {
+				if ok {
+					t.Fatalf("resolveDay(%q) = %s, want a question", test.in, at)
+				}
+				return
+			}
+			if !ok || at.Format("2006-01-02") != test.want {
+				t.Fatalf("resolveDay(%q) = %s %v, want %s", test.in, at, ok, test.want)
+			}
+		})
+	}
+}
+
 // formatClock is the canonical clock a rule stores, so the tests assert the string
 // a RecurringReminder would carry rather than a pair of numbers.
 func formatClock(hour, minute int) string {

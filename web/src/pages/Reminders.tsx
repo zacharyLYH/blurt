@@ -103,8 +103,8 @@ function ReminderList({ title, testId, empty, reminders, busy, onCancel }: {
                 </ItemTitle>
                 <ItemDescription data-testid="reminder-when">
                   {reminder.rule
-                    ? `${cadence(reminder.rule)} · ${timeIn(reminder.nextEmitAtUtc, reminder.timezone)}`
-                    : timeIn(reminder.emitAtUtc, reminder.timezone)}
+                    ? `${cadence(reminder.rule)} · Rings ${timeIn(reminder.nextEmitAtUtc, reminder.timezone)}`
+                    : `Rings ${timeIn(reminder.emitAtUtc, reminder.timezone)}`}
                 </ItemDescription>
               </ItemContent>
               <ItemActions>

@@ -88,9 +88,9 @@ func TestPipelineVoiceReplyAfterClarificationCommits(t *testing.T) {
 // whole conversation, with the capture last. This is the PRD's litmus test 2.
 func TestPipelinePromptCarriesZoneReferenceAndReply(t *testing.T) {
 	server, script := newGatewayScript(t,
-		`{"text":"fetch kids from school","zone":"Asia/Singapore","date":"2026-10-25","time":"17:00","recurrence":"none","evidence":"the user said \"tomorrow at 5pm\""}`,
-		`{"text":"","zone":"","date":"","time":"","recurrence":"none","evidence":""}`,
-		`{"text":"buy glue","zone":"Asia/Tokyo","date":"2026-10-25","time":"18:00","recurrence":"none","evidence":"the user said \"tomorrow at 6pm\""}`,
+		`{"text":"fetch kids from school","zone":"Asia/Singapore","day":"tomorrow","time":"17:00","recurrence":"none","evidence":"the user said \"tomorrow at 5pm\""}`,
+		`{"text":"","zone":"","day":"","time":"","recurrence":"none","evidence":""}`,
+		`{"text":"buy glue","zone":"Asia/Tokyo","day":"tomorrow","time":"18:00","recurrence":"none","evidence":"the user said \"tomorrow at 6pm\""}`,
 	)
 	p := newPump(t)
 	p.agentWorker.Loop.Model = agent.NewGateway(config.Agent{URL: server.URL, Model: "local-model"})
@@ -302,10 +302,10 @@ func TestPipelineTagsMakeAMemoryFindableByOtherWording(t *testing.T) {
 // the user reads one sentence rather than two.
 func TestPipelineOneCaptureCommitsBothKinds(t *testing.T) {
 	server, script := newGatewayScript(t,
-		`{"text":"Lunch at Ikea","memoryText":"I have an Ikea voucher to use by December","zone":"Asia/Singapore","date":"2026-10-30","time":"13:00","recurrence":"none","evidence":"the user said \"this Friday at 1pm\""}`,
+		`{"text":"Lunch at Ikea","memoryText":"I have an Ikea voucher to use by December","zone":"Asia/Singapore","day":"this:friday","time":"13:00","recurrence":"none","evidence":"the user said \"this Friday at 1pm\""}`,
 	)
 	// The tagger's answer as the gateway would give it: normalized on the way to the row.
-	script.tags = "Voucher, ikea, expiry, voucher"
+	script.tags = "Voucher, ikea, redeem, voucher"
 	p := newPump(t)
 	p.agentWorker.Loop.Model = agent.NewGateway(config.Agent{URL: server.URL, Model: "local-model"})
 	p.start()
@@ -324,7 +324,7 @@ func TestPipelineOneCaptureCommitsBothKinds(t *testing.T) {
 	}
 	// The features land behind the commit, so the flow waits for the write it is asserting.
 	const fact = "I have an Ikea voucher to use by December"
-	if tags := p.tagged(t, fact); tags != "voucher,ikea,expiry" {
+	if tags := p.tagged(t, fact); tags != "voucher,ikea,redeem" {
 		t.Fatalf("tags = %q, want the features the tagger answered", tags)
 	}
 	var source int64
@@ -359,8 +359,8 @@ func TestPipelineOneCaptureCommitsBothKinds(t *testing.T) {
 // first occurrence the model resolved. Two patterns, two ingresses, both record tables.
 func TestPipelineRecurringCaptureCommitsARule(t *testing.T) {
 	server, script := newGatewayScript(t,
-		`{"text":"Take pills","memoryText":"","zone":"Asia/Singapore","date":"2026-11-05","time":"09:00","recurrence":"monthly","evidence":"the user said \"every month on the 5th at 9am\""}`,
-		`{"text":"Renew passport","memoryText":"","zone":"Asia/Singapore","date":"2027-03-03","time":"08:00","recurrence":"yearly","evidence":"the user said \"every year on March 3rd at 8am\""}`,
+		`{"text":"Take pills","memoryText":"","zone":"Asia/Singapore","day":"on:11-05","time":"09:00","recurrence":"monthly","evidence":"the user said \"every month on the 5th at 9am\""}`,
+		`{"text":"Renew passport","memoryText":"","zone":"Asia/Singapore","day":"on:03-03","time":"08:00","recurrence":"yearly","evidence":"the user said \"every year on March 3rd at 8am\""}`,
 	)
 	p := newPump(t)
 	p.agentWorker.Loop.Model = agent.NewGateway(config.Agent{URL: server.URL, Model: "local-model"})
@@ -422,7 +422,7 @@ func TestPipelineRecurringCaptureCommitsARule(t *testing.T) {
 // user still owes instead of inferring it from the capture's own words.
 func TestPipelineQuestionRequestNamesTheMissingFields(t *testing.T) {
 	server, script := newGatewayScript(t,
-		`{"text":"Buy glue","memoryText":"","zone":"Asia/Singapore","date":"2026-10-25","time":"","recurrence":"none","evidence":"the user said \"when I'm home\""}`,
+		`{"text":"Buy glue","memoryText":"","zone":"Asia/Singapore","day":"tomorrow","time":"","recurrence":"none","evidence":"the user said \"when I'm home\""}`,
 	)
 	p := newPump(t)
 	p.agentWorker.Loop.Model = agent.NewGateway(config.Agent{URL: server.URL, Model: "local-model"})
@@ -460,7 +460,7 @@ func TestPipelineQuestionRequestNamesTheMissingFields(t *testing.T) {
 func TestPipelineThirdClarificationFallsBackWithoutACall(t *testing.T) {
 	server, script := newGatewayScript(t,
 		`{}`, `{}`, `{}`,
-		`{"text":"Buy glue","memoryText":"","zone":"Asia/Singapore","date":"2026-10-25","time":"18:00","recurrence":"none","evidence":"the user said \"tomorrow at 6pm\""}`,
+		`{"text":"Buy glue","memoryText":"","zone":"Asia/Singapore","day":"tomorrow","time":"18:00","recurrence":"none","evidence":"the user said \"tomorrow at 6pm\""}`,
 	)
 	p := newPump(t)
 	p.agentWorker.Loop.Model = agent.NewGateway(config.Agent{URL: server.URL, Model: "local-model"})

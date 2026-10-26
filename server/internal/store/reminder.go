@@ -45,9 +45,10 @@ type Rule struct {
 }
 
 // Reminder is one thing to interrupt the user about. Timezone and LocalDateTime
-// are the human truth the model supplied; EmitAtUtc is derived from them by
-// the server and is rebuildable, which is why the UTC column is never the
-// source. A recurring Reminder's LocalDateTime is empty and its Rule lives in
+// are the local notification time the model supplied; EmitAtUtc is the same
+// instant in UTC, derived by the server and rebuildable, which is why the UTC
+// column is never the source. The event's own clock, when it differs, lives in
+// Text. A recurring Reminder's LocalDateTime is empty and its Rule lives in
 // RecurringReminder; the stab has neither.
 type Reminder struct {
 	ReminderID    int64  `json:"reminderId"`

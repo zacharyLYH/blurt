@@ -2,7 +2,9 @@ package agent
 
 import (
 	"context"
+	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -34,6 +36,11 @@ const (
 // letters — "buy glue soonest" — is not read as one.
 var fakeSoonRe = regexp.MustCompile(`(?i)\bsoon\b`)
 
+// fakeNotifyRe is the clause that names when to be notified: "remind me at 6pm"
+// or "remind me soon". It is what tells a capture that names two clocks which one is
+// the notification time; the other clock belongs to the event and rides in text.
+var fakeNotifyRe = regexp.MustCompile(`(?i)\bremind me (?:at )?(soon|[0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)|[0-9]{1,2}:[0-9]{2})\b`)
+
 // Propose is deliberately blunt and keyword-driven, so a spec can reach each branch
 // on purpose. The real model reads the same outcomes out of one schema.
 func (Fake) Propose(_ context.Context, in Input) (Turn, error) {
@@ -41,6 +48,10 @@ func (Fake) Propose(_ context.Context, in Input) (Turn, error) {
 	if strings.Contains(capture, FakeMemoryWord) {
 		// A fact is context rather than an interruption, so it carries no clock.
 		return Turn{Writes: []Write{{Kind: KindMemory, Text: lastText(in)}}}, nil
+	}
+	if write, ok := fakeNotifyAndEvent(in, capture); ok {
+		// The capture names both clocks: the notification time and the event's own.
+		return Turn{Writes: []Write{write}}, nil
 	}
 	if fakeSoonRe.MatchString(capture) && !namesClock(capture) {
 		// The minute ahead, in the zone the device named: a clock the fake can place
@@ -100,6 +111,92 @@ func (Fake) Propose(_ context.Context, in Input) (Turn, error) {
 		Date: day, Time: FakeTime,
 		Recurrence: recurrence, Evidence: "the user said " + capture,
 	}}}, nil
+}
+
+// fakeNotifyAndEvent splits a capture that names both a notification time and an
+// event time, the way the prompt does: time is when Blurt rings, and the event's own
+// clock stays in text ("Dinner at 8pm"). A capture with two clocks but no notification
+// clause is two events rather than this shape, so it is left to the ordinary ask.
+func fakeNotifyAndEvent(in Input, capture string) (Write, bool) {
+	match := fakeNotifyRe.FindStringSubmatch(capture)
+	if match == nil {
+		return Write{}, false
+	}
+	event := fakeNotifyRe.ReplaceAllString(lastText(in), "")
+	if !namesClock(event) {
+		return Write{}, false
+	}
+
+	loc := time.UTC
+	if loaded, err := time.LoadLocation(in.CurrentTZ); err == nil {
+		loc = loaded
+	}
+	now := in.Now.In(loc)
+	date, clock := now, match[1]
+	if clock == "soon" {
+		at := now.Add(time.Minute)
+		date, clock = at, at.Format("15:04")
+	} else {
+		hour, minute, ok := fakeClock(clock)
+		if !ok {
+			return Write{}, false
+		}
+		clock = fmt.Sprintf("%02d:%02d", hour, minute)
+		if strings.Contains(capture, "tomorrow") {
+			date = date.AddDate(0, 0, 1)
+		}
+	}
+
+	recurrence, _ := fakeRecurrence(capture)
+	if recurrence == "" {
+		recurrence = RecurrenceNone
+	}
+	day := date.Format("2006-01-02")
+	if recurrence == store.FrequencyDaily {
+		// A daily rule is its clock and nothing else, so the fake leaves the day empty.
+		day = ""
+	}
+	text := eventOfKeepingClock(event)
+	if text == "" {
+		return Write{}, false
+	}
+	return Write{
+		Kind: KindReminder, Text: text, Zone: in.CurrentTZ,
+		Date: day, Time: clock, Recurrence: recurrence,
+		Evidence: "the user said " + capture,
+	}, true
+}
+
+// fakeClock reads the notification clock the fake's own regex found as HH:MM.
+func fakeClock(raw string) (int, int, bool) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if m := clock24Re.FindStringSubmatch(raw); m != nil {
+		hour, _ := strconv.Atoi(m[1])
+		minute, _ := strconv.Atoi(m[2])
+		if hour > 23 || minute > 59 {
+			return 0, 0, false
+		}
+		return hour, minute, true
+	}
+	m := clockRe.FindStringSubmatch(raw)
+	if m == nil {
+		return 0, 0, false
+	}
+	hour, _ := strconv.Atoi(m[1])
+	minute := 0
+	if m[2] != "" {
+		minute, _ = strconv.Atoi(m[2])
+	}
+	if hour < 1 || hour > 12 || minute > 59 {
+		return 0, 0, false
+	}
+	if m[3] == "pm" && hour != 12 {
+		hour += 12
+	}
+	if m[3] == "am" && hour == 12 {
+		hour = 0
+	}
+	return hour, minute, true
 }
 
 // fakeRecurrence reads how often a capture repeats off its own word, the way the rest of the
@@ -180,17 +277,35 @@ var eventFiller = map[string]bool{
 }
 
 // eventOf is the capture with its clock and date words taken out, and any dangling
-// filler trimmed. The prompt asks for the event with no time words, and the lints
-// hold the scripted model to the same contract as the real one, so a capture "buy
-// glue at 6pm tomorrow" commits as "buy glue" rather than "buy glue at tomorrow".
+// filler trimmed. The prompt asks for the event with no time words when the notify
+// time is the event time, and the lints hold the scripted model to the same contract
+// as the real one, so a capture "buy glue at 6pm tomorrow" commits as "buy glue"
+// rather than "buy glue at tomorrow".
 func eventOf(capture string) string {
 	stripped := clock24Re.ReplaceAllString(clockRe.ReplaceAllString(capture, ""), "")
-	stripped = timeWordRe.ReplaceAllString(stripped, "")
+	return eventOfKeepingClock(stripped)
+}
+
+// eventOfKeepingClock is the capture with its date words taken out and any dangling
+// filler trimmed, but its clock left in: when the notification time differs, the
+// event's own clock is what tells the user what the reminder is for.
+func eventOfKeepingClock(capture string) string {
+	stripped := timeWordRe.ReplaceAllString(capture, "")
 	words := strings.Fields(stripped)
-	for len(words) > 0 && eventFiller[strings.ToLower(strings.Trim(words[len(words)-1], ",."))] {
+	for len(words) > 0 && !eventWord(words[len(words)-1]) {
 		words = words[:len(words)-1]
 	}
+	for len(words) > 0 && !eventWord(words[0]) {
+		words = words[1:]
+	}
 	return strings.Join(words, " ")
+}
+
+// eventWord reports whether a word belongs to the event rather than being filler or
+// punctuation left behind by the words stripped around it.
+func eventWord(word string) bool {
+	word = strings.ToLower(strings.Trim(word, ",."))
+	return word != "" && !eventFiller[word]
 }
 
 var _ Model = Fake{}

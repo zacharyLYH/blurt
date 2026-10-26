@@ -11,8 +11,8 @@ import (
 const localLayout = "2006-01-02T15:04"
 
 // reminderFor turns a write MissingFields accepted into the row Blurt stores: a
-// one-off keeps its local time and derived instant, a repeat keeps the rule its
-// next instant is derived from. now must already be in loc.
+// one-off keeps its local notification time and derived instant, a repeat keeps the
+// rule its next instant is derived from. now must already be in loc.
 func reminderFor(write Write, now time.Time, loc *time.Location) (store.Reminder, bool) {
 	reminder := store.Reminder{Text: write.Text, Timezone: write.Zone}
 	hour, minute, _ := parseTime(write.Time)

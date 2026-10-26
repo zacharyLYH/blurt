@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
-import { createReminder, signInRequest } from './api'
+import { createReminder, signInRequest, waitForReminder } from './api'
+import { ciTimeout } from './env'
 import { completeQuestionnaire, passPermissions, signIn, uniqueEmail } from './helpers'
 
 // The page the emitter's notifications open into, against the real stack: real Reminders,
@@ -41,6 +42,30 @@ test('a scheduled reminder shows up, and calling it off keeps it as history', as
   await passPermissions(page)
   await expect(page.getByTestId('reminder-past').getByTestId('reminder-row')).toHaveCount(1)
   await expect(page.getByTestId('reminder-upcoming-empty')).toBeVisible()
+})
+
+test('a reminder shows the time it rings and the event time it was captured with', async ({ page }) => {
+  await openReminders(page, 'notify-time')
+
+  // The capture names two clocks: 6pm is when Blurt should ring, and the 8pm dinner is
+  // what the reminder is about, so the event's own clock stays in its text.
+  expect((await createReminder(page.request, 'dinner at 8pm tomorrow, remind me at 6pm')).status()).toBe(201)
+  await page.reload()
+  await passPermissions(page)
+
+  await expect(page.getByTestId('reminder-text')).toHaveText('dinner at 8pm')
+  await expect(page.getByTestId('reminder-when')).toContainText('Rings')
+  await expect(page.getByTestId('reminder-when')).toContainText('6:00 PM')
+})
+
+test('a reminder rings at the notify time, not the event time', async ({ request }) => {
+  await signInRequest(request, uniqueEmail('notify-fire'))
+
+  // "soon" is the notification clock; the 8pm dinner is only what the text is about, so
+  // the reminder is due now rather than waiting for the event's own time.
+  expect((await createReminder(request, 'dinner at 8pm remind me soon')).status()).toBe(201)
+  const fired = await waitForReminder(request, 'dinner at 8pm', 'past', ciTimeout(20_000))
+  expect(fired.status).toBe('fired')
 })
 
 test('a repeat shows the pattern it repeats on', async ({ page }) => {

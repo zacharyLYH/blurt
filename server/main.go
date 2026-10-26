@@ -186,10 +186,10 @@ func main() {
 	// The emitter is the only worker that runs on a clock rather than on the user's
 	// last capture: it sweeps for Reminders whose instant has arrived.
 	emit := &emitter.Emitter{Reminders: reminders, Pusher: notifier}
-	if cfg.FakeClock > 0 {
-		slog.Warn("BLURT_FAKE_CLOCK is on: the emitter's clock is shifted forward — never do this on a public host",
-			"offset", cfg.FakeClock)
-		emit.Now = func() time.Time { return time.Now().Add(cfg.FakeClock) }
+	if cfg.FakeClockFastForward > 0 {
+		slog.Warn("BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT is on: the emitter's clock is shifted forward — never do this on a public host",
+			"offset", cfg.FakeClockFastForward)
+		emit.Now = func() time.Time { return time.Now().Add(cfg.FakeClockFastForward) }
 	}
 	go emit.Run(ctx)
 

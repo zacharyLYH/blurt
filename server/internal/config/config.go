@@ -109,10 +109,10 @@ type Config struct {
 	// FakeAgent is dev only: a scripted model stands in so the AgentLoop can be
 	// exercised without the gateway. Never set it on a public host.
 	FakeAgent bool
-	// FakeClock is dev only: the emitter's clock starts this far ahead, so a spec can
-	// watch a long-horizon Reminder come due without waiting for the horizon. Never
-	// set it on a public host.
-	FakeClock time.Duration
+	// FakeClockFastForward is dev only: the emitter's clock starts this far ahead, so a
+	// spec can watch a long-horizon Reminder come due without waiting for the horizon.
+	// Never set it on a public host.
+	FakeClockFastForward time.Duration
 	// Agent is the model. Unlike the gate it is not advisory — a capture with no
 	// model never becomes a record — so a URL and a model are required unless the
 	// fake is on.
@@ -219,7 +219,7 @@ func Load() (*Config, error) {
 	// capture path would accept Jobs it can never resolve, so this one is
 	// required unless the fake is on.
 	cfg.FakeAgent = envBool(&problems, "BLURT_FAKE_AGENT")
-	cfg.FakeClock = envDuration(&problems, "BLURT_FAKE_CLOCK")
+	cfg.FakeClockFastForward = envDuration(&problems, "BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT")
 	cfg.Agent = Agent{
 		URL:      opt("BLURT_AGENT_URL"),
 		APIKey:   opt("BLURT_AGENT_API_KEY"),

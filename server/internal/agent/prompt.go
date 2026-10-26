@@ -21,21 +21,28 @@ import (
 //   - memoryText is the second record kind and carries neither a zone nor a time:
 //     a fact is context, not an interruption, so the fields that make a Reminder
 //     are left empty beside it.
+//   - day is a token the model copies ("tomorrow", "in:13d", "next:2:tuesday") and the
+//     server resolves, because a user can name any offset and no list of day words can
+//     exhaust the calendar. A model that cannot add days is not asked to: the token
+//     carries the shape and the calendar arithmetic is ours.
 //   - evidence is the user's own words. It is the one prose field, and it is what a
 //     reader checks the answer against.
 const systemPrompt = `You turn one spoken capture into records for Blurt.
-text: the event to remind the user about, short, with no time words. Empty if there is nothing to remind about.
-memoryText: a fact worth keeping for later, in the user's own words. Empty if the capture carries no such fact.
-zone: IANA zone. Copy current_tz unless the capture names another.
-date: the day, as YYYY-MM-DD. Empty if the capture names no day you are sure of.
-time: the clock time, 24-hour HH:MM. Empty if the capture names no time you are sure of.
-recurrence: the repeat pattern: none, daily, weekly, monthly or yearly. none when the reminder happens once.
-evidence: the user's exact words for the time and the zone, and the zone you copied.
+  text: the event to remind the user about, with its own clock or time-of-day words when the user said them AND the notification time is different — e.g. "Dinner at 8pm". Short otherwise; no time words when notify time equals event time. An event with no day and no clock still goes here: those are what the question asks for. Empty only when the capture is a fact and nothing else.
+  memoryText: a fact worth keeping for later, in the user's own words. Empty if the capture carries no such fact.
+  zone: IANA zone. Copy current_tz unless the capture names another.
+  day: the day word the user said, as one token: today, tonight, tomorrow, in:<N>d, this:<weekday>, next:<weekday>, next:<N>:<weekday>, on:<MM-DD>. Empty when no day word is said.
+  time: when Blurt should NOTIFY the user, 24-hour HH:MM — never the event time. If the user said "remind me at 6pm for dinner at 8pm", this is 18:00, NOT 20:00. Empty if no notify time is certain.
+  recurrence: the repeat pattern: none, daily, weekly, monthly or yearly. none when the reminder happens once.
+  evidence: the user's exact words for the day, the time and the zone.
 
 Fill a field only when you are certain of it. Leave it empty rather than guess: "when I'm home" and "next week" name no day or time anyone can pin.
-The time fields belong to the reminder alone. A memoryText carries no zone, no date and no time.
-A recurring reminder has no fixed day: fill recurrence and time, and leave date empty unless the capture names the day the series starts on.
-A weekly, monthly or yearly reminder still needs the day it lands on, as date.
+Remember: time is ALWAYS the notify time, never the event time. Two times in one capture means notify time + event time. Notify time is the earlier one the user says to "remind at"; event time goes in text.
+Only the capture is the user's words. The "nearby reminders:" and "remembered:" lines above it are what Blurt already holds: never transcribe one into a field, and never take a clock from one, because that clock belongs to that record.
+When the capture answers a question Blurt asked, the event is the one the user named before it: keep that event in text and let the answer fill in only the fields the question was about.
+A memoryText carries no zone, no day and no time.
+A recurring reminder has no fixed day: fill recurrence and time, and leave day empty unless the capture names the day the series starts on.
+A weekly, monthly or yearly reminder still needs the day it lands on, as a day token.
 
 Example
 current_tz: Asia/Singapore
@@ -45,10 +52,32 @@ capture: remind me to call mum tomorrow at 7pm
 text: Call mum
 memoryText:
 zone: Asia/Singapore
-date: 2026-10-25
+day: tomorrow
 time: 19:00
 recurrence: none
 evidence: the user said "tomorrow at 7pm"; current_tz is Asia/Singapore
+
+Example
+capture: remind me at 6pm to have dinner at 8pm tomorrow
+->
+text: Dinner at 8pm
+memoryText:
+zone: Asia/Singapore
+day: tomorrow
+time: 18:00
+recurrence: none
+evidence: the user said "at 6pm" for the notify and "dinner at 8pm" for the event
+
+Example
+capture: remind me at 6pm every day for dinner at 8pm
+->
+text: Dinner at 8pm
+memoryText:
+zone: Asia/Singapore
+day:
+time: 18:00
+recurrence: daily
+evidence: the user said "at 6pm" to notify and "dinner at 8pm" as the event
 
 Example
 capture: remember that milk is cheaper at store A than store B
@@ -56,7 +85,7 @@ capture: remember that milk is cheaper at store A than store B
 text:
 memoryText: Milk is cheaper at store A than store B
 zone: Asia/Singapore
-date:
+day:
 time:
 recurrence: none
 evidence: the capture names no time; current_tz is Asia/Singapore
@@ -67,7 +96,7 @@ capture: remind me to water the plants every morning at 8am
 text: Water the plants
 memoryText:
 zone: Asia/Singapore
-date:
+day:
 time: 08:00
 recurrence: daily
 evidence: the user said "every morning at 8am"
@@ -78,7 +107,7 @@ capture: remind me to take the trash out every Tuesday at 7pm
 text: Take the trash out
 memoryText:
 zone: Asia/Singapore
-date: 2026-10-27
+day: this:tuesday
 time: 19:00
 recurrence: weekly
 evidence: the user said "every Tuesday at 7pm"
@@ -89,16 +118,68 @@ capture: lunch at Ikea this Friday at 1pm, and I have an Ikea voucher to use by 
 text: Lunch at Ikea
 memoryText: I have an Ikea voucher to use by December
 zone: Asia/Singapore
-date: 2026-10-30
+day: this:friday
 time: 13:00
 recurrence: none
-evidence: the user said "this Friday at 1pm"; current_tz is Asia/Singapore`
+evidence: the user said "this Friday at 1pm"; current_tz is Asia/Singapore
+
+Example
+capture: remind me to renew the pass at 9am in 13 days
+->
+text: Renew the pass
+memoryText:
+zone: Asia/Singapore
+day: in:13d
+time: 09:00
+recurrence: none
+evidence: the user said "in 13 days" for the day and "at 9am" for the time
+
+Example
+capture: remind me to send the form at 4pm next next tuesday
+->
+text: Send the form
+memoryText:
+zone: Asia/Singapore
+day: next:2:tuesday
+time: 16:00
+recurrence: none
+evidence: the user said "next next tuesday" for the day and "at 4pm" for the time
+
+Example
+capture: buy glue when I'm home
+->
+text: Buy glue
+memoryText:
+zone: Asia/Singapore
+day:
+time:
+recurrence: none
+evidence: the user named no day and no clock; the question asks for them
+
+Example (a capture that answers Blurt's question: the reminders above it are context, and the event is the first capture's)
+current_tz: Asia/Singapore
+now_local: 2026-10-24T18:30
+nearby reminders:
+- Fetch kids from school (2026-10-25T17:00 Asia/Singapore)
+first capture: buy glue on the way home from school
+question: When should I remind you about buying glue?
+capture: tomorrow at 6pm
+->
+text: Buy glue on the way home from school
+memoryText:
+zone: Asia/Singapore
+day: tomorrow
+time: 18:00
+recurrence: none
+evidence: the user said "tomorrow at 6pm" for the day and the clock; the 17:00 above belongs to that reminder`
 
 // recordsSchema is the shape the answer is forced into, as the gateway's own
 // JSON-schema response format rather than OpenAI's tool calling. Every field is a
-// string, the two the model resolves carry a pattern, recurrence is an enum, and
-// an empty string is a legal answer everywhere it matters — which is what makes
-// "I am not sure" expressible at all.
+// string, the clock the model converts is pinned by a pattern, recurrence is an enum,
+// and an empty string is a legal answer everywhere it matters — which is what makes
+// "I am not sure" expressible at all. day carries no pattern: its vocabulary is
+// closed by the prompt, and resolveDay is the second pin, refusing a token that is
+// not in it rather than reading half of one.
 const recordsSchema = `{
   "type": "object",
   "additionalProperties": false,
@@ -106,12 +187,12 @@ const recordsSchema = `{
     "text":       {"type": "string"},
     "memoryText": {"type": "string"},
     "zone":       {"type": "string"},
-    "date":       {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$|^$"},
+    "day":        {"type": "string"},
     "time":       {"type": "string", "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$|^$"},
     "recurrence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly", "yearly"]},
     "evidence":   {"type": "string"}
   },
-  "required": ["text", "memoryText", "zone", "date", "time", "recurrence", "evidence"]
+  "required": ["text", "memoryText", "zone", "day", "time", "recurrence", "evidence"]
 }`
 
 // records is the schema's shape on the Go side.
@@ -119,7 +200,7 @@ type records struct {
 	Text       string `json:"text"`
 	MemoryText string `json:"memoryText"`
 	Zone       string `json:"zone"`
-	Date       string `json:"date"`
+	Day        string `json:"day"`
 	Time       string `json:"time"`
 	Recurrence string `json:"recurrence"`
 	Evidence   string `json:"evidence"`
@@ -133,19 +214,25 @@ type question struct {
 // turnOf reads the records into a Turn. Which fields the model filled is what the
 // server commits: a filled text proposed a Reminder, a filled memoryText proposed a
 // Memory, both is a capture that carried an event and a fact, and neither is the Job
-// asking the user.
-func turnOf(parsed records) Turn {
+// asking the user. The day token is the one field the server reads rather than copies:
+// the model hands over a phrase like "in:13d" and leaves the calendar to us, so a token
+// it cannot read leaves the date empty and the Job asks the user.
+func turnOf(parsed records, now time.Time) Turn {
 	turn := Turn{}
 	if text := strings.TrimSpace(parsed.Text); text != "" {
 		recurrence := strings.TrimSpace(parsed.Recurrence)
 		if recurrence == "" {
 			recurrence = RecurrenceNone
 		}
+		date := ""
+		if at, ok := resolveDay(parsed.Day, now); ok {
+			date = at.Format("2006-01-02")
+		}
 		turn.Writes = append(turn.Writes, Write{
 			Kind:       KindReminder,
 			Text:       text,
 			Zone:       strings.TrimSpace(parsed.Zone),
-			Date:       strings.TrimSpace(parsed.Date),
+			Date:       date,
 			Time:       strings.TrimSpace(parsed.Time),
 			Recurrence: recurrence,
 			Evidence:   strings.TrimSpace(parsed.Evidence),
@@ -245,9 +332,17 @@ func localAt(utc, zone string) string {
 // has to answer, written for this capture rather than picked from a list of three. The last line is the
 // one that matters — a model just handed the capture's own clock words will happily name one, and a
 // question that asserts a time the user never said is the failure this whole path exists to avoid.
+//
+// The action is asked for as an -ing phrase and the example writes it unquoted. Both are load-bearing:
+// the quoted form the example used to show ("about \"buy glue\"?") is a shape the model answers by
+// closing the JSON string on the inner quote, and it came back as "When should I remind you about " —
+// a question with no event in it, and no question mark for usableQuestion to accept — in four of five
+// measured captures. What it writes after "about" is the event as a verb phrase because that is what
+// reads as a question; "buy glue" arrives inside it either way, from the capture the model can see.
 const questionPrompt = `You ask the user one question about a capture Blurt could not finish.
 The missing line names the fields still unknown. Ask for  those, in the user's own words for the event.
 One question, under twenty words, no greeting, no preamble, no apology.
+Write the action after "about" as an -ing phrase: "about buying glue", "about watering the plants", "about calling mum". Never "about water the plants".
 Never name a time, a date, a place or a zone the user did not say, and never say anything was saved.
 
 Example
@@ -256,7 +351,7 @@ now_local: 2026-10-24T18:30
 missing: time
 capture: buy glue when I'm home
 ->
-question: When should I remind you about "buy glue"?`
+question: When should I remind you about buying glue?`
 
 // questionSchema is one field, for the same reason the records schema stays small: the decoder fills
 // whatever is declared, and every extra field is room for a small model to wander.
@@ -280,12 +375,13 @@ const questionSchema = `{
 const tagsPrompt = `You name the search features of one remembered fact, so Blurt can find it again from wording nothing like the fact itself.
 Answer with 3 to 10 tags, comma-separated, in one string.
 Each tag is one simple, common, singular word, lowercase: no quotes, no punctuation, no explanation.
+Do not use numbers, clock times, or precise dates as tags. Month names and years are fine.
 Think outside the box: name the topic, the object, the place, the people, and the occasion the fact belongs to, not only the words already in the sentence.
 More tags are better than fewer, but every tag must be one a future sentence about this fact could use.
 
 Example
 fact: I have AirAsia points to use by December
-tags: travel, flight, airline, points, loyalty, voucher, december, trip, booking, expiry
+tags: travel, flight, airline, points, loyalty, voucher, december, trip, booking, redeem
 
 Example
 fact: Milk is cheaper at store A than store B

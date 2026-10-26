@@ -374,9 +374,10 @@ User enters model provider, model, endpoint if needed, and API key on setup page
 - Mock LLM at HTTP level for specific responses.
 - Real free LLM: Qwen 2.5 3B on MLX-LM, local or remote via `ngrok` with static secret.
 - Random walker generates schedules; use an injectable clock. The emitter takes its clock as a
-  field, and `BLURT_FAKE_CLOCK` shifts it in dev, so a test can cross a long horizon without
-  waiting for it (`web/e2e/emitter-clock.spec.ts`). Go cannot be clock-faked from outside the
-  process: `time.Now` reads the vDSO, so `LD_PRELOAD`/libfaketime never reaches it.
+  field, and `BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT` shifts it in dev, so a test can cross a
+  long horizon without waiting for it (`web/e2e/emitter-clock.spec.ts`). Go cannot be clock-faked
+  from outside the process: `time.Now` reads the vDSO, so `LD_PRELOAD`/libfaketime never reaches
+  it.
 
 ## Known gaps
 

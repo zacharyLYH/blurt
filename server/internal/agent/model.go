@@ -233,7 +233,7 @@ func (h *Gateway) Propose(ctx context.Context, in Input) (Turn, error) {
 	if err := json.Unmarshal([]byte(content), &parsed); err != nil {
 		return Turn{}, fmt.Errorf("agent: model answer is not the schema (finish %s): %w", finish, err)
 	}
-	return turnOf(parsed), nil
+	return turnOf(parsed, in.Now), nil
 }
 
 // Question writes the question the user has to answer: the same route and the
