@@ -2,7 +2,7 @@
 // under cases/, with the goldens and fixtures beside them. The settings come from .env, and
 // -eval is what opts in, so nothing else in `go test ./...` spends a call.
 //
-//	go test ./internal/agent/L1 -run TestPlannerCases -eval -v
+//	go test ./internal/agent/eval -run TestPlannerCases -eval -v
 //
 // Files, by what a reader is looking for:
 //
@@ -14,7 +14,7 @@
 //	recorder_test.go  what the model was handed and what it answered
 //	wire_test.go      the raw provider traffic (-wire)
 //	doubles_test.go   the scripted model, the push recorder, the pinned clock
-package l1
+package eval
 
 import (
 	"flag"
@@ -198,7 +198,7 @@ func chainCase(c Case) bool  { return c.Layer == "L3" }
 // and the loop called directly. The settings come from .env (BLURT_EVAL_*), and -eval is
 // what opts in, so the default gate never spends a call.
 //
-//	go test ./internal/agent/L1 -run TestPlannerCases -eval -v -timeout 30m
+//	go test ./internal/agent/eval -run TestPlannerCases -eval -v -timeout 30m
 func TestPlannerCases(t *testing.T) {
 	if !*evalRun {
 		t.Skip("pass -eval to run the cases against the real provider (settings come from .env)")

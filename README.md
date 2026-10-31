@@ -48,7 +48,7 @@ SQLite holds the durable Job record; Redis Streams owns routing and crash recove
 
 ## Eval (L1, L2, L3)
 
-Scores the shipped prompts against real models. One case per file, in `server/internal/agent/L1/cases/`; the case's `layer` picks which test runs it. Settings come from `.env` (the process environment wins).
+Scores the shipped prompts against real models. One case per file, in `server/internal/agent/eval/cases/`; the case's `layer` picks which test runs it. Settings come from `.env` (the process environment wins).
 
 **L1** is the agent loop, on the user's own hosted model — a key and a model id are the only things to supply:
 
@@ -58,19 +58,19 @@ BLURT_EVAL_MODEL=openai/gpt-6-luna                              # required
 BLURT_EVAL_URL=https://openrouter.ai/api/v1/chat/completions    # optional, this is the default
 
 cd server
-go test ./internal/agent/L1 -run TestPlannerCases -eval -v     # every L1 case
+go test ./internal/agent/eval -run TestPlannerCases -eval -v     # every L1 case
 ```
 
 **L2** is the two helpers — prescreen and the tagger — one call each on the deployment's own gateway, so it reads the same settings the server boots on (`BLURT_STT_URL`/`_API_KEY`, falling back from `BLURT_AUX_*`, plus one model id per stage). Nothing queues and no database is seeded, so the whole layer runs in seconds:
 
 ```sh
-go test ./internal/agent/L1 -run TestHelperCases -eval -layer L2 -repeat 10 -v   # pass rates, not bits
+go test ./internal/agent/eval -run TestHelperCases -eval -layer L2 -repeat 10 -v   # pass rates, not bits
 ```
 
 **L3** is the chain — the backend `main.go` boots (`internal/backend`), driven through the real HTTP ingress with a real database and real provider behind every stage (planner from `BLURT_EVAL_*`, prescreen/tagger from the gateway, plus `BLURT_STT_*` for a case that records). A case is a list of steps: a text or recorded capture posts to the API, a reply posts to the thread, and each step asserts the rows it left. It is the only lane that can run the question loop and several schedules in one database, so it is also the slowest:
 
 ```sh
-go test ./internal/agent/L1 -run TestChainCases -eval -layer L3 -v -timeout 40m
+go test ./internal/agent/eval -run TestChainCases -eval -layer L3 -v -timeout 40m
 ```
 
 Tags are the model's guess at words nobody said, so a chain case pins `tags_min` and never the exact list. `-wire` covers L1 and L2 only.
@@ -86,7 +86,7 @@ Tags are the model's guess at words nobody said, so a chain case pins `tags_min`
 | `-prompt <name>` | prompt arm: `full` (shipped) or files in `cases/_prompts/`. L1 reads `<name>.txt`; L2 reads `<name>-<stage>.txt`, one file per helper |
 
 Output: a per-case scorecard on stdout (pass rate, calls, faults, latency — shown with `-v`, and on any failure), `server/eval-out/<layer>-<model>-<arm>.json`, and a per-case transcript beside the report.
-`L1/cases/_golden/*.txt` is the rendered context block; it runs offline inside `go test ./...`, so a prompt change shows up as a diff.
+`eval/cases/_golden/*.txt` is the rendered context block; it runs offline inside `go test ./...`, so a prompt change shows up as a diff.
 
 ## Deploy
 

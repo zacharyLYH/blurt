@@ -80,7 +80,7 @@ is an experiment you add a file for, and `full` is the shipped prompt.
 
 ```sh
 cd server
-go test ./internal/agent/L1 -run TestHelperCases -eval -layer L2 -repeat 5 -v
+go test ./internal/agent/eval -run TestHelperCases -eval -layer L2 -repeat 5 -v
 ```
 
 8. **A verdict stage on a 2B model is deterministic per prompt, and wrong in a pattern.**

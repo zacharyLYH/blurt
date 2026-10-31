@@ -1,4 +1,4 @@
-package l1
+package eval
 
 // The L3 lane: the chain. A case seeds the database, sends text or recorded captures
 // through the two workers production boots, and asserts the rows that land. Nothing here
@@ -13,7 +13,7 @@ package l1
 // It is coarse on purpose. A row's prose and a Memory's tags belong to a model, so a case
 // pins a substring and a tag count, and leaves "which field missed" to L1 and L2.
 //
-//	go test ./internal/agent/L1 -run TestChainCases -eval -layer L3 -v -timeout 40m
+//	go test ./internal/agent/eval -run TestChainCases -eval -layer L3 -v -timeout 40m
 
 import (
 	"bytes"

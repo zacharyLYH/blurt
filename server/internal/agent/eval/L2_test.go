@@ -1,4 +1,4 @@
-package l1
+package eval
 
 // The L2 lane: the screen, the post-agent check and the tagger, one call each. These are the
 // stages L1 stubs out (sideStage) and the ones a split deployment runs on the home gateway, so
@@ -148,7 +148,7 @@ func helperPrompt(t *testing.T, arm, stage string) string {
 // the deployment names. Nothing queues and no database is seeded, so a run is seconds and
 // -repeat is worth its time.
 //
-//	go test ./internal/agent/L1 -run TestHelperCases -eval -layer L2 -repeat 10 -v
+//	go test ./internal/agent/eval -run TestHelperCases -eval -layer L2 -repeat 10 -v
 func TestHelperCases(t *testing.T) {
 	if !*evalRun {
 		t.Skip("pass -eval to run the cases against the real gateway (settings come from .env)")
