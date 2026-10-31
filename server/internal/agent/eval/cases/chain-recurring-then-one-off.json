@@ -27,7 +27,7 @@
       }
     },
     {
-      "capture": "remind me to bring the laptop tomorrow at 8:45",
+      "capture": "remind me to bring the laptop tomorrow at 8:45am",
       "expect": {
         "kind": "records",
         "reminders": [
