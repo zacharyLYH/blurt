@@ -6,37 +6,38 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"blurt/internal/db"
+	"blurt/internal/failure"
 	"blurt/internal/push"
 	"blurt/internal/queue"
 	"blurt/internal/store"
 )
 
-// pinned is the anchor every write is checked and resolved against: a Saturday
+// pinned is the anchor every record is checked and resolved against: a Saturday
 // evening in Singapore. Singapore is UTC+8 year round, so a fixed zone stands in
 // for it and no test leans on the tz database being installed.
 var pinned = time.Date(2026, 10, 24, 18, 30, 0, 0, time.FixedZone("Asia/Singapore", 8*60*60))
 
 const zone = "Asia/Singapore"
 
-// scriptedModel answers a fixed list of turns, so the loop's checking and
-// committing are testable without a model. It keeps every Input it was handed,
-// which is how the prompt assembly and the missing fields are asserted.
+// scriptedModel answers a fixed list of turns, one per run, so the loop's linting and
+// committing are testable without a model. It keeps every PlannerInput it was handed and
+// every message the loop sent back, which is how the prompt assembly, the lint note and the
+// committing are asserted. Each run is one free-form turn that submits at once, then one
+// strict call that returns the scripted answer.
 type scriptedModel struct {
-	turns  []Turn
-	inputs []Input
-	err    error
-	// question is what the question writer answers, and askErr what it fails
-	// with. An unscripted answer is unusable, so the canned sentence stands.
-	question string
-	asks     []Input
-	missing  [][]Field
-	askErr   error
+	turns  []Answer
+	inputs []PlannerInput
+	sent   []Message
+	// prescreens counts the turns the screen was asked on, which is how a test sees
+	// that every user turn reached the gate.
+	prescreens int
+	err        error
 	// tags is what the tagger answers, and tagErr what it fails with. Neither is
 	// scripted by default, which leaves a Memory carrying no features at all.
 	tags   []string
@@ -44,32 +45,65 @@ type scriptedModel struct {
 	// tagBlock holds the tagger open, which is how a test sees that a run does not wait
 	// for its features.
 	tagBlock bool
+	// stalls makes the agent turn write prose and never submit, which is the loop that
+	// spends its whole budget without a plan.
+	stalls bool
+	// finalizeErr is what the strict call behind submit_plan fails with, when the turn itself
+	// is fine: a provider that dies after the loop, or an answer that is not the schema.
+	finalizeErr error
 
 	// tagCalls is appended from the tagger's own goroutine, so it is read under the lock.
 	mu       sync.Mutex
 	tagCalls []string
 }
 
-func (p *scriptedModel) Propose(_ context.Context, in Input) (Turn, error) {
-	p.inputs = append(p.inputs, in)
+func (p *scriptedModel) Prescreen(_ context.Context, _ string) (Verdict, error) {
+	p.prescreens++
 	if p.err != nil {
-		return Turn{}, p.err
+		return Verdict{}, p.err
+	}
+	return Verdict{Outcome: verdictOK}, nil
+}
+
+// Chat is the agent turn: the dev double never looks anything up, so it submits at once. An
+// error here is the transport failure every retry test scripts, and stalls makes the model
+// answer prose without ever submitting.
+func (p *scriptedModel) Chat(_ context.Context, in PlannerInput, sent []Message, _ []Tool) (Message, error) {
+	if len(sent) == 0 {
+		p.inputs = append(p.inputs, in)
+	}
+	p.sent = append(p.sent, sent...)
+	if p.err != nil {
+		return Message{}, p.err
+	}
+	if p.stalls {
+		return Message{Role: "assistant", Content: "let me think about that"}, nil
+	}
+	return submitCall(), nil
+}
+
+// Finalize is the strict call: one scripted turn per run, which is what makes a lint fault
+// and its retry scriptable as two answers.
+func (p *scriptedModel) Finalize(_ context.Context, _ PlannerInput, _ []Message) (Answer, error) {
+	if p.err != nil {
+		return Answer{}, p.err
+	}
+	if p.finalizeErr != nil {
+		return Answer{}, p.finalizeErr
 	}
 	if len(p.turns) == 0 {
-		return Turn{}, nil
+		return Answer{}, nil
 	}
 	turn := p.turns[0]
 	p.turns = p.turns[1:]
 	return turn, nil
 }
 
-func (p *scriptedModel) Question(_ context.Context, in Input, missing []Field) (string, error) {
-	p.asks = append(p.asks, in)
-	p.missing = append(p.missing, missing)
-	if p.askErr != nil {
-		return "", p.askErr
+func (p *scriptedModel) Verify(_ context.Context, _ Proposal) (Verdict, error) {
+	if p.err != nil {
+		return Verdict{}, p.err
 	}
-	return p.question, nil
+	return Verdict{Outcome: "ok"}, nil
 }
 
 func (p *scriptedModel) Tags(ctx context.Context, text string) ([]string, error) {
@@ -101,14 +135,24 @@ var _ Model = (*scriptedModel)(nil)
 // blockingModel never answers before the run's own deadline, which is the slow-host case.
 type blockingModel struct{}
 
-func (blockingModel) Propose(ctx context.Context, _ Input) (Turn, error) {
+func (blockingModel) Prescreen(ctx context.Context, _ string) (Verdict, error) {
 	<-ctx.Done()
-	return Turn{}, ctx.Err()
+	return Verdict{}, ctx.Err()
 }
 
-func (blockingModel) Question(ctx context.Context, _ Input, _ []Field) (string, error) {
+func (blockingModel) Chat(ctx context.Context, _ PlannerInput, _ []Message, _ []Tool) (Message, error) {
 	<-ctx.Done()
-	return "", ctx.Err()
+	return Message{}, ctx.Err()
+}
+
+func (blockingModel) Finalize(ctx context.Context, _ PlannerInput, _ []Message) (Answer, error) {
+	<-ctx.Done()
+	return Answer{}, ctx.Err()
+}
+
+func (blockingModel) Verify(ctx context.Context, _ Proposal) (Verdict, error) {
+	<-ctx.Done()
+	return Verdict{}, ctx.Err()
 }
 
 func (blockingModel) Tags(ctx context.Context, _ string) ([]string, error) {
@@ -144,22 +188,32 @@ func (p *recordedPush) NotifyUser(_ context.Context, _ int64, msg push.Message) 
 	return push.Result{Sent: 1}, nil
 }
 
-// oneOff is a write the server can commit as a single local instant.
-func oneOff(text, date, clock string) Write {
-	return Write{Kind: KindReminder, Text: text, Zone: zone, Date: date, Time: clock, Recurrence: RecurrenceNone}
+// oneOff is a record the server can commit as a single local instant.
+func oneOff(text, date, clock string) Record {
+	return Record{Kind: KindReminder, Text: text, Zone: zone, Date: date, Time: clock, Recurrence: RecurrenceNone}
 }
 
-// repeating is a write with a pattern: the date is the first occurrence, which is
+// repeating is a record with a pattern: the date is the first occurrence, which is
 // where a weekly, monthly or yearly rule reads its calendar part from.
-func repeating(text, date, clock, recurrence string) Write {
-	return Write{Kind: KindReminder, Text: text, Zone: zone, Date: date, Time: clock, Recurrence: recurrence}
+func repeating(text, date, clock, recurrence string) Record {
+	return Record{Kind: KindReminder, Text: text, Zone: zone, Date: date, Time: clock, Recurrence: recurrence}
 }
 
-// turn is the one write a turn carries.
-func turn(write Write) Turn { return Turn{Writes: []Write{write}} }
+// mutateRecord is one committable one-off with one field changed, so a table of faults can
+// read as the change rather than as a whole record.
+func mutateRecord(mutate func(*Record)) Record {
+	record := oneOff("Call mum", "2026-10-25", "19:00")
+	mutate(&record)
+	return record
+}
+
+// answerWith is the one record an answer carries.
+func answerWith(record Record) Answer { return Answer{Kind: AnswerRecords, Records: []Record{record}} }
 
 type fixture struct {
-	worker *AgentWorker
+	worker *queue.Worker
+	stream *queue.Mock
+	loop   *AgentLoop
 	jobs   *store.JobStore
 	model  *scriptedModel
 	pusher *recordedPush
@@ -167,7 +221,7 @@ type fixture struct {
 	userID int64
 }
 
-func newFixture(t *testing.T, turns ...Turn) *fixture {
+func newFixture(t *testing.T, turns ...Answer) *fixture {
 	t.Helper()
 	handle, err := db.Open(t.TempDir())
 	if err != nil {
@@ -182,20 +236,18 @@ func newFixture(t *testing.T, turns ...Turn) *fixture {
 	}
 	model, pusher := &scriptedModel{turns: turns}, &recordedPush{}
 	jobs := store.NewJobStore(handle.Write, handle.Read)
+	loop := &AgentLoop{
+		Store:   jobs,
+		Recall:  Retrieval{Reminders: store.NewReminderStore(handle.Write, handle.Read), Memories: store.NewMemoryStore(handle.Read)},
+		Planner: Stage{Model: model, Name: "local-model"},
+		Pusher:  pusher,
+		Now:     func() time.Time { return pinned },
+	}
+	stream := queue.NewMock()
 	return &fixture{
-		worker: &AgentWorker{
-			Jobs:       jobs,
-			AgentQueue: queue.NewMock(),
-			Loop: &AgentLoop{
-				Store:     jobs,
-				Recall:    Reads{Reminders: store.NewReminderStore(handle.Write, handle.Read), Memories: store.NewMemoryStore(handle.Read)},
-				Model:     model,
-				Pusher:    pusher,
-				ModelName: "local-model",
-				MaxTurns:  3,
-				Now:       func() time.Time { return pinned },
-			},
-		},
+		worker: &queue.Worker{Stream: stream, Jobs: jobs, Step: loop.Step},
+		stream: stream,
+		loop:   loop,
 		jobs:   jobs,
 		model:  model,
 		pusher: pusher,
@@ -211,7 +263,7 @@ func (f *fixture) textJob(t *testing.T, text string) store.Job {
 	if err != nil {
 		t.Fatalf("create job: %v", err)
 	}
-	if err := f.worker.AgentQueue.Publish(context.Background(), job.JobID, 1); err != nil {
+	if err := f.stream.Publish(context.Background(), job.JobID, 1); err != nil {
 		t.Fatalf("publish job: %v", err)
 	}
 	return job
@@ -223,7 +275,7 @@ func (f *fixture) reply(t *testing.T, jobID int64, text string) {
 		store.Message{Text: text, TZ: zone}, nil); err != nil {
 		t.Fatalf("reply: %v", err)
 	}
-	if err := f.worker.AgentQueue.Publish(context.Background(), jobID, 1); err != nil {
+	if err := f.stream.Publish(context.Background(), jobID, 1); err != nil {
 		t.Fatalf("publish reply: %v", err)
 	}
 }
@@ -231,13 +283,31 @@ func (f *fixture) reply(t *testing.T, jobID int64, text string) {
 // runOnce claims and processes one Job, the way the poller does.
 func (f *fixture) runOnce(t *testing.T) {
 	t.Helper()
-	if !f.worker.processOne(context.Background()) {
+	if !f.worker.ProcessOne(context.Background()) {
 		t.Fatal("no Job was claimed")
 	}
 }
 
+// runText creates a Job for one capture, processes it, and returns the Job the run left
+// behind: the setup and the one claim nearly every worker test opens with.
+func (f *fixture) runText(t *testing.T, text string) store.Job {
+	t.Helper()
+	job := f.textJob(t, text)
+	f.runOnce(t)
+	return f.load(t, job.JobID)
+}
+
+// wantStatus is the assertion nearly every worker test opens with about the Job a run left.
+func wantStatus(t *testing.T, job store.Job, want string) store.Job {
+	t.Helper()
+	if job.Status != want {
+		t.Fatalf("status = %q, want %q", job.Status, want)
+	}
+	return job
+}
+
 // tagCalls waits for the tagger to have been asked about n facts, and returns what it saw.
-// Tagging runs behind the commit now, so a test cannot read it the moment a run returns.
+// Tagger runs behind the commit now, so a test cannot read it the moment a run returns.
 func (f *fixture) tagCalls(t *testing.T, n int) []string {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -253,8 +323,8 @@ func (f *fixture) tagCalls(t *testing.T, n int) []string {
 	}
 }
 
-// memoryTags waits for the features the tagger writes onto one committed Memory and returns
-// them: the row is durable before they are, so a test waits for the write it is asserting.
+// memoryTags waits for the features the tagger records onto one committed Memory and returns
+// them: the row is durable before they are, so a test waits for the record it is asserting.
 func (f *fixture) memoryTags(t *testing.T, text string) string {
 	t.Helper()
 	deadline := time.Now().Add(2 * time.Second)
@@ -269,6 +339,15 @@ func (f *fixture) memoryTags(t *testing.T, text string) string {
 		}
 		time.Sleep(time.Millisecond)
 	}
+}
+
+// memoryRow reads the one committed Memory and the features written onto it.
+func (f *fixture) memoryRow(t *testing.T) (text, tags string) {
+	t.Helper()
+	if err := f.handle.Read.QueryRow(`SELECT Text, Tags FROM Memory`).Scan(&text, &tags); err != nil {
+		t.Fatalf("read memory: %v", err)
+	}
+	return text, tags
 }
 
 func (f *fixture) load(t *testing.T, jobID int64) store.Job {
@@ -307,23 +386,23 @@ func (f *fixture) agentTrace(t *testing.T, jobID int64) map[string]any {
 	return detail
 }
 
-// missingFields reads the fields the newest run handed the question, which is how a
-// test names what MissingFields refused.
-func (f *fixture) missingFields(t *testing.T, jobID int64) []Field {
+// lintFaults reads what the newest run's linter refused, which is how a test names a
+// fault by the words the model was told.
+func (f *fixture) lintFaults(t *testing.T, jobID int64) []string {
 	t.Helper()
-	raw, ok := f.agentTrace(t, jobID)["missing"].([]any)
+	raw, ok := f.agentTrace(t, jobID)["lint"].([]any)
 	if !ok {
-		t.Fatal("the trace recorded no missing fields")
+		t.Fatal("the trace recorded no lint faults")
 	}
-	fields := make([]Field, 0, len(raw))
+	faults := make([]string, 0, len(raw))
 	for _, item := range raw {
-		name, ok := item.(string)
+		note, ok := item.(string)
 		if !ok {
-			t.Fatalf("missing field = %T, want a name", item)
+			t.Fatalf("lint fault = %T, want the note the model read", item)
 		}
-		fields = append(fields, Field(name))
+		faults = append(faults, note)
 	}
-	return fields
+	return faults
 }
 
 // reminder reads the one committed Reminder row. The two one-off columns come back
@@ -341,17 +420,11 @@ func (f *fixture) reminder(t *testing.T) (text, gotZone string, local, emit sql.
 // Reminder whose UTC instant the server derived, and the Job closes on the server's
 // own sentence.
 func TestWorkerCommitsAOneOffReminder(t *testing.T) {
-	write := oneOff("Buy glue", "2026-10-25", "18:00")
-	write.Evidence = `the user said "at 6pm tomorrow"`
-	f := newFixture(t, turn(write))
-	job := f.textJob(t, "buy glue at 6pm tomorrow")
+	record := oneOff("Buy glue", "2026-10-25", "18:00")
+	record.Evidence = `the user said "at 6pm tomorrow"`
+	f := newFixture(t, answerWith(record))
+	stored := wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
 
-	f.runOnce(t)
-
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want complete", stored.Status)
-	}
 	if len(stored.Conversation) != 2 || stored.Conversation[1].Role != "assistant" ||
 		stored.Conversation[1].Text != reminderReply {
 		t.Fatalf("conversation = %+v, want the capture and the commit sentence", stored.Conversation)
@@ -368,13 +441,14 @@ func TestWorkerCommitsAOneOffReminder(t *testing.T) {
 	if n := f.count(t, `SELECT count(*) FROM RecurringReminder`); n != 0 {
 		t.Fatalf("recurring rows = %d, want none for a one-off", n)
 	}
-	detail := f.agentTrace(t, job.JobID)
-	if detail["outcome"] != store.JobComplete || detail["turns"] != float64(1) {
+	detail := f.agentTrace(t, stored.JobID)
+	// One run is two calls: the loop's own turn and the strict one behind submit_plan.
+	if detail["outcome"] != store.JobComplete || detail["turns"] != float64(2) {
 		t.Fatalf("trace = %v", detail)
 	}
 	// What the model said it read the time from rides the Trace, so a reader can
 	// check the answer against the user's own words.
-	if detail["evidence"] != write.Evidence {
+	if detail["evidence"] != record.Evidence {
 		t.Fatalf("trace evidence = %v, want the model's own words", detail["evidence"])
 	}
 	if f.pusher.calls != 0 {
@@ -386,14 +460,9 @@ func TestWorkerCommitsAOneOffReminder(t *testing.T) {
 // stored, the two one-off columns stay NULL, and the next instant is derived from the
 // rule and the zone rather than carried forward.
 func TestWorkerCommitsARecurringReminder(t *testing.T) {
-	f := newFixture(t, turn(repeating("Take the trash out", "2026-10-27", "19:00", store.FrequencyWeekly)))
-	job := f.textJob(t, "remind me to take the trash out every tuesday at 7pm")
+	f := newFixture(t, answerWith(repeating("Take the trash out", "2026-10-27", "19:00", store.FrequencyWeekly)))
+	wantStatus(t, f.runText(t, "remind me to take the trash out every tuesday at 7pm"), store.JobComplete)
 
-	f.runOnce(t)
-
-	if stored := f.load(t, job.JobID); stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want complete", stored.Status)
-	}
 	text, gotZone, local, emit := f.reminder(t)
 	if text != "Take the trash out" || gotZone != zone {
 		t.Fatalf("reminder = %q %q", text, gotZone)
@@ -417,95 +486,140 @@ func TestWorkerCommitsARecurringReminder(t *testing.T) {
 	}
 }
 
-// TestWorkerAsksForMissingFields is the deterministic half over the whole loop: each
-// write is refused by field, the Job stays open on a question, nothing is committed, and
-// the user is pushed once.
-func TestWorkerAsksForMissingFields(t *testing.T) {
-	changed := func(mutate func(*Write)) Write {
-		write := oneOff("Call mum", "2026-10-25", "19:00")
-		mutate(&write)
-		return write
-	}
+// TestWorkerLintsEveryRefusedField is the deterministic half over the whole loop: each
+// record is refused by field, the fault names the value the model wrote, nothing is
+// committed, and a model that writes the same thing twice fails the Job with the capture
+// path's own sentence.
+func TestWorkerLintsEveryRefusedField(t *testing.T) {
 	cases := []struct {
-		name  string
-		write Write
-		want  []Field
+		name   string
+		record Record
+		want   string
 	}{
-		{"no zone", changed(func(w *Write) { w.Zone = "" }), []Field{FieldZone}},
-		{"a zone that is not one", changed(func(w *Write) { w.Zone = "Mars/Olympus" }), []Field{FieldZone}},
-		{"no date", changed(func(w *Write) { w.Date = "" }), []Field{FieldDate}},
-		{"a date the calendar does not have", changed(func(w *Write) { w.Date = "2026-02-30" }), []Field{FieldDate}},
-		{"no clock", changed(func(w *Write) { w.Time = "" }), []Field{FieldTime}},
-		{"a clock that is not one", changed(func(w *Write) { w.Time = "19:60" }), []Field{FieldTime}},
-		{"a time already gone", oneOff("Call mum", "2026-10-24", "09:00"), []Field{FieldTime}},
-		{"no event", changed(func(w *Write) { w.Text = "  " }), []Field{FieldEvent}},
-		{"a pattern that is not one", repeating("Call mum", "2026-10-25", "19:00", "hourly"), []Field{FieldRecurrence}},
-		{"a daily repeat with no clock", repeating("Call mum", "", "", store.FrequencyDaily), []Field{FieldTime}},
+		{"no zone", mutateRecord(func(w *Record) { w.Zone = "" }), "zone is empty"},
+		{"a zone that is not one", mutateRecord(func(w *Record) { w.Zone = "Mars/Olympus" }), `zone "Mars/Olympus" is not an IANA zone`},
+		{"no date", mutateRecord(func(w *Record) { w.Date = "" }), "date is empty"},
+		{"a date the calendar does not have", mutateRecord(func(w *Record) { w.Date = "2026-02-30" }), `date "2026-02-30" is not`},
+		{"no clock", mutateRecord(func(w *Record) { w.Time = "" }), "time is empty"},
+		{"a clock that is not one", mutateRecord(func(w *Record) { w.Time = "19:60" }), `time "19:60" is not HH:MM`},
+		{"a time already gone", oneOff("Call mum", "2026-10-24", "09:00"), `time "09:00" is in the past`},
+		{"no event", mutateRecord(func(w *Record) { w.Text = "  " }), "event is empty"},
+		{"a pattern that is not one", repeating("Call mum", "2026-10-25", "19:00", "hourly"), `recurrence "hourly" is not`},
+		{"a daily repeat with no clock", repeating("Call mum", "", "", store.FrequencyDaily), "time is empty"},
 		// A repeat's calendar part comes from its first occurrence, so a weekly
 		// one with no first day has nothing to land on.
-		{"a weekly repeat with no first day", repeating("Call mum", "", "19:00", store.FrequencyWeekly), []Field{FieldDate}},
+		{"a weekly repeat with no first day", repeating("Call mum", "", "19:00", store.FrequencyWeekly), "date is empty"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			f := newFixture(t, turn(test.write))
-			job := f.textJob(t, "remind me to call mum")
+			f := newFixture(t, answerWith(test.record), answerWith(test.record))
+			job := wantStatus(t, f.runText(t, "remind me to call mum"), store.JobFailed)
 
-			f.runOnce(t)
-
-			if stored := f.load(t, job.JobID); stored.Status != store.JobClarifying {
-				t.Fatalf("status = %q, want clarifying", stored.Status)
-			}
-			if got := f.missingFields(t, job.JobID); !reflect.DeepEqual(got, test.want) {
-				t.Fatalf("missing = %v, want %v", got, test.want)
+			if faults := strings.Join(f.lintFaults(t, job.JobID), "\n"); !strings.Contains(faults, test.want) {
+				t.Fatalf("lint = %q, want it to name %q", faults, test.want)
 			}
 			for _, table := range []string{"Reminder", "RecurringReminder"} {
 				if n := f.count(t, `SELECT count(*) FROM `+table); n != 0 {
-					t.Fatalf("%s rows = %d, want none while the Job asks", table, n)
+					t.Fatalf("%s rows = %d, want none from a refused answer", table, n)
 				}
 			}
-			if f.pusher.calls != 1 {
-				t.Fatalf("pushes = %d, want the one question", f.pusher.calls)
+			if f.pusher.calls != 1 || f.pusher.body != FallbackMessage {
+				t.Fatalf("pushes = %d %q, want the failure sentence", f.pusher.calls, f.pusher.body)
 			}
 		})
 	}
 }
 
-// A turn with nothing in it is the model giving up: every field is the user's to
-// supply, and the Job asks rather than closing on nothing.
-func TestWorkerAsksWhenTheModelProposesNothing(t *testing.T) {
+// Every user turn is screened, including the capture that retries a failed Job.
+func TestWorkerScreensACaptureAfterAFailure(t *testing.T) {
 	f := newFixture(t)
-	job := f.textJob(t, "mumble")
+	f.model.finalizeErr = &failure.Refusal{Service: "agent", Status: http.StatusUnauthorized, Message: "missing or invalid api key"}
+	job := wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobFailed)
+	if f.model.prescreens != 1 {
+		t.Fatalf("prescreens = %d, want the failed run to have been screened once", f.model.prescreens)
+	}
 
+	f.model.finalizeErr = nil
+	f.model.turns = []Answer{answerWith(oneOff("Buy glue", "2026-10-25", "18:00"))}
+	f.reply(t, job.JobID, "buy glue at 6pm tomorrow")
 	f.runOnce(t)
 
-	if stored := f.load(t, job.JobID); stored.Status != store.JobClarifying {
-		t.Fatalf("status = %q, want clarifying", stored.Status)
-	}
-	if got := f.missingFields(t, job.JobID); !reflect.DeepEqual(got,
-		[]Field{FieldEvent, FieldZone, FieldDate, FieldTime}) {
-		t.Fatalf("missing = %v, want every field", got)
+	wantStatus(t, f.load(t, job.JobID), store.JobComplete)
+	if f.model.prescreens != 2 {
+		t.Fatalf("prescreens = %d, want the retried capture screened again", f.model.prescreens)
 	}
 }
 
-// The question is the model's own sentence when it wrote a usable one, so a capture's
-// edge case is covered by wording rather than by one canned line — and the writer is
-// told which fields are missing, because that is what it has to ask for.
-func TestWorkerPrefersTheModelsQuestion(t *testing.T) {
-	f := newFixture(t, turn(oneOff("Call mum", "", "19:00")))
-	f.model.question = `Which day should I set for "call mum"?`
-	job := f.textJob(t, "remind me to call mum at 7pm")
+// askedQuestions is the Job's own question count, which is what the cap is measured
+// against: a commit sentence and a failure notice are not questions, so neither spends a
+// round of the cap.
+func TestAskedQuestionsCountsOnlyQuestions(t *testing.T) {
+	conversation := []store.Message{
+		{Role: "user", Text: "buy glue"},
+		{Role: "assistant", Text: FallbackMessage},
+		{Role: "assistant", Text: reminderReply},
+		{Role: "assistant", Text: "When should I remind you?"},
+	}
+	if got := askedQuestions(conversation); got != 1 {
+		t.Fatalf("askedQuestions = %d, want only the question counted", got)
+	}
+}
 
-	f.runOnce(t)
+// The faults go back to the model as the retry's own conversation, so a fixable answer costs
+// one more budget instead of reaching the user as a question.
+func TestWorkerRetriesTheLoopWithTheFaults(t *testing.T) {
+	f := newFixture(t,
+		answerWith(oneOff("Call mum", "", "19:00")),
+		answerWith(oneOff("Call mum", "2026-10-25", "19:00")))
+	job := wantStatus(t, f.runText(t, "remind me to call mum at 7pm"), store.JobComplete)
+	if _, _, local, _ := f.reminder(t); local.String != "2026-10-25T19:00" {
+		t.Fatalf("local = %q, want the corrected day", local.String)
+	}
+	// The retry read the fault the server raised, and the run cost two loop calls and two
+	// strict calls: the second budget is a whole loop, not one extra turn.
+	var note string
+	for _, message := range f.model.sent {
+		if message.Role == "user" && strings.HasPrefix(message.Content, "lint:") {
+			note = message.Content
+		}
+	}
+	if !strings.HasPrefix(note, "lint: date is empty") {
+		t.Fatalf("retry note = %q, want the linter's own words", note)
+	}
+	if detail := f.agentTrace(t, job.JobID); detail["turns"] != float64(4) {
+		t.Fatalf("turns = %v, want two loop calls and two strict calls", detail["turns"])
+	}
+}
 
-	stored := f.load(t, job.JobID)
-	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != f.model.question {
+// A model that answers prose and never submits spends the loop's budget: the missing
+// submit_plan is a fault like any other, and the second one fails the Job.
+func TestWorkerLintsALoopThatNeverSubmits(t *testing.T) {
+	f := newFixture(t)
+	f.model.stalls = true
+	job := wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobFailed)
+	if faults := strings.Join(f.lintFaults(t, job.JobID), "\n"); !strings.Contains(faults, "without submit_plan") {
+		t.Fatalf("lint = %q, want the missing submit named", faults)
+	}
+	// Two runs, each spending the whole budget: the cap is what bounds a stuck model.
+	if detail := f.agentTrace(t, job.JobID); detail["turns"] != float64(2*maxLoopCalls) {
+		t.Fatalf("turns = %v, want both budgets spent", detail["turns"])
+	}
+}
+
+// A question is the one answer the linter does not check: asking is the point, and the Job
+// goes to the clarification path with the model's own sentence.
+func TestWorkerAsksWhenTheModelAsks(t *testing.T) {
+	const question = "When should I remind you about buying glue?"
+	f := newFixture(t, asked(question))
+	stored := wantStatus(t, f.runText(t, "buy glue when I'm home"), store.JobClarifying)
+	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != question {
 		t.Fatalf("question = %q, want the model's own", got)
 	}
-	if len(f.model.missing) != 1 || !reflect.DeepEqual(f.model.missing[0], []Field{FieldDate}) {
-		t.Fatalf("the writer was handed %v, want the date", f.model.missing)
+	if f.pusher.calls != 1 || f.pusher.body != question {
+		t.Fatalf("push = %d %q, want the question", f.pusher.calls, f.pusher.body)
 	}
-	if f.pusher.body != f.model.question {
-		t.Fatalf("push body = %q, want the question", f.pusher.body)
+	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 0 {
+		t.Fatalf("reminders = %d, want an ask to commit nothing", n)
 	}
 }
 
@@ -516,26 +630,16 @@ func TestWorkerFallsBackWhenTheQuestionIsUnusable(t *testing.T) {
 	cases := []struct {
 		name    string
 		written string
-		askErr  error
 	}{
-		{"nothing", "", nil},
-		{"not a question", "I don't know.", nil},
-		{"a question that asserts a clock", "Was that at 6pm?", nil},
-		{"a leaked placeholder", "Is <unknown> right?", nil},
-		{"the model failed", "", errors.New("agent: call model: connection refused")},
+		{"nothing", ""},
+		{"not a question", "I don't know."},
+		{"a question that asserts a clock", "Was that at 6pm?"},
+		{"a leaked placeholder", "Is <unknown> right?"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			f := newFixture(t, turn(oneOff("Call mum", "", "19:00")))
-			f.model.question, f.model.askErr = test.written, test.askErr
-			job := f.textJob(t, "remind me to call mum at 7pm")
-
-			f.runOnce(t)
-
-			stored := f.load(t, job.JobID)
-			if stored.Status != store.JobClarifying {
-				t.Fatalf("status = %q, want clarifying", stored.Status)
-			}
+			f := newFixture(t, asked(test.written))
+			stored := wantStatus(t, f.runText(t, "remind me to call mum at 7pm"), store.JobClarifying)
 			if got := stored.Conversation[len(stored.Conversation)-1].Text; got != defaultQuestion {
 				t.Fatalf("question = %q, want the canned sentence", got)
 			}
@@ -543,49 +647,39 @@ func TestWorkerFallsBackWhenTheQuestionIsUnusable(t *testing.T) {
 	}
 }
 
-// A Job that has already asked twice gets the canned sentence rather than costing a
-// third model call: the writer is not reached at all on that round.
+// A Job that has already asked twice gets the canned sentence on the third round: the
+// question is no longer a second call, so the cap is what keeps one Job from spending
+// its turns on wording it would only repeat.
 func TestWorkerStopsAskingTheModelAtTheClarityCap(t *testing.T) {
-	refused := turn(oneOff("Call mum", "", "19:00"))
-	f := newFixture(t, refused, refused, refused)
-	f.model.question = "Which day should I set?"
-	job := f.textJob(t, "remind me to call mum at 7pm")
+	const question = "Which day should I set?"
+	f := newFixture(t, asked(question), asked(question), asked(question))
+	job := f.runText(t, "remind me to call mum at 7pm")
 
-	f.runOnce(t)
 	f.reply(t, job.JobID, "next tuesday")
 	f.runOnce(t)
 	f.reply(t, job.JobID, "next tuesday at 7pm")
 	f.runOnce(t)
 
-	if len(f.model.asks) != maxClarityRounds {
-		t.Fatalf("the writer was asked %d times, want %d", len(f.model.asks), maxClarityRounds)
-	}
 	stored := f.load(t, job.JobID)
+	if got := stored.Conversation[1].Text; got != question {
+		t.Fatalf("first question = %q, want the model's", got)
+	}
 	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != defaultQuestion {
 		t.Fatalf("question = %q, want the canned sentence on the last round", got)
 	}
 }
 
-// The two-turn flow: the first turn cannot pin a day, the answer supplies it, and the
-// second turn commits against the same conversation.
+// The two-turn flow: the first turn asks for the day it cannot pin, the answer supplies it,
+// and the second turn commits against the same conversation.
 func TestWorkerCommitsTheAnsweredTurn(t *testing.T) {
 	f := newFixture(t,
-		turn(oneOff("Buy glue", "", "18:00")),
-		turn(oneOff("Buy glue", "2026-10-25", "18:00")))
-	job := f.textJob(t, "buy glue when I'm home")
-
-	f.runOnce(t)
-	if stored := f.load(t, job.JobID); stored.Status != store.JobClarifying {
-		t.Fatalf("status = %q, want the question first", stored.Status)
-	}
+		asked("Which day should I set?"),
+		answerWith(oneOff("Buy glue", "2026-10-25", "18:00")))
+	job := wantStatus(t, f.runText(t, "buy glue when I'm home"), store.JobClarifying)
 
 	f.reply(t, job.JobID, "tomorrow at 6pm")
 	f.runOnce(t)
-
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want the commit", stored.Status)
-	}
+	stored := wantStatus(t, f.load(t, job.JobID), store.JobComplete)
 	// The answer earns the whole attempt budget back, so a resumed Job is never
 	// poisoned by the questions it already answered.
 	if stored.RetryCount != 0 {
@@ -601,20 +695,52 @@ func TestWorkerCommitsTheAnsweredTurn(t *testing.T) {
 	}
 }
 
+// A provider that dies on the strict call is a failure of the provider, not of the answer: the
+// run retries with backoff rather than spending another loop on the same dead endpoint. An
+// answer that is not the schema is the opposite — the model's own mistake — so it is a fault the
+// loop is told about, and it is the retry that costs a second budget.
+func TestWorkerSeparatesAProviderFailureFromABadAnswer(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        error
+		wantStatus string
+		wantLint   string
+	}{
+		{"the provider never answered", errors.New("agent: model returned no content (finish length)"),
+			store.JobOpen, ""},
+		{"the answer is not the schema", schemaError{errors.New("agent: planner answer is not the schema")},
+			store.JobFailed, "not the schema"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t)
+			f.model.finalizeErr = test.err
+			stored := wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), test.wantStatus)
+
+			if test.wantLint == "" {
+				// A provider failure leaves nothing for the model to read: the Job is
+				// retried, and the Trace keeps the error.
+				return
+			}
+			faults := strings.Join(f.lintFaults(t, stored.JobID), "\n")
+			if !strings.Contains(faults, test.wantLint) {
+				t.Fatalf("lint = %q, want it to name %q", faults, test.wantLint)
+			}
+		})
+	}
+}
+
 // A model that cannot be reached is a retry, not a failure, while the attempt budget
 // holds: the Job goes back to the queue and commits nothing.
 func TestWorkerRetriesWhenTheModelFails(t *testing.T) {
 	f := newFixture(t)
 	f.model.err = errors.New("agent: call model: connection refused")
-	job := f.textJob(t, "buy glue at 6pm tomorrow")
+	stored := f.runText(t, "buy glue at 6pm tomorrow")
 
-	f.runOnce(t)
-
-	stored := f.load(t, job.JobID)
 	if stored.Status != store.JobOpen || stored.RetryCount != 1 {
 		t.Fatalf("job = %q retry %d, want open on the first retry", stored.Status, stored.RetryCount)
 	}
-	if detail := f.agentTrace(t, job.JobID); detail["outcome"] != "retry" {
+	if detail := f.agentTrace(t, stored.JobID); detail["outcome"] != "retry" {
 		t.Fatalf("trace outcome = %v, want retry", detail["outcome"])
 	}
 	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 0 {
@@ -629,15 +755,8 @@ func TestWorkerRetriesWhenTheModelFails(t *testing.T) {
 // path's own sentence, rather than burning the whole budget on it.
 func TestWorkerFailsOnAPermanentRefusal(t *testing.T) {
 	f := newFixture(t)
-	f.model.err = &Error{Status: http.StatusUnauthorized, Message: "missing or invalid api key"}
-	job := f.textJob(t, "buy glue at 6pm tomorrow")
-
-	f.runOnce(t)
-
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobFailed {
-		t.Fatalf("status = %q, want failed", stored.Status)
-	}
+	f.model.err = &failure.Refusal{Service: "agent", Status: http.StatusUnauthorized, Message: "missing or invalid api key"}
+	stored := wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobFailed)
 	if last := stored.Conversation[len(stored.Conversation)-1]; last.Role != "assistant" || last.Text != FallbackMessage {
 		t.Fatalf("last turn = %+v, want the fallback sentence", last)
 	}
@@ -649,13 +768,10 @@ func TestWorkerFailsOnAPermanentRefusal(t *testing.T) {
 // The durable half can fail too, and a commit that did not land is retried rather than
 // asked about: the user owes Blurt nothing.
 func TestWorkerRetriesWhenTheCommitFails(t *testing.T) {
-	f := newFixture(t, turn(oneOff("Buy glue", "2026-10-25", "18:00")))
-	f.worker.Loop.Store = faultyStore{Store: f.jobs, commit: errors.New("disk is full")}
-	job := f.textJob(t, "buy glue at 6pm tomorrow")
+	f := newFixture(t, answerWith(oneOff("Buy glue", "2026-10-25", "18:00")))
+	f.loop.Store = faultyStore{Store: f.jobs, commit: errors.New("disk is full")}
+	stored := f.runText(t, "buy glue at 6pm tomorrow")
 
-	f.runOnce(t)
-
-	stored := f.load(t, job.JobID)
 	if stored.Status != store.JobOpen || stored.RetryCount != 1 {
 		t.Fatalf("job = %q retry %d, want open on the first retry", stored.Status, stored.RetryCount)
 	}
@@ -668,64 +784,33 @@ func TestWorkerRetriesWhenTheCommitFails(t *testing.T) {
 // ordinary retry rather than pinning the worker.
 func TestWorkerStopsAtTheHardDeadline(t *testing.T) {
 	f := newFixture(t)
-	f.worker.Loop.Model = blockingModel{}
-	f.worker.Loop.Timeout = 20 * time.Millisecond
-	job := f.textJob(t, "buy glue at 6pm tomorrow")
-
-	f.runOnce(t)
-
-	if stored := f.load(t, job.JobID); stored.Status != store.JobOpen {
-		t.Fatalf("status = %q, want the Job back in the queue", stored.Status)
-	}
+	f.loop.Planner.Model = blockingModel{}
+	f.loop.Timeout = 20 * time.Millisecond
+	wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobOpen)
 }
 
 // Recall is advisory, exactly like the transcript gate: a failing read is dropped rather
 // than failing a capture the user already made, and the prompt still carries the anchor
 // zone and the loop's own clock.
 func TestWorkerRecallIsAdvisory(t *testing.T) {
-	f := newFixture(t, turn(oneOff("Buy glue", "2026-10-25", "18:00")))
-	f.worker.Loop.Recall = failingRecall{}
-	job := f.textJob(t, "buy glue at 6pm tomorrow")
+	f := newFixture(t, answerWith(oneOff("Buy glue", "2026-10-25", "18:00")))
+	f.loop.Recall = &stubRecall{err: errors.New("index is down")}
+	wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
 
-	f.runOnce(t)
-
-	if stored := f.load(t, job.JobID); stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want the capture to survive a failing index", stored.Status)
-	}
 	in := f.model.inputs[0]
 	if !in.Now.Equal(pinned) || in.CurrentTZ != zone {
 		t.Fatalf("input = %+v, want the pinned clock and the anchor zone", in)
 	}
-	if len(in.Nearby) != 0 || len(in.Remembered) != 0 {
-		t.Fatalf("input = %+v, want the failed reads dropped", in)
+	if len(in.Remembered) != 0 {
+		t.Fatalf("input = %+v, want the failed read dropped", in)
 	}
 }
-
-// failingRecall is the advisory read that cannot work.
-type failingRecall struct{}
-
-func (failingRecall) Nearby(context.Context, int64, time.Time, time.Time) ([]store.Reminder, error) {
-	return nil, errors.New("index is down")
-}
-
-func (failingRecall) Remembered(context.Context, int64, string) ([]store.Memory, error) {
-	return nil, errors.New("index is down")
-}
-
-var _ Recall = failingRecall{}
 
 // A fact becomes a Memory and closes the Job. It carries no zone, day, clock or pattern, and
 // MissingFields accepts it without any: a Memory is context, not an interruption.
 func TestWorkerCommitsAMemory(t *testing.T) {
-	f := newFixture(t, turn(Write{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
-	job := f.textJob(t, "remember that milk is cheaper at store A")
-
-	f.runOnce(t)
-
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want complete", stored.Status)
-	}
+	f := newFixture(t, answerWith(Record{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
+	stored := wantStatus(t, f.runText(t, "remember that milk is cheaper at store A"), store.JobComplete)
 	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != memoryReply {
 		t.Fatalf("reply = %q, want %q", got, memoryReply)
 	}
@@ -734,10 +819,7 @@ func TestWorkerCommitsAMemory(t *testing.T) {
 	}
 	// The tagger runs either way; with nothing scripted it has nothing to write.
 	f.tagCalls(t, 1)
-	var text, tags string
-	if err := f.handle.Read.QueryRow(`SELECT Text, Tags FROM Memory`).Scan(&text, &tags); err != nil {
-		t.Fatalf("read memory: %v", err)
-	}
+	text, tags := f.memoryRow(t)
 	if text != "Milk is cheaper at store A" {
 		t.Fatalf("memory = %q", text)
 	}
@@ -749,15 +831,9 @@ func TestWorkerCommitsAMemory(t *testing.T) {
 // The generated features land on the Memory the run commits, which is what lets a later
 // capture worded nothing like the fact still find it.
 func TestWorkerTagsTheMemoryItCommits(t *testing.T) {
-	f := newFixture(t, turn(Write{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
+	f := newFixture(t, answerWith(Record{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
 	f.model.tags = []string{"milk", "grocery", "price"}
-	job := f.textJob(t, "remember that milk is cheaper at store A")
-
-	f.runOnce(t)
-
-	if stored := f.load(t, job.JobID); stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want complete", stored.Status)
-	}
+	wantStatus(t, f.runText(t, "remember that milk is cheaper at store A"), store.JobComplete)
 	if tags := f.memoryTags(t, "Milk is cheaper at store A"); tags != "milk,grocery,price" {
 		t.Fatalf("tags = %q, want the generated features", tags)
 	}
@@ -768,41 +844,25 @@ func TestWorkerTagsTheMemoryItCommits(t *testing.T) {
 	}
 }
 
-// Tagging is advisory, like recall: a tagger that fails leaves the Memory without
+// Tagger is advisory, like recall: a tagger that fails leaves the Memory without
 // features rather than failing a capture the user already made.
 func TestWorkerDropsTagsWhenTheTaggerFails(t *testing.T) {
-	f := newFixture(t, turn(Write{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
+	f := newFixture(t, answerWith(Record{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
 	f.model.tagErr = errors.New("agent: call model: connection refused")
-	job := f.textJob(t, "remember that milk is cheaper at store A")
-
-	f.runOnce(t)
-
-	if stored := f.load(t, job.JobID); stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want the capture to survive a failing tagger", stored.Status)
-	}
+	wantStatus(t, f.runText(t, "remember that milk is cheaper at store A"), store.JobComplete)
 	// The call is on the tagger's own goroutine, so waiting for it is what makes an empty
 	// column a real assertion: the tagger was asked, and it wrote nothing.
 	f.tagCalls(t, 1)
-	var tags string
-	if err := f.handle.Read.QueryRow(`SELECT Tags FROM Memory`).Scan(&tags); err != nil {
-		t.Fatalf("read memory: %v", err)
-	}
-	if tags != "" {
+	if _, tags := f.memoryRow(t); tags != "" {
 		t.Fatalf("tags = %q, want none", tags)
 	}
 }
 
 // An ask exit commits nothing, so it costs no tag call: tagging runs at commit, not at accept.
 func TestWorkerDoesNotTagOnAnAskExit(t *testing.T) {
-	f := newFixture(t, turn(Write{Kind: KindReminder, Text: "Buy glue", Zone: zone}))
+	f := newFixture(t, asked("When should I remind you about buying glue?"))
 	f.model.tags = []string{"milk"}
-	job := f.textJob(t, "buy glue when I'm home")
-
-	f.runOnce(t)
-
-	if stored := f.load(t, job.JobID); stored.Status != store.JobClarifying {
-		t.Fatalf("status = %q, want clarifying", stored.Status)
-	}
+	wantStatus(t, f.runText(t, "buy glue when I'm home"), store.JobClarifying)
 	// Nothing was scheduled, so a moment's grace is all a wrong implementation would need to
 	// show itself here.
 	time.Sleep(20 * time.Millisecond)
@@ -814,20 +874,12 @@ func TestWorkerDoesNotTagOnAnAskExit(t *testing.T) {
 // A capture that carries an event and a fact commits both in one step, and only the fact
 // costs a tag call — the Reminder has no features to generate.
 func TestWorkerCommitsAnEventAndAFact(t *testing.T) {
-	f := newFixture(t, Turn{Writes: []Write{
+	f := newFixture(t, Answer{Kind: AnswerRecords, Records: []Record{
 		oneOff("Lunch at Ikea", "2026-10-30", "13:00"),
 		{Kind: KindMemory, Text: "I have an Ikea voucher"},
 	}})
 	f.model.tags = []string{"ikea", "voucher", "lunch"}
-	job := f.textJob(t, "lunch at Ikea this Friday at 1pm, and I have an Ikea voucher")
-
-	f.runOnce(t)
-
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want complete", stored.Status)
-	}
-	stored = f.load(t, job.JobID)
+	stored := wantStatus(t, f.runText(t, "lunch at Ikea this Friday at 1pm, and I have an Ikea voucher"), store.JobComplete)
 	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != reminderReply {
 		t.Fatalf("reply = %q, want the Reminder's", got)
 	}
@@ -842,32 +894,22 @@ func TestWorkerCommitsAnEventAndAFact(t *testing.T) {
 	}
 }
 
-// Tagging is off the run's path: a tagger that never answers still leaves the Memory committed
+// Tagger is off the run's path: a tagger that never answers still leaves the Memory committed
 // and the Job closed, because by then the user has already read the reply.
 func TestWorkerCommitsWithoutWaitingForTheTagger(t *testing.T) {
-	f := newFixture(t, turn(Write{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
+	f := newFixture(t, answerWith(Record{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
 	f.model.tags = []string{"milk", "grocery", "price"}
 	f.model.tagBlock = true
-	f.worker.Loop.AttemptTimeout = 50 * time.Millisecond
-	job := f.textJob(t, "remember that milk is cheaper at store A")
+	f.loop.AttemptTimeout = 50 * time.Millisecond
 
 	// The run returns with the tagger still held.
-	f.runOnce(t)
-
-	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobComplete {
-		t.Fatalf("status = %q, want the capture closed without its features", stored.Status)
-	}
+	stored := wantStatus(t, f.runText(t, "remember that milk is cheaper at store A"), store.JobComplete)
 	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != memoryReply {
 		t.Fatalf("reply = %q, want %q", got, memoryReply)
 	}
 	// The row is there and its features are not: they arrive later, or not at all.
 	f.tagCalls(t, 1)
-	var text, tags string
-	if err := f.handle.Read.QueryRow(`SELECT Text, Tags FROM Memory`).Scan(&text, &tags); err != nil {
-		t.Fatalf("read memory: %v", err)
-	}
-	if text != "Milk is cheaper at store A" || tags != "" {
+	if text, tags := f.memoryRow(t); text != "Milk is cheaper at store A" || tags != "" {
 		t.Fatalf("memory = %q %q, want the fact committed untagged", text, tags)
 	}
 }

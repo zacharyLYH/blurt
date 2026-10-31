@@ -32,23 +32,7 @@ type MemoryStore struct {
 	read *sql.DB
 }
 
-// insertMemory runs inside the Job's own transaction, for the same reason
-// insertReminder does, and skips a text this Job already committed.
-func insertMemory(ctx context.Context, tx execer, memory Memory) error {
-	if memory.CreatedAt == "" {
-		memory.CreatedAt = now()
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO Memory (UserId, Text, Tags, SourceJobId, CreatedAt)
-		SELECT ?, ?, ?, ?, ?
-		WHERE NOT EXISTS (SELECT 1 FROM Memory WHERE SourceJobId = ? AND Text = ?)`,
-		memory.UserID, memory.Text, memory.Tags, nullID(memory.SourceJobID), memory.CreatedAt,
-		nullID(memory.SourceJobID), memory.Text); err != nil {
-		return fmt.Errorf("insert memory: %w", err)
-	}
-	return nil
-}
-
+// NewMemoryStore takes the read pool: retrieval is the only thing it does.
 func NewMemoryStore(read *sql.DB) *MemoryStore {
 	return &MemoryStore{read: read}
 }
@@ -92,6 +76,41 @@ func (s *MemoryStore) Search(ctx context.Context, userID int64, query string, li
 	return memories, nil
 }
 
+// insertMemory runs inside the Job's own transaction, for the same reason
+// insertReminder does, and skips a text this Job already committed.
+func insertMemory(ctx context.Context, tx execer, memory Memory) error {
+	if memory.CreatedAt == "" {
+		memory.CreatedAt = now()
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO Memory (UserId, Text, Tags, SourceJobId, CreatedAt)
+		SELECT ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (SELECT 1 FROM Memory WHERE SourceJobId = ? AND Text = ?)`,
+		memory.UserID, memory.Text, memory.Tags, nullID(memory.SourceJobID), memory.CreatedAt,
+		nullID(memory.SourceJobID), memory.Text); err != nil {
+		return fmt.Errorf("insert memory: %w", err)
+	}
+	return nil
+}
+
+// queryWords is the words of a text query: lowercased, punctuation dropped, deduped, and capped
+// at limit words when limit is positive. One definition of "a word" serves both searches — the
+// FTS expression and the LIKE lookup — so the two can never disagree about where a term begins.
+func queryWords(query string, limit int) []string {
+	seen := map[string]bool{}
+	words := []string{}
+	for _, word := range strings.FieldsFunc(strings.ToLower(query), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		if seen[word] || (limit > 0 && len(words) == limit) {
+			continue
+		}
+		seen[word] = true
+		words = append(words, word)
+	}
+	return words
+}
+
 // matchQuery turns a capture into an FTS5 MATCH expression. Raw text cannot go
 // in as-is: FTS5 parses a grammar of its own, so a stray apostrophe or the word
 // AND is a syntax error that would fail the whole search. Every word is quoted
@@ -102,11 +121,8 @@ func (s *MemoryStore) Search(ctx context.Context, userID int64, query string, li
 // other term, so the table's porter tokenizer stems both sides and "groceries"
 // still reaches "grocery". Do not add a stemmer here.
 func matchQuery(query string) string {
-	words := strings.FieldsFunc(query, func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
-	})
-	terms := make([]string, 0, len(words))
-	for _, word := range words {
+	terms := []string{}
+	for _, word := range queryWords(query, 0) {
 		terms = append(terms, `"`+strings.ReplaceAll(word, `"`, `""`)+`"`)
 	}
 	return strings.Join(terms, " OR ")

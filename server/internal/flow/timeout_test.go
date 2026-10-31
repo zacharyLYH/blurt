@@ -8,7 +8,6 @@ import (
 	"blurt/internal/agent"
 	"blurt/internal/capture"
 	"blurt/internal/store"
-	"blurt/internal/stt"
 )
 
 // A provider that hangs past the worker's own deadline retries, and at the
@@ -34,32 +33,10 @@ func TestPipelineSlowTranscriptionRetriesThenFails(t *testing.T) {
 	if got := strings.Join(p.outcomes(t, job.JobID, store.TranscriptionStage), ","); got != "retry,retry,error" {
 		t.Fatalf("outcomes = %s, want retry,retry,error", got)
 	}
+	// A clip that never transcribes never reaches the agent: three failed attempts
+	// cost the model nothing.
+	p.wantAsks(t, 0, 0, 0, 0)
 	p.drain(t, p.transcription, "transcription queue")
-}
-
-// The transcript gate is advisory: a classifier that hangs past its own deadline
-// must not stop a capture. The transcript is still saved, and the reason lands
-// in the Trace.
-func TestPipelineSlowClassifierStillSavesTheTranscript(t *testing.T) {
-	p := newPump(t, reminderTurn("buy glue", "tomorrow at 6pm"))
-	p.captureWorker.Gate = blockingDecider{}
-	p.captureWorker.GateTimeout = 20 * time.Millisecond
-	p.start()
-	job := p.voice(t, "Asia/Singapore")
-
-	done := p.settle(t, job.JobID, status(store.JobComplete), "the capture to survive the slow classifier")
-	if first := done.Conversation[0]; first.Text != stt.FakeTranscript {
-		t.Fatalf("clip turn = %+v, want the transcript saved", first)
-	}
-	saved := false
-	for _, detail := range p.traces(t, job.JobID, store.TranscriptionStage) {
-		if detail["gate"] == "error" && detail["outcome"] == "ok" {
-			saved = true
-		}
-	}
-	if !saved {
-		t.Fatal("no trace recorded the gate error beside a saved transcript")
-	}
 }
 
 // A model that never answers is bounded by the run's own deadline: it retries,
@@ -68,7 +45,7 @@ func TestPipelineSlowClassifierStillSavesTheTranscript(t *testing.T) {
 func TestPipelineSlowModelRetriesThenFails(t *testing.T) {
 	p := newPump(t)
 	p.model.blocks = true
-	p.agentWorker.Loop.Timeout = 20 * time.Millisecond
+	p.loop.Timeout = 20 * time.Millisecond
 	p.start()
 	job := p.text(t, "buy glue tomorrow at 6pm", "Asia/Singapore")
 
@@ -86,5 +63,8 @@ func TestPipelineSlowModelRetriesThenFails(t *testing.T) {
 	if got := strings.Join(p.outcomes(t, job.JobID, store.AgentStage), ","); got != "retry,retry,error" {
 		t.Fatalf("outcomes = %s, want retry,retry,error", got)
 	}
+	// Each attempt screens and then hangs in the planner: three of each, and the
+	// checker and tagger were never reached.
+	p.wantAsks(t, 3, 3, 0, 0)
 	p.drain(t, p.agent, "agent queue")
 }

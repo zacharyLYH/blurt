@@ -23,6 +23,7 @@ import (
 	"blurt/internal/httpapi"
 	"blurt/internal/push"
 	"blurt/internal/queue"
+	"blurt/internal/secret"
 	"blurt/internal/store"
 )
 
@@ -142,7 +143,7 @@ func consume(t *testing.T, stream queue.Stream) (int64, int) {
 
 // newTestStack boots the API on a throwaway database. A nil mailer is the
 // BLURT_FAKE_PIN path: PINs are fixed and nothing is sent.
-func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, pusher httpapi.Pusher) (*http.Client, string, *db.DB, *queue.Queues) {
+func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, pusher push.Notifier) (*http.Client, string, *db.DB, *queue.Queues) {
 	t.Helper()
 	handle, err := db.Open(t.TempDir())
 	if err != nil {
@@ -167,6 +168,7 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 		Queues:         queues,
 		VAPIDPublicKey: testVAPIDPublicKey,
 		AllowedOrigins: []string{testOrigin},
+		EncryptionKey:  testModelKey(),
 	}))
 	t.Cleanup(server.Close)
 
@@ -917,3 +919,7 @@ func TestLogoutRevokesSession(t *testing.T) {
 		t.Fatalf("after logout status = %d, want 401: %s", status, body)
 	}
 }
+
+// testModelKey is the setup page's sealing key: any 32 bytes, because the tests open the
+// row back through the same key the endpoint used.
+func testModelKey() []byte { return bytes.Repeat([]byte{7}, secret.KeyLen) }

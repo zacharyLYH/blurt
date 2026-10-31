@@ -23,6 +23,7 @@ type Store struct {
 	dir string
 }
 
+// NewStore keeps captured clips under dataDir until a worker retires them.
 func NewStore(dataDir string) (*Store, error) {
 	dir := filepath.Join(dataDir, audioDir)
 	if err := os.MkdirAll(dir, 0o750); err != nil {

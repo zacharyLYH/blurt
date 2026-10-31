@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"blurt/internal/config"
+	"blurt/internal/failure"
 )
 
 // The gateway route is not OpenAI's: one JSON body carrying a base64 WAV data
@@ -65,9 +66,9 @@ func TestHTTPRefusalMessage(t *testing.T) {
 	client := NewHTTP(config.STT{URL: server.URL, Model: "phonon"})
 	_, err := client.Transcribe(context.Background(), strings.NewReader("audio"))
 
-	var refusal *Error
+	var refusal *failure.Refusal
 	if !errors.As(err, &refusal) {
-		t.Fatalf("err is not *Error: %v", err)
+		t.Fatalf("err is not *failure.Refusal: %v", err)
 	}
 	if refusal.Status != http.StatusUnauthorized || refusal.Retryable() {
 		t.Fatalf("status = %d retryable = %v", refusal.Status, refusal.Retryable())
@@ -96,12 +97,12 @@ func TestHTTPErrorRetryability(t *testing.T) {
 		_, err := client.Transcribe(context.Background(), strings.NewReader("audio"))
 		server.Close()
 
-		var refusal *Error
+		var refusal *failure.Refusal
 		if !strings.Contains(err.Error(), "stt:") {
 			t.Fatalf("status %d err = %v", test.status, err)
 		}
 		if ok := errors.As(err, &refusal); !ok {
-			t.Fatalf("status %d err is not *Error: %v", test.status, err)
+			t.Fatalf("status %d err is not *failure.Refusal: %v", test.status, err)
 		}
 		if refusal.Retryable() != test.retryable {
 			t.Fatalf("status %d retryable = %v, want %v", test.status, refusal.Retryable(), test.retryable)

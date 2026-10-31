@@ -28,17 +28,11 @@ const (
 	clockLayout = "3:04 PM MST"
 )
 
-// Notifier is the push fan-out the emitter fires through. An interface so a test can
-// watch a firing without a relay.
-type Notifier interface {
-	NotifyUser(ctx context.Context, userID int64, msg push.Message) (push.Result, error)
-}
-
 // Emitter fires due Reminders until its context ends. Reminders and Pusher are the
 // wiring; the rest has a default, so a caller sets only what it wants to change.
 type Emitter struct {
 	Reminders *store.ReminderStore
-	Pusher    Notifier
+	Pusher    push.Notifier
 	// Poll is how often due Reminders are looked for; zero means defaultPoll.
 	Poll time.Duration
 	// Spacing is the pause between two notifications from one sweep; zero means

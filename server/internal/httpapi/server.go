@@ -3,7 +3,6 @@
 package httpapi
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -29,13 +28,6 @@ type PINMailer interface {
 	SendPIN(to, pin string) error
 }
 
-// Pusher delivers one notification to every device a user is signed in on. An
-// interface so the HTTP layer can be tested without a relay. Nil is valid: the
-// send endpoint then reports that sending is not configured.
-type Pusher interface {
-	NotifyUser(ctx context.Context, userID int64, msg push.Message) (push.Result, error)
-}
-
 // Deps is everything the handlers need.
 type Deps struct {
 	DB       *sql.DB
@@ -43,8 +35,9 @@ type Deps struct {
 	Sessions *store.SessionStore
 	Pins     *auth.PinStore
 	Mailer   PINMailer
-	// Pusher sends notifications to the user's devices.
-	Pusher Pusher
+	// Pusher sends notifications to the user's devices. Nil is valid: the send
+	// endpoint then reports that sending is not configured.
+	Pusher push.Notifier
 	// Jobs and Audio make up the capture path. Nil is valid for tests that do
 	// not exercise it; the handlers answer 501 instead of panicking.
 	Jobs   *store.JobStore
@@ -58,8 +51,12 @@ type Deps struct {
 	// AllowedOrigins guards unsafe requests against CSRF, alongside the
 	// SameSite=Lax session cookie.
 	AllowedOrigins []string
+	// EncryptionKey seals a user's model API key at rest. Nil leaves model setup
+	// unconfigured, which the endpoint reports rather than storing a plaintext key.
+	EncryptionKey []byte
 }
 
+// Server carries the handler's dependencies.
 type Server struct {
 	Deps
 }
@@ -74,6 +71,10 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/auth/verify-pin", s.verifyPin)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/user", s.requireUser(s.getUser))
+	// The setup page writes the one model this user's Jobs plan with; the key is
+	// sealed before it reaches the row.
+	mux.HandleFunc("POST /api/user/model", s.requireUser(s.saveModelSettings))
+	mux.HandleFunc("/api/user/model", methodNotAllowed(http.MethodPost))
 	mux.HandleFunc("POST /api/questionnaire", s.requireUser(s.submitQuestionnaire))
 	mux.HandleFunc("GET /api/push/key", s.pushKey)
 	mux.HandleFunc("POST /api/push/subscribe", s.requireUser(s.subscribePush))
@@ -210,6 +211,18 @@ func methodNotAllowed(allowed string) http.HandlerFunc {
 		w.Header().Set("Allow", allowed)
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
 	}
+}
+
+// unavailable answers a handler whose dependency is missing — the test servers, and a
+// stack running with capture or push off — instead of panicking. It reports whether it
+// answered, so a caller is one line: if unavailable(w, s.Jobs == nil, "Capture is not
+// configured.") { return }.
+func unavailable(w http.ResponseWriter, missing bool, message string) bool {
+	if !missing {
+		return false
+	}
+	writeError(w, http.StatusNotImplemented, "not_implemented", message)
+	return true
 }
 
 func writeError(w http.ResponseWriter, code int, slug, message string) {

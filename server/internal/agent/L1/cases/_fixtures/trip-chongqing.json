@@ -1,0 +1,26 @@
+{
+  "memories": [
+    {
+      "text": "I like this noodle shop in Chongqing",
+      "tags": "food,chongqing,noodle,restaurant,travel"
+    },
+    {
+      "text": "I have AirAsia points to use by December",
+      "tags": "travel,flight,airline,points,loyalty,voucher,december"
+    },
+    {
+      "text": "Milk is cheaper at store A than store B",
+      "tags": "grocery,dairy,price,supermarket"
+    },
+    {
+      "text": "The dentist is on the second floor of the mall",
+      "tags": "health,teeth,clinic,mall"
+    }
+  ],
+  "reminders": [
+    {
+      "text": "Standup with the team",
+      "local": "+1d 09:30"
+    }
+  ]
+}

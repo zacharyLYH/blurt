@@ -1,0 +1,13 @@
+current_tz: Asia/Singapore
+now_local: 2026-10-24T18:30
+memories:
+- I have AirAsia points to use by December [travel,flight,points,december]
+- The spare key is with the neighbour [key,neighbour,home]
+- The office wifi password is on the fridge [wifi,office,password]
+- The car insurance renews with Singlife [car,insurance,singlife]
+- Book club meets at the library [book,club,library]
+- The recycling goes out on Tuesday nights [recycling,tuesday,bin]
+- The gym is closed for renovation until November [gym,fitness,renovation]
+- The plumber is Raj and he only works mornings [plumber,home,repair]
+- I owe Dan forty dollars for the concert ticket [money,dan,concert]
+capture: move the dentist to 20 december

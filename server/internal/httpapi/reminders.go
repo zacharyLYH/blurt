@@ -12,8 +12,7 @@ import (
 // what splits them, so a fired one-off and a called-off Reminder land under Past
 // rather than disappearing.
 func (s *Server) listReminders(w http.ResponseWriter, r *http.Request, user store.User) {
-	if s.Reminders == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "Reminders are not configured.")
+	if unavailable(w, s.Reminders == nil, "Reminders are not configured.") {
 		return
 	}
 	upcoming, err := s.Reminders.Upcoming(r.Context(), user.UserID)
@@ -33,8 +32,7 @@ func (s *Server) listReminders(w http.ResponseWriter, r *http.Request, user stor
 // fired, or one that belongs to somebody else, is not found: the status is all this
 // changes, so its history stays readable under Past.
 func (s *Server) cancelReminder(w http.ResponseWriter, r *http.Request, user store.User) {
-	if s.Reminders == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "Reminders are not configured.")
+	if unavailable(w, s.Reminders == nil, "Reminders are not configured.") {
 		return
 	}
 	reminderID, err := strconv.ParseInt(r.PathValue("reminderId"), 10, 64)

@@ -1,0 +1,35 @@
+{
+  "name": "big-note-one-reminder-many-facts",
+  "source": "prd:litmus-6 — one note, one reminder and three facts",
+  "layer": "L1",
+  "size": "large",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me to pack at 7pm on 20 december, and remember that my suitcase is in the loft, the charger is in the drawer, and my passport expires in july",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["pack"],
+        "datetime": "2026-12-20T19:00",
+        "utc": "2026-12-20T11:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": [
+      {
+        "contains": ["suitcase"]
+      },
+      {
+        "contains": ["charger"]
+      },
+      {
+        "contains": ["passport"]
+      }
+    ]
+  }
+}

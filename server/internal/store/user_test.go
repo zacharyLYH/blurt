@@ -74,3 +74,52 @@ func TestSaveQuestionnaireRollsBackOnFailure(t *testing.T) {
 		t.Fatalf("version = %d, want 1: the failed save advanced it", reloaded.LastQuestionnaireVersion)
 	}
 }
+
+// SaveModelSettings is the setup page's write, and ModelSettings is what the loop reads
+// back: the two have to agree on every column, or a user who configured a model still
+// gets the fallback because the resolver sees an empty row.
+func TestSaveModelSettingsRoundTrips(t *testing.T) {
+	handle, err := db.Open(t.TempDir())
+	if err != nil {
+		t.Fatalf("open db: %v", err)
+	}
+	t.Cleanup(func() { handle.Close() })
+	ctx := context.Background()
+
+	users := NewUserStore(handle.Write, handle.Read)
+	user, err := users.EnsureUser(ctx, "Lam", "lam@example.com")
+	if err != nil {
+		t.Fatalf("ensure user: %v", err)
+	}
+	// An unconfigured user is not an error: empty is what the setup page has not filled.
+	empty, err := users.ModelSettings(ctx, user.UserID)
+	if err != nil {
+		t.Fatalf("read unconfigured settings: %v", err)
+	}
+	if empty != (ModelSettings{}) {
+		t.Fatalf("unconfigured settings = %+v, want the zero value", empty)
+	}
+
+	want := ModelSettings{
+		Provider: "openrouter",
+		Model:    "liquid/lfm-2.5-24b-a2b",
+		Endpoint: "https://openrouter.ai/api/v1/chat/completions",
+		APIKey:   "sealed-at-rest",
+	}
+	if err := users.SaveModelSettings(ctx, user.UserID, want); err != nil {
+		t.Fatalf("save settings: %v", err)
+	}
+	got, err := users.ModelSettings(ctx, user.UserID)
+	if err != nil {
+		t.Fatalf("read settings: %v", err)
+	}
+	if got != want {
+		t.Fatalf("settings = %+v, want %+v", got, want)
+	}
+
+	// A user id that is not in the table is a miss, not a silent no-op: the caller has
+	// a real bug if it writes settings for nobody.
+	if err := users.SaveModelSettings(ctx, user.UserID+1, want); err != ErrNotFound {
+		t.Fatalf("save for a missing user = %v, want ErrNotFound", err)
+	}
+}

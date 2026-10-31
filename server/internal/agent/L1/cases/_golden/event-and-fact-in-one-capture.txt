@@ -1,0 +1,3 @@
+current_tz: Asia/Singapore
+now_local: 2026-10-24T18:30
+capture: lunch at Ikea this Friday at 1pm, and I have an Ikea voucher to use by December

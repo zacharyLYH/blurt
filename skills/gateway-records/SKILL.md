@@ -3,12 +3,16 @@ name: gateway-records
 description: Call the self-hosted gateway's chat route to turn a capture into structured Reminder and Memory records (Blurt's AgentLoop model). Use when a model answer is unparseable, a field comes back invented or truncated, or you need the exact /v1/infer body for a chat model.
 ---
 
-# Gateway records over /v1/infer
+# ModelClient records over /v1/infer
 
-The gateway serves phonon (audio), laya (typed decisions), and chat models, all
-over the same `/v1/infer` route with a different `payload`. A chat model takes
-OpenAI-shaped messages plus a JSON schema, and answers with an OpenAI-shaped
-completion nested under `output`:
+The gateway serves phonon (audio) and chat models over the same `/v1/infer` route
+with a different `payload`; laya and its typed decisions are gone. The chat route
+now answers Blurt's three cheap stages — prescreening, the post-agent check and
+the memory tagger. The core planner moved to the user's own hosted provider, which
+speaks OpenAI's envelope: see [openrouter-model](../openrouter-model/SKILL.md).
+
+A chat model takes OpenAI-shaped messages plus a JSON schema, and answers with an
+OpenAI-shaped completion nested under `output`:
 
 ```sh
 curl -s https://<gateway>/v1/infer -H "Authorization: Bearer $KEY" \
@@ -53,7 +57,9 @@ ask it to pick a tool.
    chose wrong on a clear capture and on an ambiguous one both, and its own `say`
    disagreed with the tool it chose. One schema whose *filled fields* imply the
    intent was right three times out of three. Which record to commit is the
-   server's decision.
+   server's decision. This is about the gateway's small models; the hosted planner
+   does call tools, because the loop hands it two lookups and a submit rather than a
+   menu of operations.
 5. **Do not enable thinking for extraction.** No thinking is under a second and
    answers honestly; a small thinking budget multiplied the latency and invented a
    deadline that was not in the input. Reserve it for hard questions and cap it.
@@ -61,7 +67,7 @@ ask it to pick a tool.
    clarification, laya answered `CreateReminder` at 0.69 for an ambiguous capture
    and 0.81 for a clear one — no usable separation, and its `metadata.confidence`
    was inverted-ish (0.11 ambiguous, 0.29 clear). Blurt's accept/ask decision is
-   deterministic (`MissingFields`: field format, timezone, an instant still ahead), and
+   deterministic (`MissingFields`: field format and timezone; `lint`: an instant still ahead), and
    the model is only asked to *write the question* once the missing fields are known.
    The laya reader that used to re-read a proposed record is gone.
 7. **`max_tokens` is a cap worth setting low.** It is what stops a model that has
@@ -69,14 +75,18 @@ ask it to pick a tool.
 
 ## Where it lives
 
-`internal/agent`: `model.go` is the transport, the `Write` shape and the `Model` port,
+`internal/agent`: `model.go` is the transport, the `Record` shape and the `Model` port,
 `prompt.go` holds the prompt and the schema (the two things that must be edited
-together), `time.go` parses the structured date and time the model returns, `fields.go` is
-the deterministic accept/ask check (`MissingFields`), `record.go` turns an accepted write
-into the stored row — the local instant for a one-off, the rule and its next instant for a
-repeat — and `loop.go` is the AgentLoop: the state machine that checks and either commits
-or asks. `worker.go` is only the poller. `agent.Fake` is the scripted model behind
-`BLURT_FAKE_AGENT`; it keys off the words `remember`, the frequency word (`every day`,
+together), `tools.go` is the agent's own vocabulary (`find_reminders`, `find_memories`,
+`submit_plan`) and what each call answers, `lint.go` is the deterministic
+accept/refuse check the model is told about, `time.go` parses the structured date and time
+the model returns, `fields.go` is the per-field half of that check (`MissingFields`),
+`record.go` turns an accepted write into the stored row — the local instant for a one-off,
+the rule and its next instant for a repeat — and `loop.go` is the AgentLoop: the moves that
+prescreen, run the bounded loop, lint, check and either commit or ask. `worker.go` is only
+the poller. `agent.Fake` is the scripted model behind
+`BLURT_FAKE_AGENT`; it submits at once — it never looks anything up — and keys off the
+words `remember`, the frequency word (`every day`,
 `daily`, `every week`, …) and whether the capture names a clock, so a spec can reach each
 branch on purpose. A capture that repeats without naming how often it repeats gets the ask
 rather than a one-off, because the fake will not guess a pattern it cannot read.

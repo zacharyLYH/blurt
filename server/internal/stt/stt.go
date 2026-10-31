@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"blurt/internal/config"
+	"blurt/internal/failure"
 )
 
 // audioPrefix declares the payload as a WAV data URI. Blurt only ever captures
@@ -39,13 +40,6 @@ type Transcriber interface {
 	Transcribe(ctx context.Context, audio io.Reader) (string, error)
 }
 
-// Error is an HTTP-level refusal from the STT service. Status 0 is never used
-// here: network failures stay ordinary errors and are retried.
-type Error struct {
-	Status  int
-	Message string
-}
-
 // HTTP calls phonon. The route is the gateway's own /v1/infer; it takes a
 // base64 WAV data URI and answers {"output": {"text": "..."}}.
 type HTTP struct {
@@ -64,6 +58,19 @@ type Fake struct {
 	calls int
 }
 
+// NewHTTP points the client at the phonon gateway.
+func NewHTTP(cfg config.STT) *HTTP {
+	return &HTTP{
+		url:    cfg.URL,
+		apiKey: cfg.APIKey,
+		model:  cfg.Model,
+		// The gateway decodes a one-minute clip in seconds, but the host is
+		// shared and measured at 30s under load, so this is deliberately
+		// generous; the worker's attempt timeout sits just above it.
+		client: &http.Client{Timeout: 120 * time.Second},
+	}
+}
+
 // inferRequest is the gateway's body: model plus a payload object.
 type inferRequest struct {
 	Model   string `json:"model"`
@@ -80,54 +87,34 @@ type inferReply struct {
 	} `json:"output"`
 }
 
-func (e *Error) Error() string {
-	return fmt.Sprintf("stt: %d %s", e.Status, e.Message)
-}
-
-// Retryable is false for a 4xx that a retry cannot fix (bad key, bad clip).
-func (e *Error) Retryable() bool {
-	return e.Status == http.StatusRequestTimeout || e.Status == http.StatusTooManyRequests ||
-		e.Status >= http.StatusInternalServerError
-}
-func NewHTTP(cfg config.STT) *HTTP {
-	return &HTTP{
-		url:    cfg.URL,
-		apiKey: cfg.APIKey,
-		model:  cfg.Model,
-		// The gateway decodes a one-minute clip in seconds, but the host is
-		// shared and measured at 30s under load, so this is deliberately
-		// generous; the worker's attempt timeout sits just above it.
-		client: &http.Client{Timeout: 120 * time.Second},
-	}
-}
-func (t *HTTP) Transcribe(ctx context.Context, audio io.Reader) (string, error) {
+func (h *HTTP) Transcribe(ctx context.Context, audio io.Reader) (string, error) {
 	raw, err := io.ReadAll(audio)
 	if err != nil {
 		return "", fmt.Errorf("stt: read audio: %w", err)
 	}
-	request := inferRequest{Model: t.model}
+	request := inferRequest{Model: h.model}
 	request.Payload.Audio = audioPrefix + base64.StdEncoding.EncodeToString(raw)
 	body, err := json.Marshal(request)
 	if err != nil {
 		return "", fmt.Errorf("stt: build request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, t.url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.url, bytes.NewReader(body))
 	if err != nil {
 		return "", fmt.Errorf("stt: build request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	if t.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+t.apiKey)
+	if h.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+h.apiKey)
 	}
 
-	res, err := t.client.Do(req)
+	res, err := h.client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("stt: call phonon: %w", err)
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode > 299 {
-		return "", refusal(res)
+		return "", failure.ReadRefusal("stt", res)
 	}
 
 	var reply inferReply
@@ -137,24 +124,7 @@ func (t *HTTP) Transcribe(ctx context.Context, audio io.Reader) (string, error) 
 	return strings.TrimSpace(reply.Output.Text), nil
 }
 
-// refusal turns the gateway's error body into the refusal the worker reasons
-// about: {"error": {"code": "unauthorized", "message": "missing or invalid api key"}}.
-func refusal(res *http.Response) *Error {
-	var body struct {
-		Error struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	// A gateway that answers with something else still yields the status,
-	// which is what Retryable actually needs.
-	_ = json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&body)
-	message := strings.TrimSpace(body.Error.Message)
-	if message == "" {
-		message = strings.TrimSpace(body.Error.Code)
-	}
-	return &Error{Status: res.StatusCode, Message: message}
-}
+// NewFake returns a transcriber for a mode the worker tests inject.
 func NewFake(mode string) *Fake {
 	return &Fake{mode: mode}
 }

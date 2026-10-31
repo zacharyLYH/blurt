@@ -9,10 +9,18 @@ import (
 	"blurt/internal/store"
 )
 
-// Notifier fans one message out to every device a user is signed in on. Best
+// Notifier is the port the rest of Blurt talks to: one user, one message, every
+// signed-in device. It lives beside the fan-out that implements it so the five
+// callers cannot drift into five slightly different copies of one method, and a
+// test double that satisfies it satisfies all of them.
+type Notifier interface {
+	NotifyUser(ctx context.Context, userID int64, msg Message) (Result, error)
+}
+
+// Fanout fans one message out to every device a user is signed in on. Best
 // effort by design: a device that fails never stops the rest, and a dead
 // endpoint only costs its own subscription.
-type Notifier struct {
+type Fanout struct {
 	Sessions *store.SessionStore
 	Sender   *Sender
 }
@@ -21,7 +29,7 @@ type Notifier struct {
 // happened. A VAPID rejection is returned after the loop because it is a
 // deployment problem worth surfacing; single-device failures are counted and
 // logged instead.
-func (n *Notifier) NotifyUser(ctx context.Context, userID int64, msg Message) (Result, error) {
+func (n *Fanout) NotifyUser(ctx context.Context, userID int64, msg Message) (Result, error) {
 	devices, err := n.Sessions.ListPushSubscriptions(ctx, userID, time.Now())
 	if err != nil {
 		return Result{}, err

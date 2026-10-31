@@ -17,9 +17,6 @@ import (
 type Fake struct{}
 
 const (
-	// FakeTime is the clock the fake reads out of a capture that carries one, so a
-	// spec can assert a resolved instant without modelling a model.
-	FakeTime = "18:00"
 	// FakeMemoryWord picks the Memory branch: a capture that says it is a fact.
 	FakeMemoryWord = "remember"
 	// FakeRepeatWord marks a capture that repeats, and the frequency is read off the
@@ -41,17 +38,42 @@ var fakeSoonRe = regexp.MustCompile(`(?i)\bsoon\b`)
 // the notification time; the other clock belongs to the event and rides in text.
 var fakeNotifyRe = regexp.MustCompile(`(?i)\bremind me (?:at )?(soon|[0-9]{1,2}(?::[0-9]{2})?\s*(?:am|pm)|[0-9]{1,2}:[0-9]{2})\b`)
 
-// Propose is deliberately blunt and keyword-driven, so a spec can reach each branch
-// on purpose. The real model reads the same outcomes out of one schema.
-func (Fake) Propose(_ context.Context, in Input) (Turn, error) {
+// fakeRememberRe is the word that named a capture as a fact. The schema asks the real model
+// for the user's words without it, so the fake strips it too.
+var fakeRememberRe = regexp.MustCompile(`(?i)^\s*remember(?:\s+that)?\s+`)
+
+// fakeToDoRe marks "remember to <do something>", which is a reminder the user wants set
+// rather than a fact to keep.
+var fakeToDoRe = regexp.MustCompile(`(?i)^\s*remember\s+to\b`)
+
+// fakeIntentRe is the phrase that says what the user wants done rather than what the event
+// is: "remind me to call mum" is the event "call mum", the shape the prompt asks for.
+var fakeIntentRe = regexp.MustCompile(`(?i)^\s*(?:remind me|remember)\b\s*(?:(?:to|about|that)\b\s*)?`)
+
+// Prescreen is the dev screen: it lets every capture through. A spec that needs a
+// refusal scripts its own double, the way the flow tests already do.
+func (Fake) Prescreen(_ context.Context, _ string) (Verdict, error) {
+	return Verdict{Outcome: verdictOK}, nil
+}
+
+// Chat is the dev agent turn. The fake never looks anything up — it reads the capture
+// itself — so it asks to submit at once; the loop, the linter and the strict call still run
+// for real around it.
+func (Fake) Chat(_ context.Context, _ PlannerInput, _ []Message, _ []Tool) (Message, error) {
+	return submitCall(), nil
+}
+
+// Finalize is deliberately blunt and keyword-driven, so a spec can reach each branch on
+// purpose. The real model reads the same outcomes out of one schema.
+func (Fake) Finalize(_ context.Context, in PlannerInput, _ []Message) (Answer, error) {
 	capture := strings.ToLower(lastText(in))
-	if strings.Contains(capture, FakeMemoryWord) {
+	if fact, ok := fakeFact(lastText(in)); ok {
 		// A fact is context rather than an interruption, so it carries no clock.
-		return Turn{Writes: []Write{{Kind: KindMemory, Text: lastText(in)}}}, nil
+		return placed(Answer{Records: []Record{{Kind: KindMemory, Text: fact}}}), nil
 	}
-	if write, ok := fakeNotifyAndEvent(in, capture); ok {
+	if record, ok := fakeNotifyAndEvent(in, capture); ok && fakeAhead(in, record) {
 		// The capture names both clocks: the notification time and the event's own.
-		return Turn{Writes: []Write{write}}, nil
+		return placed(Answer{Records: []Record{record}}), nil
 	}
 	if fakeSoonRe.MatchString(capture) && !namesClock(capture) {
 		// The minute ahead, in the zone the device named: a clock the fake can place
@@ -64,67 +86,65 @@ func (Fake) Propose(_ context.Context, in Input) (Turn, error) {
 		}
 		text := eventOf(firstUserText(in))
 		if text == "" {
-			return Turn{}, nil
+			return asked(defaultQuestion), nil
 		}
 		at := in.Now.In(loc).Add(time.Minute)
-		return Turn{Writes: []Write{{
+		return placed(Answer{Records: []Record{{
 			Kind: KindReminder, Text: text, Zone: in.CurrentTZ,
 			Date: at.Format("2006-01-02"), Time: at.Format("15:04"),
 			Recurrence: RecurrenceNone, Evidence: "the user said " + capture,
-		}}}, nil
+		}}}), nil
 	}
 	if !namesClock(capture) || clocksIn(capture) > 1 {
 		// No clock is a time the fake cannot pin, and two of them are more than one
 		// reminder can carry. Either way it proposes nothing and the Job asks — the
 		// same ask the real model's empty field earns.
-		return Turn{}, nil
+		return asked(defaultQuestion), nil
+	}
+	clock, ok := fakeSingleClock(capture)
+	if !ok {
+		// A clock the fake cannot read is a time it cannot pin, so it asks rather than
+		// substituting a clock of its own.
+		return asked(defaultQuestion), nil
 	}
 	text := eventOf(firstUserText(in))
 	if text == "" {
-		return Turn{}, nil
+		return asked(defaultQuestion), nil
 	}
 	recurrence, repeats := fakeRecurrence(capture)
 	if strings.Contains(capture, FakeRepeatWord) && !repeats {
 		// The capture says it repeats without naming how often, and the fake cannot
 		// place a pattern it cannot read: it proposes nothing and the Job asks, the
 		// same ask an unreadable clock earns.
-		return Turn{}, nil
+		return asked(defaultQuestion), nil
 	}
-	date := in.Now
+	day := in.Now
 	if loc, err := time.LoadLocation(in.CurrentTZ); err == nil {
-		date = date.In(loc)
+		day = day.In(loc)
 	}
 	if strings.Contains(capture, "tomorrow") {
-		date = date.AddDate(0, 0, 1)
+		day = day.AddDate(0, 0, 1)
 	}
-	day := date.Format("2006-01-02")
-	if recurrence == store.FrequencyDaily {
-		// A daily rule is its clock and nothing else, so the fake leaves the day empty
-		// rather than pinning the series to today.
-		day = ""
+	record := fakeRecord(in, text, day.Format("2006-01-02"), clock, recurrence, capture)
+	if !fakeAhead(in, record) {
+		// A one-off the clock has already passed is not a time the fake can place.
+		return asked(defaultQuestion), nil
 	}
-	if recurrence == "" {
-		recurrence = RecurrenceNone
-	}
-	return Turn{Writes: []Write{{
-		Kind: KindReminder, Text: text, Zone: in.CurrentTZ,
-		Date: day, Time: FakeTime,
-		Recurrence: recurrence, Evidence: "the user said " + capture,
-	}}}, nil
+	return placed(Answer{Records: []Record{record}}), nil
 }
 
 // fakeNotifyAndEvent splits a capture that names both a notification time and an
 // event time, the way the prompt does: time is when Blurt rings, and the event's own
 // clock stays in text ("Dinner at 8pm"). A capture with two clocks but no notification
 // clause is two events rather than this shape, so it is left to the ordinary ask.
-func fakeNotifyAndEvent(in Input, capture string) (Write, bool) {
+func fakeNotifyAndEvent(in PlannerInput, capture string) (Record, bool) {
 	match := fakeNotifyRe.FindStringSubmatch(capture)
 	if match == nil {
-		return Write{}, false
+		return Record{}, false
 	}
 	event := fakeNotifyRe.ReplaceAllString(lastText(in), "")
 	if !namesClock(event) {
-		return Write{}, false
+		return Record{}, false
 	}
 
 	loc := time.UTC
@@ -139,7 +159,7 @@ func fakeNotifyAndEvent(in Input, capture string) (Write, bool) {
 	} else {
 		hour, minute, ok := fakeClock(clock)
 		if !ok {
-			return Write{}, false
+			return Record{}, false
 		}
 		clock = fmt.Sprintf("%02d:%02d", hour, minute)
 		if strings.Contains(capture, "tomorrow") {
@@ -148,23 +168,64 @@ func fakeNotifyAndEvent(in Input, capture string) (Write, bool) {
 	}
 
 	recurrence, _ := fakeRecurrence(capture)
+	text := eventOfKeepingClock(event)
+	if text == "" {
+		return Record{}, false
+	}
+	return fakeRecord(in, text, date.Format("2006-01-02"), clock, recurrence, capture), true
+}
+
+// fakeRecord is the one reminder shape every branch proposes: the device zone's
+// fields, a defaulting recurrence, and — because a daily rule is its clock and
+// nothing else — no calendar day.
+// fakeFact is the fact a capture states, without the word that named it as one, and whether
+// it states a fact at all: "remember <something>" is a fact, while "remember to <do
+// something>" is a reminder the user wants set.
+func fakeFact(capture string) (string, bool) {
+	lowered := strings.ToLower(capture)
+	if !strings.Contains(lowered, FakeMemoryWord) || fakeToDoRe.MatchString(lowered) {
+		return "", false
+	}
+	fact := strings.TrimSpace(fakeRememberRe.ReplaceAllString(capture, ""))
+	return fact, fact != ""
+}
+
+// fakeSingleClock is the one clock a capture names, as HH:MM: the notification time the user
+// said rather than a clock of the fake's own. The forms are the ones the notify clause reads,
+// so a one-clock capture and a two-clock one agree about how a clock is written.
+func fakeSingleClock(capture string) (string, bool) {
+	for _, re := range []*regexp.Regexp{clock24Re, clockRe} {
+		raw := re.FindString(capture)
+		if raw == "" {
+			continue
+		}
+		hour, minute, ok := fakeClock(raw)
+		if !ok {
+			return "", false
+		}
+		return fmt.Sprintf("%02d:%02d", hour, minute), true
+	}
+	return "", false
+}
+
+// fakeAhead reports whether a record the fake proposed is one the server would still commit:
+// it asks the server's own after-now check rather than keeping a second copy of it.
+func fakeAhead(in PlannerInput, record Record) bool {
+	return len(checkAfterNow(record, in.Now)) == 0
+}
+
+func fakeRecord(in PlannerInput, text, day, clock, recurrence, capture string) Record {
 	if recurrence == "" {
 		recurrence = RecurrenceNone
 	}
-	day := date.Format("2006-01-02")
 	if recurrence == store.FrequencyDaily {
-		// A daily rule is its clock and nothing else, so the fake leaves the day empty.
 		day = ""
 	}
-	text := eventOfKeepingClock(event)
-	if text == "" {
-		return Write{}, false
-	}
-	return Write{
+	return Record{
 		Kind: KindReminder, Text: text, Zone: in.CurrentTZ,
 		Date: day, Time: clock, Recurrence: recurrence,
 		Evidence: "the user said " + capture,
-	}, true
+	}
 }
 
 // fakeClock reads the notification clock the fake's own regex found as HH:MM.
@@ -217,10 +278,24 @@ func fakeRecurrence(capture string) (string, bool) {
 	return "", false
 }
 
-// Question answers the fixed sentence rather than writing one, so a spec asserts one exact sentence and
-// the deterministic stack stays deterministic.
-func (Fake) Question(_ context.Context, _ Input, _ []Field) (string, error) {
-	return defaultQuestion, nil
+// Verify is the dev checker: it accepts every row. The real one reads the evidence;
+// the deterministic stack asserts the flow, not the reading.
+func (Fake) Verify(_ context.Context, _ Proposal) (Verdict, error) {
+	return Verdict{Outcome: "ok"}, nil
+}
+
+// placed marks a turn the fake could place, and asked one it could not. The
+// deterministic stack asks the fixed sentence rather than writing one, so a spec
+// asserts one exact sentence.
+func placed(turn Answer) Answer {
+	turn.Kind = AnswerRecords
+	return turn
+}
+
+// asked is the answer that asks rather than commits: the one kind the linter leaves
+// alone, because asking is the point.
+func asked(question string) Answer {
+	return Answer{Kind: AnswerQuestion, Question: question}
 }
 
 // nonWord is what a tag is not: one tag is one word, so everything else is a separator.
@@ -239,14 +314,22 @@ func (Fake) Tags(_ context.Context, text string) ([]string, error) {
 	return parseTags(strings.Join(kept, ",")), nil
 }
 
-func lastText(in Input) string {
+// submitCall is the tool call that ends the loop, as a dev model or a test double asks for it.
+func submitCall() Message {
+	return Message{Role: "assistant", ToolCalls: []ToolCall{{
+		ID: "submit", Type: functionType,
+		Function: CallFunction{Name: toolSubmitPlan, Arguments: "{}"},
+	}}}
+}
+
+func lastText(in PlannerInput) string {
 	if last := len(in.Conversation) - 1; last >= 0 {
 		return in.Conversation[last].Text
 	}
 	return ""
 }
 
-func firstUserText(in Input) string {
+func firstUserText(in PlannerInput) string {
 	for _, turn := range in.Conversation {
 		if turn.Role == "user" && turn.Text != "" {
 			return turn.Text
@@ -256,7 +339,7 @@ func firstUserText(in Input) string {
 }
 
 // clocksIn counts the clock forms a capture names. Two of them is more than one
-// write can carry.
+// record can carry.
 func clocksIn(text string) int {
 	return len(clockRe.FindAllString(text, -1)) + len(clock24Re.FindAllString(text, -1))
 }
@@ -283,7 +366,7 @@ var eventFiller = map[string]bool{
 // rather than "buy glue at tomorrow".
 func eventOf(capture string) string {
 	stripped := clock24Re.ReplaceAllString(clockRe.ReplaceAllString(capture, ""), "")
-	return eventOfKeepingClock(stripped)
+	return eventOfKeepingClock(fakeIntentRe.ReplaceAllString(stripped, ""))
 }
 
 // eventOfKeepingClock is the capture with its date words taken out and any dangling

@@ -7,9 +7,9 @@ import (
 	"blurt/internal/store"
 )
 
-// seedMemory writes a Memory the way an earlier capture would have left one. The
+// seedMemory records a Memory the way an earlier capture would have left one. The
 // FTS triggers index it, so these flows exercise retrieval through the real
-// AgentLoop without making the model write the rows first.
+// AgentLoop without making the model record the rows first.
 func (p *pump) seedMemory(t *testing.T, userID int64, text, tags string) {
 	t.Helper()
 	if _, err := p.handle.Write.Exec(
@@ -56,6 +56,9 @@ func TestPipelineRetrievalPullsTheIntendedMemories(t *testing.T) {
 		t.Fatalf("remembered = %d Memories, want exactly the two intended: %+v",
 			len(in.Remembered), in.Remembered)
 	}
+	// Retrieval runs on the server between the screen and the plan: the seeded
+	// Memories cost no model call of their own.
+	p.wantAsks(t, 1, 2, 1, 0)
 }
 
 // A capture that shares no search term with any Memory still plans normally: an
@@ -73,6 +76,7 @@ func TestPipelineRetrievalReturnsNothingWhenNoMemoryMatches(t *testing.T) {
 	if in := p.plannedFor(t, capture); len(in.Remembered) != 0 {
 		t.Fatalf("remembered = %+v, want none", in.Remembered)
 	}
+	p.wantAsks(t, 1, 2, 1, 0)
 }
 
 // The capture is prose, so it can carry punctuation an FTS5 MATCH expression
@@ -90,6 +94,7 @@ func TestPipelineRetrievalSurvivesPunctuation(t *testing.T) {
 	if in := p.plannedFor(t, capture); !recalled(in, fact) {
 		t.Fatalf("remembered = %+v, want the flight Memory", in.Remembered)
 	}
+	p.wantAsks(t, 1, 2, 1, 0)
 }
 
 // Retrieval is owner-scoped inside the loop, not only in the store: another
@@ -118,4 +123,5 @@ func TestPipelineRetrievalStaysInsideTheOwner(t *testing.T) {
 		t.Fatalf("remembered = %d Memories, want only the owner's: %+v",
 			len(in.Remembered), in.Remembered)
 	}
+	p.wantAsks(t, 1, 2, 1, 0)
 }

@@ -1,0 +1,20 @@
+{
+  "name": "fact-only-keeps-the-users-words",
+  "source": "prompt:example-5",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remember that milk is cheaper at store A than store B",
+  "expect": {
+    "kind": "records",
+    "reminders": [],
+    "memories": [
+      {
+        "contains": ["milk", "store"]
+      }
+    ]
+  }
+}

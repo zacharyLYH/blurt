@@ -1,0 +1,25 @@
+{
+  "name": "one-off-call-mum-tomorrow",
+  "source": "prompt:example-1",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me to call mum tomorrow at 7pm",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["mum"],
+        "datetime": "2026-10-25T19:00",
+        "utc": "2026-10-25T11:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": []
+  }
+}

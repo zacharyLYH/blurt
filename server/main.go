@@ -18,7 +18,6 @@ import (
 	"blurt/internal/capture"
 	"blurt/internal/config"
 	"blurt/internal/db"
-	"blurt/internal/decision"
 	"blurt/internal/emitter"
 	"blurt/internal/httpapi"
 	"blurt/internal/mail"
@@ -57,9 +56,6 @@ func main() {
 		"stt_configured", cfg.STT.URL != "",
 		"stt_model", cfg.STT.Model,
 		"fake_stt", cfg.FakeSTT,
-		"decision_model", cfg.Decision.Model,
-		"gate_on", cfg.Decision.URL != "",
-		"agent_model", cfg.Agent.Model,
 		"fake_agent", cfg.FakeAgent,
 	)
 
@@ -79,11 +75,12 @@ func main() {
 	}
 
 	sessions := store.NewSessionStore(handle.Write, handle.Read)
-	notifier := &push.Notifier{Sessions: sessions, Sender: push.NewSender(cfg.VAPID)}
+	notifier := &push.Fanout{Sessions: sessions, Sender: push.NewSender(cfg.VAPID)}
 	audio, err := capture.NewStore(cfg.DataDir)
 	if err != nil {
 		panic(err)
 	}
+	users := store.NewUserStore(handle.Write, handle.Read)
 	jobs := store.NewJobStore(handle.Write, handle.Read)
 	// The emitter reads the same Reminders the AgentLoop plans against, and the
 	// firing transition is the one write that is its own.
@@ -114,47 +111,47 @@ func main() {
 	} else {
 		transcriber = stt.NewHTTP(cfg.STT)
 	}
-	// The gate is advisory, so it stays a nil interface when no decision gateway
-	// is configured and the worker skips it.
-	var gate decision.Decider
-	if cfg.Decision.URL != "" {
-		gate = decision.NewHTTP(cfg.Decision)
-	}
 	transcriptionWorker := &capture.TranscriptionWorker{
 		Jobs: jobs, Audio: audio, STT: transcriber, Pusher: notifier, Model: cfg.STT.Model,
-		Gate: gate, GateModel: cfg.Decision.Model,
 		TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue,
 	}
 
-	// The model rides the same gateway as phonon and laya, so the fake is the
-	// local/e2e escape hatch that keeps the AgentLoop exercisable without one.
-	var model agent.Model
-	if cfg.FakeAgent {
-		slog.Warn("BLURT_FAKE_AGENT is on: the model is scripted — never do this on a public host")
-		model = agent.Fake{}
-	} else {
-		model = agent.NewGateway(cfg.Agent)
-	}
+	// The model is the user's: the loop resolves it from the User row and builds
+	// the transport per Job. The fake is the local/e2e escape hatch that keeps the
+	// AgentLoop exercisable without a provider.
 	loop := &agent.AgentLoop{
 		Store:      jobs,
-		Recall:     agent.Reads{Reminders: reminders, Memories: store.NewMemoryStore(handle.Read)},
-		Model:      model,
+		Recall:     agent.Retrieval{Reminders: reminders, Memories: store.NewMemoryStore(handle.Read)},
 		Pusher:     notifier,
 		AgentQueue: agentQueue,
-		ModelName:  cfg.Agent.Model,
-		MaxTurns:   cfg.Agent.MaxTurns,
 	}
-	agentWorker := &agent.AgentWorker{Jobs: jobs, Loop: loop, AgentQueue: agentQueue}
+	if cfg.FakeAgent {
+		slog.Warn("BLURT_FAKE_AGENT is on: the model is scripted — never do this on a public host")
+		fake := agent.Stage{Model: agent.Fake{}, Name: "fake"}
+		loop.Planner, loop.Prescreen, loop.Verify, loop.Tags = fake, fake, fake, fake
+	} else {
+		loop.Resolver = agent.UserModels{Users: users, Key: cfg.EncryptionKey}
+		// The cheap stages are the home gateway's, each with its own model. The
+		// core turn builds a transport per Job from the user's own settings.
+		helper := func(name string) agent.Stage {
+			return agent.Stage{Name: name, Model: agent.NewModelClient(agent.Settings{
+				Provider: agent.ProviderGateway, URL: cfg.Helper.URL, APIKey: cfg.Helper.APIKey, Model: name,
+			})}
+		}
+		loop.Prescreen, loop.Verify, loop.Tags = helper(cfg.Helper.Prescreen), helper(cfg.Helper.Verify), helper(cfg.Helper.Tags)
+	}
+	agentWorker := &queue.Worker{Stream: agentQueue, Jobs: jobs, Step: loop.Step}
 
 	srv := &http.Server{
 		Addr: cfg.Bind,
 		Handler: httpapi.New(httpapi.Deps{
 			DB:             handle.Write,
-			Users:          store.NewUserStore(handle.Write, handle.Read),
+			Users:          users,
 			Sessions:       sessions,
 			Pins:           auth.NewPinStore(5*time.Minute, fixedPIN),
 			Mailer:         mailer,
 			Pusher:         notifier,
+			EncryptionKey:  cfg.EncryptionKey,
 			Jobs:           jobs,
 			Reminders:      reminders,
 			Audio:          audio,

@@ -16,6 +16,7 @@ type SessionStore struct {
 	read  *sql.DB
 }
 
+// NewSessionStore takes the writer and the read pool beside it.
 func NewSessionStore(write, read *sql.DB) *SessionStore {
 	return &SessionStore{write: write, read: read}
 }

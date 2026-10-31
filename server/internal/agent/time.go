@@ -14,9 +14,8 @@ var (
 	clock24Re = regexp.MustCompile(`\b([0-9]{1,2}):([0-9]{2})\b`)
 )
 
-// namesClock reports whether a string names a clock time. It is the filter the
-// question writer runs through: a question that asserts a time the user never
-// said is the failure this whole path exists to avoid.
+// namesClock reports whether a string names a clock time. It is the scripted model's
+// reader; the question guard has its own, which knows where each clock came from.
 func namesClock(text string) bool {
 	text = strings.ToLower(text)
 	return clockRe.MatchString(text) || clock24Re.MatchString(text) ||
@@ -84,10 +83,17 @@ func resolveDay(token string, now time.Time) (time.Time, bool) {
 		if err != nil {
 			return time.Time{}, false
 		}
-		at = time.Date(now.Year(), monthDay.Month(), monthDay.Day(), 0, 0, 0, 0, now.Location())
-		if at.Before(startOfDay(now)) {
-			// The day named has gone this year, so the reminder is for the next one.
-			at = at.AddDate(1, 0, 0)
+		// Walk forward to the next year that both has the date and has not gone: time.Date
+		// rolls a date the year lacks (02-29 in a common year) into the next month, and
+		// AddDate rolls it the same way, so neither can be trusted to find 02-29 here.
+		ok := false
+		for year := now.Year(); !ok && year-now.Year() <= 8; year++ {
+			at = time.Date(year, monthDay.Month(), monthDay.Day(), 0, 0, 0, 0, now.Location())
+			ok = at.Month() == monthDay.Month() && at.Day() == monthDay.Day() &&
+				!at.Before(startOfDay(now))
+		}
+		if !ok {
+			return time.Time{}, false
 		}
 	default:
 		return time.Time{}, false
@@ -105,6 +111,16 @@ func weekdayAhead(name string, now time.Time) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// inZone anchors an instant to the user's own zone, so a day token resolves on their
+// calendar rather than the server's. A zone the server cannot read leaves the clock
+// where it was; the linter names that zone.
+func inZone(now time.Time, zone string) time.Time {
+	if loc, err := time.LoadLocation(strings.TrimSpace(zone)); err == nil {
+		return now.In(loc)
+	}
+	return now
 }
 
 // startOfDay is the calendar day an instant belongs to, which is all a day token

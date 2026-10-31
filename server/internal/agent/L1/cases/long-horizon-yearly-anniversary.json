@@ -1,0 +1,30 @@
+{
+  "name": "long-horizon-yearly-anniversary",
+  "source": "prd:litmus-1-anniversary",
+  "layer": "L1",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me every year on 15 august at 10am to renew the domain",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["domain"],
+        "utc": "2027-08-15T02:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "yearly",
+        "status": "resolved",
+        "rule": {
+          "frequency": "yearly",
+          "time": "10:00",
+          "month": 8,
+          "day": 15
+        }
+      }
+    ],
+    "memories": []
+  }
+}

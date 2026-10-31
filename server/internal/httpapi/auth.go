@@ -20,6 +20,10 @@ const (
 
 type userEnvelope struct {
 	User store.User `json:"user"`
+	// ModelConfigured reports whether setup is complete enough for a capture to plan.
+	// Absent means no: the app sends the user to setup rather than to a fallback
+	// sentence.
+	ModelConfigured bool `json:"modelConfigured,omitempty"`
 }
 
 // requestPin mints a PIN and mails it, unless no mailer is configured (dev

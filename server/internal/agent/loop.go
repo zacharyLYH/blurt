@@ -1,18 +1,16 @@
-// Package agent is Blurt's AgentLoop: it reads a Job's Conversation, asks the model
-// for one structured record, checks every field the server can check, and either
-// commits the record or asks the user for what is missing. Retrieval, the model,
-// the durable steps and the push are injected, so the loop itself is nothing but
-// the moves one Job makes.
+// Package agent is Blurt's AgentLoop: one Job's Conversation in, records or a question out.
+// Retrieval, the model, the durable steps and the push are injected, so the loop's own body is
+// nothing but the moves one Job makes.
 package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"time"
 
-	"blurt/internal/config"
 	"blurt/internal/failure"
 	"blurt/internal/push"
 	"blurt/internal/queue"
@@ -23,18 +21,22 @@ const (
 	// maxAttempts is the PRD's poison-pill limit for one stage, sharing the
 	// requeue's ceiling so a crash and an in-run failure hit the same wall.
 	maxAttempts = store.MaxAttempts
-	// attemptTimeout bounds one model call. It sits just above the gateway client's
-	// own timeout, so a slow host reports as a model failure rather than as a
-	// cancelled turn.
-	attemptTimeout = 150 * time.Second
-	// defaultJobTimeout is the hard wall for one Job's run. It is a ceiling, not a
-	// revision gate: when it fires the run lands in the ordinary failure path.
-	defaultJobTimeout = 8 * time.Minute
-	// windowBefore and windowAfter are the PRD's retrieval window: two days back so a
-	// correction can still find its Reminder, a fortnight ahead so a relative one
-	// lands inside it.
-	windowBefore = 48 * time.Hour
-	windowAfter  = 14 * 24 * time.Hour
+	// attemptTimeout bounds one model call. It sits just above the transport's own
+	// timeout, so a slow provider reports as a model failure rather than as a
+	// cancelled turn. A hosted reasoning model answers in tens of seconds, and a
+	// free tier can be slower still.
+	attemptTimeout = 330 * time.Second
+	// defaultJobTimeout is the hard wall for one Job's run. It has to hold a whole agent
+	// loop, the finalize call and the checker; it is a ceiling, not a revision gate.
+	defaultJobTimeout = 20 * time.Minute
+	// maxLoopCalls is the agent loop's budget: this many model calls, and then the one
+	// finalize call behind submit_plan. Tool calls are free within it, however many the
+	// model makes in one response.
+	maxLoopCalls = 10
+	// maxFaults is how many lint faults one run may see. The first buys a fresh budget and
+	// the faults themselves; the second is an error, because a model that cannot place the
+	// capture twice will not place it on a third call either.
+	maxFaults = 1
 
 	// FallbackMessage is what the user reads when the model could not be reached at
 	// all. It is the capture worker's sentence on purpose: from the user's side the
@@ -45,21 +47,16 @@ const (
 	// server's, so a commit is visible in the Conversation at no model cost.
 	reminderReply = "Reminder set."
 	memoryReply   = "Noted."
-	// defaultQuestion is what the user reads when the model wrote no usable question of its own. One
-	// sentence covers every missing field, because naming the missing half is the question writer's job
-	// and this is the path where nothing named it.
+	// defaultQuestion is what the user reads when no model wrote a usable question of its own.
 	defaultQuestion = "What should I remind you about, and when?"
-	// maxClarityRounds caps the model-written questions one Job may ask. The next
-	// round falls back to defaultQuestion rather than spending another call.
-	maxClarityRounds = 2
+	// maxQuestions caps the questions one Job may ask. The next round falls back
+	// to defaultQuestion rather than spending another call.
+	maxQuestions = 2
+	// verdictOK is the one screening answer that lets the turn reach the planner.
+	verdictOK = "ok"
 )
 
-// Notifier is the push fan-out the loop uses when a Job needs the user.
-type Notifier interface {
-	NotifyUser(ctx context.Context, userID int64, msg push.Message) (push.Result, error)
-}
-
-// Store is the durable half of a run: the three steps that touch SQLite, plus the one write
+// Store is the durable half of a run: the three steps that touch SQLite, plus the one record
 // the tagger makes after the run is over.
 type Store interface {
 	CommitAgentStep(ctx context.Context, jobID int64, step store.AgentStep) (store.Job, error)
@@ -71,28 +68,48 @@ type Store interface {
 	Fail(ctx context.Context, stage string, jobID int64, attempt int, fallback string, detail map[string]any) error
 }
 
-// Recall is the context a capture is planned against: what is already scheduled and
-// what is worth remembering. It is advisory, so a failing read is logged and dropped
-// rather than failing the Job — a working capture never depends on a working index.
+// Recall is the two lookups the agent's tools run, each scoped by the Job's owner, and the
+// memory read the context block is built from. It is advisory, so a failing read is logged
+// and dropped rather than failing the Job — a working capture never depends on a working
+// index.
 type Recall interface {
-	Nearby(ctx context.Context, userID int64, from, to time.Time) ([]store.Reminder, error)
-	Remembered(ctx context.Context, userID int64, query string) ([]store.Memory, error)
+	FindReminders(ctx context.Context, userID int64, query string, limit int) ([]store.Reminder, error)
+	FindMemories(ctx context.Context, userID int64, query string, limit int) ([]store.Memory, error)
 }
 
-// AgentLoop runs one Job's Conversation into one Reminder. Every state is one move
-// and every collaborator is injected, so the loop's own body is only which move
-// comes next.
+// Resolver resolves the model one Job's owner configured. A user brings one provider,
+// endpoint, key and model (the User row), so the core transport is built per Job; the
+// name it returns is what the Trace records.
+type ModelResolver interface {
+	ModelFor(ctx context.Context, userID int64) (Model, string, error)
+}
+
+// Stage is one model stage: the model it asks, and the name the Trace reports it under. A
+// stage with no model of its own rides the planner's, so a single-provider deployment — and
+// every test double — wires one model and nothing else.
+type Stage struct {
+	Model Model
+	Name  string
+}
+
+// AgentLoop runs one Job's Conversation into records: the prescreen, the agent loop, the
+// lint, the check and the commit. Every state is one move and every collaborator is
+// injected, so the loop's own body is only which move comes next.
 type AgentLoop struct {
 	Store  Store
 	Recall Recall
-	Model  Model
-	Pusher Notifier
+	// Resolver builds the Job owner's own model. When set it wins; Planner.Model is the
+	// fixed double a test (or the fake stack) supplies instead.
+	Resolver ModelResolver
+	// Planner is the core turn, and the fallback for the three cheap stages below, which
+	// ask the home gateway each under its own model id.
+	Planner   Stage
+	Prescreen Stage
+	Verify    Stage
+	Tags      Stage
+	Pusher    push.Notifier
 	// AgentQueue receives the next message when a run retries.
 	AgentQueue queue.Stream
-	// ModelName names the model in the Trace; it is not used to call anything.
-	ModelName string
-	// MaxTurns is the PRD's per-Job model-turn budget.
-	MaxTurns int
 	// Timeout is the hard wall for one run; zero means defaultJobTimeout.
 	Timeout time.Duration
 	// AttemptTimeout bounds one model call; zero means attemptTimeout.
@@ -102,37 +119,74 @@ type AgentLoop struct {
 	Now func() time.Time
 }
 
-// state is one move. A nil state ends the run.
-type state func(*run, context.Context) (state, error)
-
-// run is one Job's progress: what the model proposed, what MissingFields could not
-// accept of it, and the budget it is spending. It is the whole mutable state of a run.
-type run struct {
-	loop    *AgentLoop
-	job     store.Job
-	attempt int
-	started time.Time
-	turns   int
-	writes  []Write
-	// reminders and memories are what the turn's accepted writes resolve to, each
-	// kind its own record.
-	reminders []store.Reminder
-	memories  []store.Memory
-	missing   []Field
+// Step runs one attempt as a queue.Worker step: the loop runs, and the message is ackable
+// unless the runtime was cancelled, in which case it stays pending for the claimer.
+func (l *AgentLoop) Step(ctx context.Context, job store.Job, attempt int) bool {
+	l.Run(ctx, job, attempt)
+	return ctx.Err() == nil
 }
 
-// Run drives one Job. Two moves decide the outcome, and each names the next one:
+// state is one move. A nil state ends the run.
+type state func(*jobRun, context.Context) (state, error)
+
+// jobRun is one Job's progress: what the prescreen said, what the agent answered, what the
+// linter would not accept, and the budget it is spending. It is the whole mutable state of
+// a run.
+type jobRun struct {
+	loop      *AgentLoop
+	job       store.Job
+	attempt   int
+	started   time.Time
+	turns     int
+	faults    int
+	model     Model
+	modelName string
+	// prescreenVerdict, answer and verifyVerdict are the three model answers this run
+	// got, kept whole so the Trace can show what each stage decided.
+	prescreenVerdict Verdict
+	answer           Answer
+	verifyVerdict    Verdict
+	records          []Record
+	// lint is every fault the server raised against this run's answers, in the model's own
+	// terms: what the Trace keeps so a refused answer is readable after the fact.
+	lint []string
+	// reminders and memories are what the answer's accepted records resolve to, each
+	// kind its own row.
+	reminders []store.Reminder
+	memories  []store.Memory
+	// looked is what this run's own lookups answered. With the user's own turns it is the
+	// only evidence a question may quote a clock from: a time the model supplied itself
+	// would reach the user as theirs.
+	looked []string
+}
+
+// Run drives one Job. Four moves decide the outcome, and each names the next one:
 //
-//	plan ──▶ check ──┬──▶ commit ──▶ done
-//	                 └──▶ question ──▶ done
+//	prescreen ──▶ agent ──▶ resolve ──▶ verify ──┬──▶ commit ──▶ done
+//	   │                                          └──▶ question ──▶ done
+//	   └──▶ failed (a verdict that is not ok)
 //
-// Every failure lands in the one place that decides retry or fail, so a state only
-// has to say what it is.
+// The agent move is a loop of its own: the model calls tools, submits a plan, and the strict
+// call behind that plan is linted. Every failure lands in the one place that decides retry or
+// fail.
 func (l *AgentLoop) Run(ctx context.Context, job store.Job, attempt int) {
 	ctx, cancel := context.WithTimeout(ctx, l.jobTimeout())
 	defer cancel()
-	r := &run{loop: l, job: job, attempt: attempt, started: l.now()}
-	for next := (*run).plan; next != nil; {
+	r := &jobRun{
+		loop: l, job: job, attempt: attempt, started: l.now(),
+		model: l.Planner.Model, modelName: l.Planner.Name,
+	}
+	if l.Resolver != nil {
+		model, name, err := l.Resolver.ModelFor(ctx, job.UserID)
+		if err != nil {
+			// A user with no usable model cannot be retried into one: the setup is
+			// the missing thing, not the answer.
+			r.failed(ctx, err)
+			return
+		}
+		r.model, r.modelName = model, name
+	}
+	for next := (*jobRun).prescreen; next != nil; {
 		step, err := next(r, ctx)
 		if err != nil {
 			r.failed(ctx, err)
@@ -142,59 +196,164 @@ func (l *AgentLoop) Run(ctx context.Context, job store.Job, attempt int) {
 	}
 }
 
-// plan asks the model for the one record this capture becomes.
-func (r *run) plan(ctx context.Context) (state, error) {
-	r.turns++
-	turn, err := r.loop.propose(ctx, r.input(ctx))
+// screen is the first move on every turn. A verdict that is not ok closes the Job
+// with the fallback reply and the verdict in the Trace, exactly as an illegible
+// transcript does, and costs one cheap call. An answer is screened like any other
+// capture: a fragment needs no relevance judgment here, only a meaning.
+func (r *jobRun) prescreen(ctx context.Context) (state, error) {
+	verdict, err := r.loop.prescreenModel(ctx, latestCapture(r.job))
 	if err != nil {
 		return nil, err
 	}
-	if len(turn.Writes) == 0 {
-		// The model proposed nothing: it has no event it can commit, so every
-		// field is the user's to supply.
-		r.missing = []Field{FieldEvent, FieldZone, FieldDate, FieldTime}
-		return (*run).question, nil
+	r.prescreenVerdict = verdict
+	if verdict.Outcome == verdictOK {
+		return (*jobRun).agent, nil
 	}
-	r.writes = turn.Writes
-	return (*run).check, nil
+	// A refusal is not an error: retrying would ask the same model the same
+	// question. The reply is the fallback sentence an illegible transcript gets.
+	r.loop.fail(ctx, r.job, r.attempt, verdict.Outcome, r.trace(verdict.Outcome))
+	return nil, nil
 }
 
-// check runs Blurt's deterministic half over every proposed write, and decides the one
-// outcome a turn has: whole enough to commit, or a question for the user.
-func (r *run) check(ctx context.Context) (state, error) {
-	for _, write := range r.writes {
-		r.missing = append(r.missing, MissingFields(write, r.started)...)
+// agent is the model's turn: the tool loop, the one strict call behind submit_plan, and the
+// server's own lint on the answer. A first fault buys the loop a fresh budget with the faults in
+// hand; a second is an error. A question passes lint and ends the agent: asking is a legitimate
+// answer, and the model is the one that knows what the capture left open.
+func (r *jobRun) agent(ctx context.Context) (state, error) {
+	in := r.input(ctx)
+	var sent []Message
+	for {
+		answer, conversation, fault, err := r.runLoop(ctx, in, sent)
+		if err != nil {
+			return nil, err
+		}
+		sent = conversation
+		if fault == "" {
+			if faults := lint(answer, r.started); len(faults) > 0 {
+				fault = note(faults)
+			}
+		}
+		if fault == "" {
+			r.answer = answer
+			if answer.Kind == AnswerQuestion {
+				return (*jobRun).question, nil
+			}
+			r.records = answer.Records
+			return (*jobRun).resolve, nil
+		}
+		r.lint = append(r.lint, fault)
+		r.faults++
+		if r.faults > maxFaults {
+			return nil, &RefusedError{Message: fault}
+		}
+		// The retry is this whole conversation plus the faults: the model reads what the
+		// server refused and places the capture again, on a budget of its own.
+		sent = append(sent, Message{Role: "user", Content: fault})
 	}
-	if len(r.missing) > 0 {
-		return (*run).question, nil
-	}
-	return (*run).commit, nil
 }
 
-// commit stores the records the accepted writes resolve to and closes the Job. Both kinds
-// are committed in one step, which is why a bad one sends the whole turn to a question
-// instead: an ask exit commits nothing at all.
-func (r *run) commit(ctx context.Context) (state, error) {
-	for _, write := range r.writes {
-		if write.Kind == KindMemory {
-			r.memories = append(r.memories, store.Memory{Text: write.Text})
+// runLoop is one agent loop and the strict call behind it: the model calls tools until it
+// calls submit_plan, which triggers the one schema-constrained call that writes the answer.
+// It answers the decoded answer, the conversation it ended with, and the loop's own
+// complaint — the model spent the budget without submitting, or its answer was not what the
+// schema means — which is empty when there is an answer to lint. A provider failure is an
+// error rather than a fault: a retry with backoff is what fixes that, not another loop.
+func (r *jobRun) runLoop(ctx context.Context, in PlannerInput, sent []Message) (Answer, []Message, string, error) {
+	for left := maxLoopCalls; left > 0; left-- {
+		reply, err := r.loop.agentModel(ctx, r.model, in, sent)
+		if err != nil {
+			return Answer{}, sent, "", err
+		}
+		r.turns++
+		sent = append(sent, reply)
+		submitted := false
+		for _, call := range reply.ToolCalls {
+			result, done := r.runTool(ctx, call, left-1)
+			sent = append(sent, toolResult(call, result))
+			submitted = submitted || done
+		}
+		if !submitted {
 			continue
 		}
-		loc, err := time.LoadLocation(write.Zone)
-		if err != nil {
-			// MissingFields accepted this zone, so this is the zone database
-			// changing under us: a failure, not a question.
-			return nil, fmt.Errorf("agent: load zone %q: %w", write.Zone, err)
+		answer, err := r.loop.finalizeModel(ctx, r.model, in, sent)
+		r.turns++
+		var bad schemaError
+		if err != nil && !errors.As(err, &bad) {
+			return Answer{}, sent, "", err
 		}
-		reminder, ok := reminderFor(write, r.started.In(loc), loc)
+		if err != nil {
+			// The model's own answer was not what the schema means. It is a fault like any
+			// other, so it reaches the model in the linter's voice.
+			return Answer{}, sent, note([]string{err.Error()}), nil
+		}
+		return answer, sent, "", nil
+	}
+	return Answer{}, sent, "the loop spent its calls without submit_plan", nil
+}
+
+// resolve turns the accepted records into the rows the commit would store. Lint accepted
+// every field already, so a pattern the calendar cannot place is the one thing left, and
+// that is the user's to say.
+func (r *jobRun) resolve(ctx context.Context) (state, error) {
+	for _, record := range r.records {
+		if record.Kind == KindMemory {
+			r.memories = append(r.memories, store.Memory{Text: record.Text})
+			continue
+		}
+		loc, err := time.LoadLocation(record.Zone)
+		if err != nil {
+			// Lint accepted this zone, so this is the zone database
+			// changing under us: a failure, not a question.
+			return nil, fmt.Errorf("agent: load zone %q: %w", record.Zone, err)
+		}
+		reminder, ok := ReminderFor(record, r.started.In(loc), loc)
 		if !ok {
-			// A pattern the calendar cannot place is the user's to say.
-			r.missing = []Field{FieldDate}
-			return (*run).question, nil
+			// The question is the record of it: the Job keeps what the user reads, and
+			// lint has already accepted every field this pattern was built from.
+			return (*jobRun).question, nil
 		}
 		r.reminders = append(r.reminders, reminder)
 	}
-	if err := r.step(ctx, store.JobComplete, r.replyFor(), r.reminders, r.memories); err != nil {
+	return (*jobRun).verify, nil
+}
+
+// verify is the postagentcheck: a model that did not propose the row reads it back
+// against the user's own words. A mismatch commits nothing; it becomes a question,
+// because the user is the only one who can settle it. An error here is an ordinary
+// model failure and retries, like every other stage.
+func (r *jobRun) verify(ctx context.Context) (state, error) {
+	evidence := r.evidence()
+	// A turn can carry several facts, and every one of them is read: the common fault a
+	// checker catches is a "fact" that is really the event copied a second time, and a
+	// turn with three facts must not have two of them slip past unread.
+	fact := strings.Join(r.factTexts(), "; ")
+	proposals := make([]Proposal, 0, len(r.reminders))
+	for i := range r.reminders {
+		proposals = append(proposals, Proposal{Evidence: evidence, Reminder: &r.reminders[i], Fact: fact})
+	}
+	if len(proposals) == 0 && fact != "" {
+		// A fact-only turn still gets read: the common fault a checker catches is a
+		// "fact" that is really the event copied a second time.
+		proposals = append(proposals, Proposal{Evidence: evidence, Fact: fact})
+	}
+	for _, proposal := range proposals {
+		verdict, err := r.loop.verifyModel(ctx, proposal)
+		if err != nil {
+			return nil, err
+		}
+		r.verifyVerdict = verdict
+		if verdict.Outcome == "mismatch" {
+			return (*jobRun).question, nil
+		}
+	}
+	return (*jobRun).commit, nil
+}
+
+// commit stores the records the accepted records resolve to and closes the Job. Both kinds
+// are committed in one step, which is why a bad one sends the whole turn to a question
+// instead: an ask exit commits nothing at all.
+func (r *jobRun) commit(ctx context.Context) (state, error) {
+	if err := r.saveStep(ctx, store.JobComplete, r.replyFor(), r.reminders, r.memories); err != nil {
 		return nil, err
 	}
 	// The records and the reply are durable before the features are even asked for, so a slow
@@ -209,15 +368,16 @@ func (r *run) commit(ctx context.Context) (state, error) {
 // like recall: a call that fails leaves the row untagged rather than failing a capture the
 // user already made. It runs at commit rather than at accept so a Memory that dies with an
 // ask exit costs no call.
-func (r *run) tagMemories(parent context.Context) {
+func (r *jobRun) tagMemories(parent context.Context) {
 	if len(r.memories) == 0 {
 		return
 	}
 	// One deadline covers the tagger's calls, which is at most one per committed Memory.
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), r.loop.proposeTimeout())
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(parent), r.loop.modelTimeout())
 	defer cancel()
+	tagger := r.loop.model(r.loop.Tags)
 	for i := range r.memories {
-		tags, err := r.loop.Model.Tags(ctx, r.memories[i].Text)
+		tags, err := tagger.Tags(ctx, r.memories[i].Text)
 		if err != nil {
 			slog.Warn("agent memory tags", "job_id", r.job.JobID, "err", err)
 			continue
@@ -226,39 +386,50 @@ func (r *run) tagMemories(parent context.Context) {
 			continue
 		}
 		if err := r.loop.Store.TagMemory(ctx, r.job.JobID, r.memories[i].Text, strings.Join(tags, ",")); err != nil {
-			slog.Warn("agent memory tag write", "job_id", r.job.JobID, "err", err)
+			slog.Warn("agent memory tag record", "job_id", r.job.JobID, "err", err)
 		}
 	}
 }
 
 // replyFor is the sentence the user reads. Committing is reached only with something
 // accepted, so a Reminder is the answer unless the turn carried a fact alone.
-func (r *run) replyFor() string {
+func (r *jobRun) replyFor() string {
 	if len(r.reminders) > 0 {
 		return reminderReply
 	}
 	return memoryReply
 }
 
+// evidence is the user's own words the planner model read the row from. Every record in
+// one turn shares it.
+func (r *jobRun) evidence() string {
+	for _, record := range r.records {
+		if record.Evidence != "" {
+			return record.Evidence
+		}
+	}
+	return ""
+}
+
+// factTexts is every fact this turn is committing, in the order the answer gave them.
+func (r *jobRun) factTexts() []string {
+	facts := make([]string, 0, len(r.memories))
+	for _, memory := range r.memories {
+		facts = append(facts, memory.Text)
+	}
+	return facts
+}
+
 // question keeps the Job open on the question the user has to answer, and pushes.
 // It commits no records: an ask exit is exclusive, so the Job holds only the question.
-func (r *run) question(ctx context.Context) (state, error) {
-	question := r.questionText(ctx)
-	if err := r.step(ctx, store.JobClarifying, question, nil, nil); err != nil {
+func (r *jobRun) question(ctx context.Context) (state, error) {
+	question := r.questionText()
+	if err := r.saveStep(ctx, store.JobClarifying, question, nil, nil); err != nil {
 		return nil, err
 	}
 	// The push only saves the user a look: the Job already says the same thing.
-	r.loop.notify(ctx, r.job, "Blurt needs one thing", question)
+	failure.Notify(ctx, r.loop.Pusher, r.job, "Blurt needs one thing", question)
 	return nil, nil
-}
-
-// maxTurns and now read the loop's budget and clock, with config's default for a loop
-// built without a turn budget.
-func (l *AgentLoop) maxTurns() int {
-	if l.MaxTurns < 1 {
-		return config.DefaultMaxTurns
-	}
-	return l.MaxTurns
 }
 
 func (l *AgentLoop) jobTimeout() time.Duration {
@@ -268,9 +439,9 @@ func (l *AgentLoop) jobTimeout() time.Duration {
 	return l.Timeout
 }
 
-// proposeTimeout is the model call's own wall; a slow host reports as a model
+// modelTimeout is the model call's own wall; a slow provider reports as a model
 // failure rather than pinning the worker.
-func (l *AgentLoop) proposeTimeout() time.Duration {
+func (l *AgentLoop) modelTimeout() time.Duration {
 	if l.AttemptTimeout > 0 {
 		return l.AttemptTimeout
 	}
@@ -282,4 +453,25 @@ func (l *AgentLoop) now() time.Time {
 		return time.Now()
 	}
 	return l.Now()
+}
+
+// model is the model a stage runs on: its own when the stack split the stages, the planner's
+// otherwise.
+func (l *AgentLoop) model(s Stage) Model {
+	if s.Model == nil {
+		return l.Planner.Model
+	}
+	return s.Model
+}
+
+// latestCapture is the newest user turn's words: what the screen reads and what a
+// continuation's answer is.
+func latestCapture(job store.Job) string {
+	for i := len(job.Conversation) - 1; i >= 0; i-- {
+		turn := job.Conversation[i]
+		if turn.Role == "user" && turn.Text != "" {
+			return turn.Text
+		}
+	}
+	return ""
 }

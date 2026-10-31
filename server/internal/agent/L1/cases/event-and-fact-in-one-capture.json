@@ -1,0 +1,29 @@
+{
+  "name": "event-and-fact-in-one-capture",
+  "source": "prompt:example-6",
+  "layer": "L1",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "lunch at Ikea this Friday at 1pm, and I have an Ikea voucher to use by December",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["lunch"],
+        "datetime": "2026-10-30T13:00",
+        "utc": "2026-10-30T05:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": [
+      {
+        "contains": ["voucher"]
+      }
+    ]
+  }
+}

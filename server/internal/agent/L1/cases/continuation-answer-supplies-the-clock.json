@@ -1,0 +1,34 @@
+{
+  "name": "continuation-answer-supplies-the-clock",
+  "source": "prompt:example-7",
+  "layer": "L1",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [
+    {
+      "role": "user",
+      "text": "buy glue on the way home from school"
+    },
+    {
+      "role": "assistant",
+      "text": "When should I remind you about buying glue?"
+    }
+  ],
+  "capture": "tomorrow at 6pm",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["glue"],
+        "datetime": "2026-10-25T18:00",
+        "utc": "2026-10-25T10:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": []
+  }
+}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -19,9 +20,13 @@ const (
 	ReminderCancelled = "cancelled"
 )
 
-// windowLimit caps the retrieval window so a busy user's fortnight of reminders
-// cannot make one model prompt unbounded.
-const windowLimit = 20
+// rowLimit caps one text lookup, so a busy user's rows cannot make one model prompt
+// unbounded.
+const rowLimit = 20
+
+// maxQueryWords caps one lookup's ORs: a sentence of a query is a handful of words worth
+// searching, not a page of them.
+const maxQueryWords = 5
 
 // Rule frequencies. A rule keeps only the calendar parts its frequency needs.
 const (
@@ -75,53 +80,7 @@ type ReminderStore struct {
 	read  *sql.DB
 }
 
-// insertReminder runs inside the Job's own transaction, and records the row only
-// if this Job has not already committed the same text. A resumed turn re-reads
-// the Conversation from scratch, so the model re-proposes what it proposed
-// before; without this the same Job would leave two identical Reminders behind,
-// which is the PRD's duplicate-notification failure mode.
-func insertReminder(ctx context.Context, tx execer, reminder Reminder) error {
-	if reminder.Status == "" {
-		reminder.Status = ReminderResolved
-	}
-	if reminder.CreatedAt == "" {
-		reminder.CreatedAt = now()
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT INTO Reminder (UserId, Text, Timezone, LocalDateTime, EmitAtUtc, Status, SourceJobId, CreatedAt)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?
-		WHERE NOT EXISTS (SELECT 1 FROM Reminder WHERE SourceJobId = ? AND Text = ?)`,
-		reminder.UserID, reminder.Text, reminder.Timezone, nullText(reminder.LocalDateTime),
-		nullText(reminder.EmitAtUtc),
-		reminder.Status, nullID(reminder.SourceJobID), reminder.CreatedAt,
-		nullID(reminder.SourceJobID), reminder.Text); err != nil {
-		return fmt.Errorf("insert reminder: %w", err)
-	}
-	if reminder.Rule != nil {
-		return insertRecurring(ctx, tx, reminder)
-	}
-	return nil
-}
-
-// insertRecurring writes a recurring Reminder's rule beside its Reminder row, in
-// the same transaction: it selects the ReminderId by the same predicate that
-// created the row rather than assuming one, and IGNORE keeps a repeated step from
-// adding a second rule. Which instant fires next is derived from the rule and the
-// zone, so the rule is the only thing stored.
-func insertRecurring(ctx context.Context, tx execer, reminder Reminder) error {
-	raw, err := json.Marshal(reminder.Rule)
-	if err != nil {
-		return fmt.Errorf("encode rule: %w", err)
-	}
-	if _, err := tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO RecurringReminder (ReminderId, Rule, NextEmitAtUtc)
-		SELECT ReminderId, ?, ? FROM Reminder WHERE SourceJobId = ? AND Text = ?`,
-		string(raw), reminder.NextEmitAtUtc, nullID(reminder.SourceJobID), reminder.Text); err != nil {
-		return fmt.Errorf("insert recurring reminder: %w", err)
-	}
-	return nil
-}
-
+// NewReminderStore takes the writer and the read pool beside it.
 func NewReminderStore(write, read *sql.DB) *ReminderStore {
 	return &ReminderStore{write: write, read: read}
 }
@@ -161,25 +120,35 @@ func scanReminders(rows *sql.Rows) ([]Reminder, error) {
 	return reminders, nil
 }
 
-// Window returns the user's Reminders whose next instant falls inside [from, to).
-// The PRD builds retrieval on this, from two days before the target so a correction can
-// still find its Reminder, to fourteen days after so a relative one lands inside it.
-// Status is deliberately not filtered: a fired or cancelled Reminder is still context the
-// model should see.
-//
-// A repeat has no one-off instant: its own EmitAtUtc is null, and the instant it is about
-// is the rule's next occurrence, so the filter and the order both read the effective
-// instant. Without that a recurring Reminder would be invisible to retrieval.
-func (s *ReminderStore) Window(ctx context.Context, userID int64, from, to time.Time) ([]Reminder, error) {
+// Search is the reminder lookup the agent's find_reminders tool runs: the user's own rows
+// whose text carries any word of the query, soonest first. It is LIKE rather than BM25 because a
+// Reminder is not indexed, and a leading-wildcard LIKE cannot use an index either way: the owner
+// is what bounds the read, and idx_reminder_window's leading column is what serves that
+// (`SEARCH r USING INDEX idx_reminder_window (UserId=?)`), so a scan is over one user's own rows.
+// The model reads the five rows and decides which one a capture means, so recall matters more
+// than ranking.
+func (s *ReminderStore) Search(ctx context.Context, userID int64, query string, limit int) ([]Reminder, error) {
+	words := queryWords(query, maxQueryWords)
+	if len(words) == 0 {
+		return nil, nil
+	}
+	if limit < 1 || limit > rowLimit {
+		limit = rowLimit
+	}
+	clauses := make([]string, 0, len(words))
+	args := []any{userID}
+	for _, word := range words {
+		clauses = append(clauses, `r.Text LIKE ?`)
+		args = append(args, "%"+word+"%")
+	}
+	args = append(args, limit)
 	rows, err := s.read.QueryContext(ctx, `
 		SELECT `+reminderColumns+`
 		FROM Reminder r LEFT JOIN RecurringReminder c ON c.ReminderId = r.ReminderId
-		WHERE r.UserId = ? AND COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) >= ?
-		  AND COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) < ?
-		ORDER BY COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) LIMIT ?`,
-		userID, timestamp(from), timestamp(to), windowLimit)
+		WHERE r.UserId = ? AND (`+strings.Join(clauses, " OR ")+`)
+		ORDER BY COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) LIMIT ?`, args...)
 	if err != nil {
-		return nil, fmt.Errorf("reminder window: %w", err)
+		return nil, fmt.Errorf("reminder search: %w", err)
 	}
 	defer rows.Close()
 	return scanReminders(rows)
@@ -261,6 +230,53 @@ func (s *ReminderStore) Fire(ctx context.Context, reminder Reminder, next time.T
 		return 0, false, fmt.Errorf("commit reminder fire: %w", err)
 	}
 	return traceID, true, nil
+}
+
+// insertReminder runs inside the Job's own transaction, and records the row only
+// if this Job has not already committed the same text. A resumed turn re-reads
+// the Conversation from scratch, so the model re-proposes what it proposed
+// before; without this the same Job would leave two identical Reminders behind,
+// which is the PRD's duplicate-notification failure mode.
+func insertReminder(ctx context.Context, tx execer, reminder Reminder) error {
+	if reminder.Status == "" {
+		reminder.Status = ReminderResolved
+	}
+	if reminder.CreatedAt == "" {
+		reminder.CreatedAt = now()
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO Reminder (UserId, Text, Timezone, LocalDateTime, EmitAtUtc, Status, SourceJobId, CreatedAt)
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?
+		WHERE NOT EXISTS (SELECT 1 FROM Reminder WHERE SourceJobId = ? AND Text = ?)`,
+		reminder.UserID, reminder.Text, reminder.Timezone, nullText(reminder.LocalDateTime),
+		nullText(reminder.EmitAtUtc),
+		reminder.Status, nullID(reminder.SourceJobID), reminder.CreatedAt,
+		nullID(reminder.SourceJobID), reminder.Text); err != nil {
+		return fmt.Errorf("insert reminder: %w", err)
+	}
+	if reminder.Rule != nil {
+		return insertRecurring(ctx, tx, reminder)
+	}
+	return nil
+}
+
+// insertRecurring writes a recurring Reminder's rule beside its Reminder row, in
+// the same transaction: it selects the ReminderId by the same predicate that
+// created the row rather than assuming one, and IGNORE keeps a repeated step from
+// adding a second rule. Which instant fires next is derived from the rule and the
+// zone, so the rule is the only thing stored.
+func insertRecurring(ctx context.Context, tx execer, reminder Reminder) error {
+	raw, err := json.Marshal(reminder.Rule)
+	if err != nil {
+		return fmt.Errorf("encode rule: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO RecurringReminder (ReminderId, Rule, NextEmitAtUtc)
+		SELECT ReminderId, ?, ? FROM Reminder WHERE SourceJobId = ? AND Text = ?`,
+		string(raw), reminder.NextEmitAtUtc, nullID(reminder.SourceJobID), reminder.Text); err != nil {
+		return fmt.Errorf("insert recurring reminder: %w", err)
+	}
+	return nil
 }
 
 // claimedRow reports whether a claim's UPDATE matched a row, which is how a claim

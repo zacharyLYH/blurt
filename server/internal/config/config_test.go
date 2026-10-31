@@ -39,9 +39,9 @@ func setValid(t *testing.T) {
 		"BLURT_VAPID_PRIVATE_KEY": privateKey,
 		"BLURT_VAPID_SUBJECT":     "mailto:sender@example.com",
 		"BLURT_STT_URL":           "https://stt.example.com/v1/audio/transcriptions",
-		// The model is required whenever the STT gateway is, so it belongs in
-		// the baseline; its own cases are their own test.
-		"BLURT_AGENT_MODEL": "local-model",
+		"BLURT_PRESCREEN_MODEL":   "screen-model",
+		"BLURT_CHECK_MODEL":       "check-model",
+		"BLURT_TAGS_MODEL":        "tags-model",
 	}
 	for name, value := range env {
 		t.Setenv(name, value)
@@ -215,8 +215,7 @@ func TestSTTRequiresURLUnlessFake(t *testing.T) {
 		t.Fatalf("Load without an STT URL: %v", err)
 	}
 
-	// With phonon faked there is no gateway at all, so the model that shares
-	// that gateway has to be faked too — which is what the e2e stack does.
+	// With phonon faked there is no gateway at all, which is the local stack.
 	t.Setenv("BLURT_FAKE_STT", "true")
 	t.Setenv("BLURT_FAKE_AGENT", "true")
 	cfg, err := Load()
@@ -231,88 +230,54 @@ func TestSTTRequiresURLUnlessFake(t *testing.T) {
 	}
 }
 
-// The model is not advisory like the gate: a capture with no model could
-// never become a record, so its settings are required unless the fake is on, and
-// the per-Job turn budget is a positive number rather than a silent default.
-func TestAgentModelConfig(t *testing.T) {
+// The model is per user now, so `.env` carries only the dev fake switch.
+func TestAgentFakeSwitch(t *testing.T) {
 	setValid(t)
-	t.Setenv("BLURT_AGENT_MODEL", "")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "BLURT_AGENT_MODEL is required") {
-		t.Fatalf("Load without a model model: %v", err)
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.FakeAgent {
+		t.Fatal("FakeAgent defaulted on")
 	}
 
 	t.Setenv("BLURT_FAKE_AGENT", "true")
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load with BLURT_FAKE_AGENT: %v", err)
-	}
-	if !cfg.FakeAgent {
-		t.Fatal("FakeAgent = false, want true")
-	}
-	if cfg.Agent.MaxTurns != DefaultMaxTurns {
-		t.Fatalf("max turns = %d, want the default %d", cfg.Agent.MaxTurns, DefaultMaxTurns)
-	}
-
-	t.Setenv("BLURT_FAKE_AGENT", "false")
-	t.Setenv("BLURT_AGENT_MODEL", "local-model")
-	t.Setenv("BLURT_AGENT_MAX_TURNS", "4")
 	cfg, err = Load()
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Agent.MaxTurns != 4 {
-		t.Fatalf("max turns = %d, want 4", cfg.Agent.MaxTurns)
-	}
-	// The model rides the same gateway as phonon and laya, so only the model
-	// id has to be named.
-	if cfg.Agent.URL != cfg.STT.URL || cfg.Agent.APIKey != cfg.STT.APIKey {
-		t.Fatalf("agent gateway = %+v, want the STT gateway", cfg.Agent)
-	}
-
-	t.Setenv("BLURT_AGENT_MAX_TURNS", "0")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "BLURT_AGENT_MAX_TURNS") {
-		t.Fatalf("Load with a zero turn budget: %v", err)
+	if !cfg.FakeAgent {
+		t.Fatal("BLURT_FAKE_AGENT=true did not turn FakeAgent on")
 	}
 }
 
-// laya shares the STT gateway: a deploy that sets only BLURT_STT_* still gets a
-// working gate, and with the fake on there is no gateway, so the gate is off.
-func TestDecisionDefaultsToSTTGateway(t *testing.T) {
+// The three cheap stages are the home gateway's, and each is required without the
+// fake: a capture that cannot be screened or checked could never be trusted.
+func TestAuxStagesRequireAModel(t *testing.T) {
 	setValid(t)
-	t.Setenv("BLURT_STT_API_KEY", "stt-key")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
-	if cfg.Decision.Model != "laya" {
-		t.Fatalf("decision model = %q, want the default laya", cfg.Decision.Model)
-	}
-	if cfg.Decision.URL != cfg.STT.URL || cfg.Decision.APIKey != cfg.STT.APIKey {
-		t.Fatalf("decision gateway = %+v, want the STT gateway", cfg.Decision)
+	t.Setenv("BLURT_PRESCREEN_MODEL", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "BLURT_PRESCREEN_MODEL is required") {
+		t.Fatalf("Load without a screen model: %v", err)
 	}
 
-	// The fake has no gateway to ask, so the gate stays off rather than failing
-	// the boot. The model shares that gateway, so it takes its fake too.
-	t.Setenv("BLURT_FAKE_STT", "true")
 	t.Setenv("BLURT_FAKE_AGENT", "true")
-	t.Setenv("BLURT_STT_URL", "")
-	cfg, err = Load()
+	cfg, err := Load()
 	if err != nil {
 		t.Fatalf("Load with the fake: %v", err)
 	}
-	if cfg.Decision.URL != "" {
-		t.Fatalf("decision URL = %q, want empty so the gate is skipped", cfg.Decision.URL)
-	}
-	if cfg.Decision.Model != "laya" {
-		t.Fatalf("decision model = %q, want laya even with no gateway", cfg.Decision.Model)
+	if cfg.Helper.Prescreen != "" || cfg.Helper.Verify != "check-model" {
+		t.Fatalf("aux = %+v, want the fake to waive only the requirement", cfg.Helper)
 	}
 
-	// An explicit override still has to be a usable URL.
-	t.Setenv("BLURT_FAKE_STT", "false")
-	t.Setenv("BLURT_STT_URL", "https://stt.example.com/v1/infer")
-	t.Setenv("BLURT_DECISION_URL", "not-a-url")
-	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "BLURT_DECISION_URL") {
-		t.Fatalf("Load with a malformed decision URL: %v", err)
+	// The gateway falls back to the STT one, which is the same home host.
+	t.Setenv("BLURT_FAKE_AGENT", "false")
+	t.Setenv("BLURT_PRESCREEN_MODEL", "screen-model")
+	t.Setenv("BLURT_STT_API_KEY", "stt-key")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Helper.URL != cfg.STT.URL || cfg.Helper.APIKey != cfg.STT.APIKey {
+		t.Fatalf("aux gateway = %+v, want the STT gateway", cfg.Helper)
 	}
 }

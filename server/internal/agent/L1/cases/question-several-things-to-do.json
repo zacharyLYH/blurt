@@ -1,0 +1,17 @@
+{
+  "name": "question-several-things-to-do",
+  "source": "prd:litmus-5",
+  "layer": "L1",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me to pick up the kids at 5pm, buy milk, call the dentist, and take out the trash at 9pm",
+  "expect": {
+    "kind": "question",
+    "reminders": [],
+    "memories": [],
+    "asks_for": ["one", "which", "first", "each", "separate", "split"]
+  }
+}

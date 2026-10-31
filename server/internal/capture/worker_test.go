@@ -4,13 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"strings"
 	"testing"
 
 	"blurt/internal/db"
-	"blurt/internal/decision"
 	"blurt/internal/push"
 	"blurt/internal/queue"
 	"blurt/internal/store"
@@ -127,42 +124,25 @@ func (f *fixture) trace(t *testing.T, jobID int64) map[string]any {
 }
 
 func TestWorkerSavesTranscriptAndDropsAudio(t *testing.T) {
-	cases := []struct {
-		name  string
-		gate  string
-		label string
-	}{
-		{"without a gate", "", ""},
-		{"after the gate passes the request", requestLabel, requestLabel},
+	f := newFixture(t, "ok")
+	job := f.audioJob(t)
+	audioName := job.Conversation[0].Audio
+
+	f.worker.process(context.Background(), job, 1)
+
+	stored := f.load(t, job.JobID)
+	if stored.Status != store.JobOpen || stored.Conversation[0].Text != stt.FakeTranscript {
+		t.Fatalf("stored job = %+v", stored)
 	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			f := newFixture(t, "ok")
-			if test.gate != "" {
-				f.worker.Gate = &fakeDecider{label: test.gate}
-				f.worker.GateModel = "laya"
-			}
-			job := f.audioJob(t)
-			audioName := job.Conversation[0].Audio
-
-			f.worker.process(context.Background(), job, 1)
-
-			stored := f.load(t, job.JobID)
-			if stored.Status != store.JobOpen || stored.Conversation[0].Text != stt.FakeTranscript {
-				t.Fatalf("stored job = %+v", stored)
-			}
-			if file, err := f.audio.Open(audioName); err == nil {
-				file.Close()
-				t.Fatal("audio blob survived a successful transcription")
-			}
-			detail := f.trace(t, job.JobID)
-			if detail["outcome"] != "ok" || test.label != "" && detail["label"] != test.label {
-				t.Fatalf("trace = %v", detail)
-			}
-			if f.pusher.calls != 0 {
-				t.Fatalf("push calls = %d, want 0", f.pusher.calls)
-			}
-		})
+	if file, err := f.audio.Open(audioName); err == nil {
+		file.Close()
+		t.Fatal("audio blob survived a successful transcription")
+	}
+	if detail := f.trace(t, job.JobID); detail["outcome"] != "ok" {
+		t.Fatalf("trace = %v", detail)
+	}
+	if f.pusher.calls != 0 {
+		t.Fatalf("push calls = %d, want 0", f.pusher.calls)
 	}
 }
 
@@ -227,93 +207,31 @@ func TestWorkerFailsAfterThreeAttempts(t *testing.T) {
 	}
 }
 
-// fakeDecider stands in for the gateway so the gate's policy is tested without
-// it: it labels every question, or fails outright.
-type fakeDecider struct {
-	label string
-	err   error
-}
-
-func (f *fakeDecider) Decide(_ context.Context, _ string, questions decision.Questions) (decision.Decisions, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	answers := decision.Decisions{}
-	for id := range questions {
-		answers[id] = decision.Answer{Kind: decision.Choice, Choice: f.label,
-			Probabilities: map[string]float64{f.label: 0.9}}
-	}
-	return answers, nil
-}
-
-// A blank transcript and a noise verdict are both permanent: retrying the same
-// clip cannot help, so both take the fallback path and leave no blob behind.
+// A blank transcript is a failed transcription, not a verdict: retrying the same
+// clip cannot help, so it takes the fallback path and leaves no blob behind.
 func TestWorkerRejectsUnusableTranscript(t *testing.T) {
-	cases := []struct {
-		name    string
-		mode    string
-		gate    string
-		outcome string
-	}{
-		{"illegible", "illegible", "", "illegible"},
-		{"noise", "ok", noiseLabel, "noise"},
-	}
-	for _, test := range cases {
-		t.Run(test.name, func(t *testing.T) {
-			f := newFixture(t, test.mode)
-			if test.gate != "" {
-				f.worker.Gate = &fakeDecider{label: test.gate}
-				f.worker.GateModel = "laya"
-			}
-			job := f.audioJob(t)
-
-			f.worker.process(context.Background(), job, 1)
-
-			stored := f.load(t, job.JobID)
-			if stored.Status != store.JobFailed || stored.RetryCount != 1 {
-				t.Fatalf("stored job = %+v", stored)
-			}
-			last := stored.Conversation[len(stored.Conversation)-1]
-			if last.Role != "assistant" || last.Text != FallbackMessage {
-				t.Fatalf("fallback = %+v", last)
-			}
-			detail := f.trace(t, job.JobID)
-			if detail["outcome"] != test.outcome {
-				t.Fatalf("trace = %v", detail)
-			}
-			if test.gate != "" && (detail["label"] != test.gate || detail["gateModel"] != "laya") {
-				t.Fatalf("trace = %v", detail)
-			}
-			if f.pusher.calls != 1 {
-				t.Fatalf("push calls = %d, want 1", f.pusher.calls)
-			}
-			if file, err := f.audio.Open(stored.Conversation[0].Audio); err == nil {
-				file.Close()
-				t.Fatal("a failed job kept its audio blob")
-			}
-		})
-	}
-}
-
-// The filter is advisory: a classifier that is down must not block a capture.
-// The transcript is saved and the reason lands in the trace.
-func TestWorkerGateErrorFailsOpen(t *testing.T) {
-	f := newFixture(t, "ok")
-	f.worker.Gate = &fakeDecider{err: errors.New("decision: call laya: connection refused")}
+	f := newFixture(t, "illegible")
 	job := f.audioJob(t)
 
 	f.worker.process(context.Background(), job, 1)
 
 	stored := f.load(t, job.JobID)
-	if stored.Status != store.JobOpen || stored.Conversation[0].Text != stt.FakeTranscript {
+	if stored.Status != store.JobFailed || stored.RetryCount != 1 {
 		t.Fatalf("stored job = %+v", stored)
 	}
-	detail := f.trace(t, job.JobID)
-	if detail["outcome"] != "ok" || detail["gate"] != "error" {
+	last := stored.Conversation[len(stored.Conversation)-1]
+	if last.Role != "assistant" || last.Text != FallbackMessage {
+		t.Fatalf("fallback = %+v", last)
+	}
+	if detail := f.trace(t, job.JobID); detail["outcome"] != "illegible" {
 		t.Fatalf("trace = %v", detail)
 	}
-	if reason, _ := detail["gateError"].(string); !strings.Contains(reason, "refused") {
-		t.Fatalf("gateError = %v", detail["gateError"])
+	if f.pusher.calls != 1 {
+		t.Fatalf("push calls = %d, want 1", f.pusher.calls)
+	}
+	if file, err := f.audio.Open(stored.Conversation[0].Audio); err == nil {
+		file.Close()
+		t.Fatal("a failed job kept its audio blob")
 	}
 }
 

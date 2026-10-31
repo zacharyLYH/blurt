@@ -75,3 +75,35 @@ func TestCommitAgentStepIsAtomicAndSkipsRepeats(t *testing.T) {
 		t.Fatalf("Reminder rows = %d, want 1 after a repeated step", reminders)
 	}
 }
+
+// A repeated step must not append its reply twice. The same predicate that keeps a
+// resumed turn from leaving two Reminders behind has to keep the assistant's sentence
+// off the Conversation the second time: the user would otherwise read the same
+// "Reminder set." after a resumed step, and the next agent turn would read it as two.
+func TestCommitAgentStepDoesNotRepeatItsReply(t *testing.T) {
+	jobs, _, userID := newJobStack(t)
+	ctx := context.Background()
+
+	job, err := jobs.Create(ctx, userID, Message{Role: "user", Text: "buy glue at 6pm"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	step := AgentStep{
+		Reply:  Message{Text: "Reminder set."},
+		Status: JobComplete,
+		Detail: map[string]any{"outcome": JobComplete},
+	}
+	for i := range 2 {
+		if _, err := jobs.CommitAgentStep(ctx, job.JobID, step); err != nil {
+			t.Fatalf("commit %d: %v", i, err)
+		}
+	}
+
+	stored, err := jobs.ByID(ctx, userID, job.JobID)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(stored.Conversation) != 2 {
+		t.Fatalf("conversation = %+v, want the capture and one reply", stored.Conversation)
+	}
+}

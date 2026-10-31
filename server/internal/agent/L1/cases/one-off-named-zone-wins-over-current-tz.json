@@ -1,0 +1,25 @@
+{
+  "name": "one-off-named-zone-wins-over-current-tz",
+  "source": "prd:time-zone-named",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me to call the client tomorrow at 8pm Tokyo time",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["client"],
+        "datetime": "2026-10-25T20:00",
+        "utc": "2026-10-25T11:00:00Z",
+        "zone": "Asia/Tokyo",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": []
+  }
+}

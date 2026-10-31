@@ -44,7 +44,7 @@ func TestNotifyUserFansOutToLiveDevices(t *testing.T) {
 	otherUser := ensureUser(t, handle, "Someone Else", "other@example.com")
 	foreign := subscribedDevice(t, sessions, otherUser, live, time.Hour)
 
-	notifier := &Notifier{Sessions: sessions, Sender: NewSender(testVAPID(t))}
+	notifier := &Fanout{Sessions: sessions, Sender: NewSender(testVAPID(t))}
 	res, err := notifier.NotifyUser(context.Background(), userID, Message{Title: "Buy glue", Body: "6:00 PM"})
 	if err != nil {
 		t.Fatalf("NotifyUser: %v", err)
@@ -78,7 +78,7 @@ func TestNotifyUserReportsVAPIDRejection(t *testing.T) {
 	refusing, _ := relay(t, http.StatusForbidden)
 	device := subscribedDevice(t, sessions, userID, refusing, time.Hour)
 
-	notifier := &Notifier{Sessions: sessions, Sender: NewSender(testVAPID(t))}
+	notifier := &Fanout{Sessions: sessions, Sender: NewSender(testVAPID(t))}
 	res, err := notifier.NotifyUser(context.Background(), userID, Message{Title: "t", Body: "b"})
 	if !errors.Is(err, ErrVAPID) {
 		t.Fatalf("err = %v, want ErrVAPID", err)
@@ -94,7 +94,7 @@ func TestNotifyUserReportsVAPIDRejection(t *testing.T) {
 // A user with no device set up is not an error: push is best effort.
 func TestNotifyUserWithoutDevices(t *testing.T) {
 	_, sessions, userID := fanOutStack(t)
-	notifier := &Notifier{Sessions: sessions, Sender: NewSender(testVAPID(t))}
+	notifier := &Fanout{Sessions: sessions, Sender: NewSender(testVAPID(t))}
 	res, err := notifier.NotifyUser(context.Background(), userID, Message{Title: "t", Body: "b"})
 	if err != nil || res != (Result{}) {
 		t.Fatalf("NotifyUser = %+v, %v, want an empty result", res, err)
