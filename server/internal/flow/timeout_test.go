@@ -35,7 +35,7 @@ func TestPipelineSlowTranscriptionRetriesThenFails(t *testing.T) {
 	}
 	// A clip that never transcribes never reaches the agent: three failed attempts
 	// cost the model nothing.
-	p.wantAsks(t, 0, 0, 0, 0)
+	p.wantAsks(t, 0, 0, 0)
 	p.drain(t, p.transcription, "transcription queue")
 }
 
@@ -63,8 +63,8 @@ func TestPipelineSlowModelRetriesThenFails(t *testing.T) {
 	if got := strings.Join(p.outcomes(t, job.JobID, store.AgentStage), ","); got != "retry,retry,error" {
 		t.Fatalf("outcomes = %s, want retry,retry,error", got)
 	}
-	// Each attempt screens and then hangs in the planner: three of each, and the
-	// checker and tagger were never reached.
-	p.wantAsks(t, 3, 3, 0, 0)
+	// Each attempt screens and then hangs in the planner: three of each, and the tagger
+	// was never reached.
+	p.wantAsks(t, 3, 3, 0)
 	p.drain(t, p.agent, "agent queue")
 }

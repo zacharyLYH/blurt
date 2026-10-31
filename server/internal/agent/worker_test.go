@@ -99,13 +99,6 @@ func (p *scriptedModel) Finalize(_ context.Context, _ PlannerInput, _ []Message)
 	return turn, nil
 }
 
-func (p *scriptedModel) Verify(_ context.Context, _ Proposal) (Verdict, error) {
-	if p.err != nil {
-		return Verdict{}, p.err
-	}
-	return Verdict{Outcome: "ok"}, nil
-}
-
 func (p *scriptedModel) Tags(ctx context.Context, text string) ([]string, error) {
 	p.mu.Lock()
 	p.tagCalls = append(p.tagCalls, text)
@@ -148,11 +141,6 @@ func (blockingModel) Chat(ctx context.Context, _ PlannerInput, _ []Message, _ []
 func (blockingModel) Finalize(ctx context.Context, _ PlannerInput, _ []Message) (Answer, error) {
 	<-ctx.Done()
 	return Answer{}, ctx.Err()
-}
-
-func (blockingModel) Verify(ctx context.Context, _ Proposal) (Verdict, error) {
-	<-ctx.Done()
-	return Verdict{}, ctx.Err()
 }
 
 func (blockingModel) Tags(ctx context.Context, _ string) ([]string, error) {

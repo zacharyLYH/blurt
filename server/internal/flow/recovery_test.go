@@ -42,7 +42,7 @@ func TestPipelineClaimerRecoversAfterCaptureWorkerDiesMidTranscription(t *testin
 	p.stopClaimers()
 	// The reclaim re-ran transcription and nothing else: the agent ran once, and one run
 	// is a loop turn and the strict call behind it.
-	p.wantAsks(t, 1, 2, 1, 0)
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // The same recovery on the other stage: a worker killed mid-model-call leaves a
@@ -71,7 +71,7 @@ func TestPipelineClaimerRecoversAfterTheAgentDiesMidModel(t *testing.T) {
 	p.stopClaimers()
 	// The killed run screened and then hung in the loop turn; the reclaimed attempt is a
 	// whole new run, so it screens, runs its loop and is the one that is checked.
-	p.wantAsks(t, 2, 3, 1, 0)
+	p.wantAsks(t, 2, 3, 0)
 }
 
 // A Job that committed to SQL but never reached Redis is stranded; the sweeper
@@ -96,7 +96,7 @@ func TestPipelineSweeperRepublishesStrandedJobs(t *testing.T) {
 	// is what proves its routing to that stream.
 	p.settle(t, voiced.JobID, status(store.JobComplete), "the swept voiced Job")
 	// Each stranded Job was planned once, and neither was planned twice by the sweep.
-	p.wantAsks(t, 2, 4, 2, 0)
+	p.wantAsks(t, 2, 4, 0)
 }
 
 // A message for a Job that has already settled is consumed and acknowledged,
@@ -127,7 +127,7 @@ func TestPipelineRunSkipsAMessageForASettledJob(t *testing.T) {
 	if got := len(p.model.planned()); got != 2 {
 		t.Fatalf("plans = %d, want the stale message to cost none", got)
 	}
-	p.wantAsks(t, 2, 4, 2, 0)
+	p.wantAsks(t, 2, 4, 0)
 	if got := p.pending(t, p.agent); len(got) != 0 {
 		t.Fatalf("pending = %+v, want the stale message acknowledged", got)
 	}

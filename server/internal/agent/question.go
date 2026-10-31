@@ -9,10 +9,9 @@ import (
 	"blurt/internal/store"
 )
 
-// questionText is what the user reads, chosen from the answers this run already holds
-// rather than asked for in a second call: the model's own question (from the agent's
-// answer), then the checker's question on a mismatch, then the fixed sentence. Every one
-// still passes through usableQuestion, which is what keeps a clock the user never named off
+// questionText is what the user reads, chosen from the answer this run already holds rather
+// than asked for in a second call: the model's own question, or the fixed sentence. Either
+// way it passes through usableQuestion, which is what keeps a clock the user never named off
 // the screen.
 func (r *jobRun) questionText() string {
 	if askedQuestions(r.job.Conversation) >= maxQuestions {
@@ -21,12 +20,6 @@ func (r *jobRun) questionText() string {
 	}
 	if r.usableQuestion(r.answer.Question) {
 		return r.answer.Question
-	}
-	if r.usableQuestion(r.verifyVerdict.Ask) {
-		return r.verifyVerdict.Ask
-	}
-	if r.verifyVerdict.Outcome == "mismatch" && r.usableQuestion(r.verifyVerdict.Reason) {
-		return r.verifyVerdict.Reason
 	}
 	return defaultQuestion
 }
@@ -68,8 +61,7 @@ func (r *jobRun) usableQuestion(question string) bool {
 // their own, answers yes, and a time they never chose becomes a row they are reminded at.
 // Quoting a clock the user did name is fine — asking which of the times they named comes first
 // is a better question than asking them to say it all again — so this is a provenance check.
-// Clocks only: a day word carries no equally cheap proof, and a question that names nothing at
-// all is the checker's business.
+// Clocks only: a day word carries no equally cheap proof.
 func (r *jobRun) quotesOnlyTheUsersClocks(question string) bool {
 	named := clocksOf(r.said())
 	for clock := range clocksOf(question) {

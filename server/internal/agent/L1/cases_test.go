@@ -38,6 +38,9 @@ type Case struct {
 	Source string `json:"source"`
 	Layer  string `json:"layer"`
 	Size   string `json:"size"`
+	// Stage names the L2 helper this case asks, one call: prescreen or tags. Empty is the
+	// agent loop, which is L1.
+	Stage string `json:"stage,omitempty"`
 	// NowLocal and CurrentTZ are the pinned clock: now_local in current_tz. Every date
 	// the case asserts is derived from it, so the case means the same thing next year
 	// and the expected instant is arithmetic rather than a reading of an answer.
@@ -48,7 +51,10 @@ type Case struct {
 	Seed    Seed   `json:"seed"`
 	History []Turn `json:"history"`
 	Capture string `json:"capture"`
-	Expect  Expect `json:"expect"`
+	// Fact is an L2 tags case's whole input: the one remembered fact whose search
+	// features are asked for.
+	Fact   string `json:"fact,omitempty"`
+	Expect Expect `json:"expect"`
 }
 
 // Turn is one earlier Conversation turn, which is how a continuation case is written.
@@ -56,6 +62,12 @@ type Turn struct {
 	Role string `json:"role"`
 	Text string `json:"text"`
 }
+
+// The two L2 helpers, one call each. A case names one and carries that stage's input.
+const (
+	StagePrescreen = "prescreen"
+	StageTags      = "tags"
+)
 
 // Seed is the rows an earlier capture would have left behind, in the store's own shape.
 // A time may be relative to now_local, so a case still means the same thing next year.
@@ -100,6 +112,24 @@ type Expect struct {
 	// Tools must each have been called. It is the one field about the path rather than
 	// the answer, and it is here because a lookup is invisible in the final rows.
 	Tools []string `json:"tools,omitempty"`
+	// Helper is an L2 case's truth: what the stage under test has to answer.
+	Helper *HelperExpect `json:"helper,omitempty"`
+}
+
+// HelperExpect is an L2 case's static truth: the verdict a helper must answer, the words its
+// reason has to carry, or the features one fact has to earn.
+//
+// The verdict is the stage's own enum — a screen answers ok, abuse or incoherent. TagsHas is
+// what a future capture must be able to reach the fact by; TagsAny is the weaker form, for
+// words outside the fact where any sensible one counts as an answer.
+type HelperExpect struct {
+	Verdict   string   `json:"verdict,omitempty"`
+	ReasonHas []string `json:"reason_contains,omitempty"`
+	TagsHas   []string `json:"tags_has,omitempty"`
+	TagsAny   []string `json:"tags_any,omitempty"`
+	TagsNot   []string `json:"tags_not,omitempty"`
+	TagsMin   int      `json:"tags_min,omitempty"`
+	TagsMax   int      `json:"tags_max,omitempty"`
 }
 
 // ExpectReminder is one row the commit must leave. DateTime is the local time as stored
@@ -162,6 +192,9 @@ func loadCase(dir, file string) (Case, error) {
 	if want := strings.TrimSuffix(file, ".json"); c.Name != want {
 		return Case{}, fmt.Errorf("case %s names itself %q", file, c.Name)
 	}
+	if err := c.check(); err != nil {
+		return Case{}, fmt.Errorf("case %s: %w", c.Name, err)
+	}
 	if _, _, err := c.anchor(); err != nil {
 		return Case{}, fmt.Errorf("case %s: %w", c.Name, err)
 	}
@@ -169,6 +202,34 @@ func loadCase(dir, file string) (Case, error) {
 		return Case{}, fmt.Errorf("case %s: %w", c.Name, err)
 	}
 	return c, nil
+}
+
+// check refuses a case whose layer and inputs disagree, at load rather than at run: an L2
+// case names one helper and carries that helper's input, and a typo in the stage would
+// otherwise spend a call to answer nothing.
+func (c Case) check() error {
+	if c.Stage == "" {
+		if c.Expect.Helper != nil {
+			return errors.New("helper is an L2 field; name a stage")
+		}
+		return nil
+	}
+	if c.Expect.Helper == nil {
+		return fmt.Errorf("stage %s needs a helper expectation", c.Stage)
+	}
+	switch c.Stage {
+	case StagePrescreen:
+		if c.Capture == "" {
+			return errors.New("a prescreen case needs a capture")
+		}
+	case StageTags:
+		if c.Fact == "" {
+			return errors.New("a tags case needs a fact")
+		}
+	default:
+		return fmt.Errorf("unknown stage %q", c.Stage)
+	}
+	return nil
 }
 
 // pullFixture seeds a named fixture's rows first and the case's own after them, so a case

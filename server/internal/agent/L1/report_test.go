@@ -41,14 +41,13 @@ type reportLine struct {
 // repeat runs one case n times and folds the runs into one line: a pass rate, plus the
 // first run that failed, because that is the one worth reading. A rate is what a prompt
 // change can be measured against — this suite has watched one case pass and fail on the
-// same prompt, so a single bit says nothing.
-func repeat(t *testing.T, c Case, a arm, n int, requests *wire) reportLine {
-	t.Helper()
+// same prompt, so a single bit says nothing. L1 and L2 share it, so the runner is the
+// argument.
+func repeat(n int, attempt func() reportLine) reportLine {
 	var total reportLine
-	for run := range n {
-		requests.forCase(c.Name)
-		one := runCase(t, c, a)
-		if run == 0 {
+	for i := range n {
+		one := attempt()
+		if i == 0 {
 			total = one
 			total.Fields, total.Failures, total.Faults, total.Tools = nil, nil, nil, nil
 			total.Calls, total.LatencyMs = 0, 0
@@ -168,8 +167,8 @@ func summarize(lines []reportLine, armName, report string) {
 		faults += len(line.Faults)
 		slowest = max(slowest, line.LatencyMs)
 	}
-	fmt.Printf("\nL1: %d/%d passed · arm %s · %d model calls · slowest %s · %d lint faults\n",
-		passed, runs, armName, calls, time.Duration(slowest)*time.Millisecond, faults)
+	fmt.Printf("\n%s: %d/%d passed · arm %s · %d model calls · slowest %s · %d lint faults\n",
+		layerLabel(), passed, runs, armName, calls, time.Duration(slowest)*time.Millisecond, faults)
 	fmt.Printf("%-42s %6s %6s %7s %8s\n", "case", "pass", "calls", "faults", "ms")
 	for _, line := range lines {
 		fmt.Printf("%-42s %6s %6d %7d %8d\n", line.Case,
@@ -204,12 +203,16 @@ func writeTranscript(t *testing.T, model string, c Case, text string) string {
 
 // runName is stable per layer and model: the report and the transcripts of one pair land
 // together, so re-running it is one diff.
-func runName(model string) string {
-	layer := *evalLayer
-	if layer == "" {
-		layer = "all"
+func runName(model string) string { return layerLabel() + "-" + modelSlug(model) }
+
+// layerLabel is the layer this run scores: the flag it was asked for, or everything.
+// L1 and L2 land in separate reports on purpose, so two models or two prompt arms compare by
+// diff rather than by two logs read side by side.
+func layerLabel() string {
+	if *evalLayer == "" {
+		return "all"
 	}
-	return layer + "-" + modelSlug(model)
+	return *evalLayer
 }
 
 // reportName is the run's scorecard.

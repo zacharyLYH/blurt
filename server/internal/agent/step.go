@@ -42,13 +42,10 @@ func (r *jobRun) trace(outcome string) map[string]any {
 		"durationMs": r.loop.now().Sub(r.started).Milliseconds(),
 	}
 	put(detail, "prescreenModel", r.loop.Prescreen.Name)
-	put(detail, "verifyModel", r.loop.Verify.Name)
 	put(detail, "tagsModel", r.loop.Tags.Name)
 	put(detail, "prescreen", r.prescreenVerdict.Outcome)
 	put(detail, "prescreenReason", r.prescreenVerdict.Reason)
 	put(detail, "kind", r.answer.Kind)
-	put(detail, "verify", r.verifyVerdict.Outcome)
-	put(detail, "verifyReason", r.verifyVerdict.Reason)
 	// What the model said it read the time from rides the Trace, so a reader can
 	// check the answer against the user's own words. The day token and the date it
 	// resolved to are two different facts: the token is what the model copied, the

@@ -1,7 +1,7 @@
 // The model port: what the AgentLoop asks for, and the two chat envelopes that answer it. A
 // user brings one endpoint, one key and one model, so the transport is built per Job from the
-// User row and every stage rides it: the screen, the agent loop, the strict call behind it, the
-// check and the tagger.
+// User row and every stage rides it: the screen, the agent loop, the strict call behind it
+// and the tagger.
 //
 // Two wire shapes, differing only in framing. The home gateway takes
 // {"model", "payload": {messages, tools, max_tokens, response_format}} and answers under
@@ -107,34 +107,20 @@ type PlannerInput struct {
 	Remembered []store.Memory
 }
 
-// Verdict is what a screening or checking turn answers. Outcome is the enum the
-// stage's schema names; Reason is the one-line diagnostic that rides the Trace.
-// Ask is the checker's user-facing sentence when it rejects a row, and is empty
-// for a screen.
+// Verdict is what the screen answers. Outcome is the enum its schema names; Reason is the
+// one-line diagnostic that rides the Trace.
 type Verdict struct {
 	Outcome string
 	Reason  string
-	Ask     string
 }
 
-// Proposal is one postagentcheck: the user's own words beside the rows the commit
-// would record. Reminder is nil for a fact-only turn, and Fact is empty for a
-// turn that wrote no Memory — the checker sees exactly what would land.
-type Proposal struct {
-	Evidence string
-	Reminder *store.Reminder
-	Fact     string
-}
-
-// Model is Blurt's model, asked five ways: to screen a capture, to work one free-form
-// agent turn with the tools on offer, to answer the strict schema that ends the turn, to
-// check a proposed record against the user's words, and to name the search features of a
-// committed Memory.
+// Model is Blurt's model, asked four ways: to screen a capture, to work one free-form
+// agent turn with the tools on offer, to answer the strict schema that ends the turn, and to
+// name the search features of a committed Memory.
 type Model interface {
 	Prescreen(ctx context.Context, capture string) (Verdict, error)
 	Chat(ctx context.Context, in PlannerInput, sent []Message, tools []Tool) (Message, error)
 	Finalize(ctx context.Context, in PlannerInput, sent []Message) (Answer, error)
-	Verify(ctx context.Context, c Proposal) (Verdict, error)
 	Tags(ctx context.Context, text string) ([]string, error)
 }
 
@@ -154,6 +140,10 @@ type Settings struct {
 	URL      string
 	APIKey   string
 	Model    string
+	// Temperature rides every call. Zero is right for any stage whose answer is a decision —
+	// a verdict, a plan — and the tagger runs hot because its answer is a guess at words
+	// nobody in the capture said.
+	Temperature float64
 }
 
 // ModelClient calls one user's chat route. Every stage travels this one method; the
@@ -164,14 +154,21 @@ type ModelClient struct {
 	// Prompt overrides the agent's system prompt when it is set. It exists so the eval can
 	// A/B a prompt against the same model and nothing in the app sets it.
 	Prompt string
+	// PrescreenPrompt and TagsPrompt are the two helpers' own overrides, for the same reason
+	// and with the same rule: an empty one means the shipped prompt.
+	PrescreenPrompt string
+	TagsPrompt      string
 }
 
 // prompt is the system prompt the agent loop sends.
-func (h *ModelClient) prompt() string {
-	if h.Prompt != "" {
-		return h.Prompt
+func (h *ModelClient) prompt() string { return pick(h.Prompt, AgentPrompt) }
+
+// pick is a prompt arm's own text when it has one, and the shipped prompt otherwise.
+func pick(override, shipped string) string {
+	if override != "" {
+		return override
 	}
-	return AgentPrompt
+	return shipped
 }
 
 // Message is one turn of a conversation as the provider takes it: the role, the words,
@@ -223,6 +220,7 @@ const functionType = "function"
 // hosted router honest.
 type openRouterRequest struct {
 	Model          string          `json:"model"`
+	Temperature    float64         `json:"temperature"`
 	Messages       []Message       `json:"messages"`
 	Tools          []Tool          `json:"tools,omitempty"`
 	MaxTokens      int             `json:"max_tokens"`
@@ -245,8 +243,9 @@ type providerPrefs struct {
 
 // gatewayRequest is the home gateway's body: a model plus a payload.
 type gatewayRequest struct {
-	Model   string       `json:"model"`
-	Payload gatewayInput `json:"payload"`
+	Model       string       `json:"model"`
+	Temperature float64      `json:"temperature"`
+	Payload     gatewayInput `json:"payload"`
 }
 
 type gatewayInput struct {
@@ -400,6 +399,7 @@ func (h *ModelClient) body(messages []Message, t turn) any {
 		}
 		return openRouterRequest{
 			Model:          h.settings.Model,
+			Temperature:    h.settings.Temperature,
 			Messages:       messages,
 			Tools:          t.tools,
 			MaxTokens:      maxOutputTokens,
@@ -409,7 +409,8 @@ func (h *ModelClient) body(messages []Message, t turn) any {
 		}
 	}
 	return gatewayRequest{
-		Model: h.settings.Model,
+		Model:       h.settings.Model,
+		Temperature: h.settings.Temperature,
 		Payload: gatewayInput{
 			Messages:       messages,
 			Tools:          t.tools,
@@ -449,7 +450,7 @@ func ask[T any](ctx context.Context, h *ModelClient, messages []Message, t turn)
 // costs one wasted planner call rather than a wrong row.
 func (h *ModelClient) Prescreen(ctx context.Context, capture string) (Verdict, error) {
 	parsed, err := ask[prescreenAnswer](ctx, h, []Message{
-		{Role: "system", Content: prescreenPrompt},
+		{Role: "system", Content: pick(h.PrescreenPrompt, prescreenPrompt)},
 		{Role: "user", Content: "capture: " + capture},
 	}, turn{name: "prescreen", schema: prescreenSchema})
 	if err != nil {
@@ -493,35 +494,13 @@ func (h *ModelClient) Finalize(ctx context.Context, in PlannerInput, sent []Mess
 	return answer, nil
 }
 
-// Verify is the postagentcheck: the user's own words beside the row the commit
-// would record, read by a model that did not propose it.
-func (h *ModelClient) Verify(ctx context.Context, c Proposal) (Verdict, error) {
-	parsed, err := ask[verifyAnswer](ctx, h, []Message{
-		{Role: "system", Content: verifyPrompt},
-		{Role: "user", Content: verifyBlock(c)},
-	}, turn{name: "verify", schema: verifySchema})
-	if err != nil {
-		return Verdict{}, err
-	}
-	switch parsed.Verdict {
-	case "ok", "mismatch":
-		return Verdict{
-			Outcome: parsed.Verdict,
-			Reason:  strings.TrimSpace(parsed.Reason),
-			Ask:     strings.TrimSpace(parsed.Question),
-		}, nil
-	default:
-		return Verdict{}, fmt.Errorf("agent: verify verdict %q is neither ok nor mismatch", parsed.Verdict)
-	}
-}
-
 // Tags names the search features of one fact, so a later capture worded nothing like it
 // can still find it. The call carries no conversation and no retrieval — the fact is the
 // whole input — and the answer is one string the server splits and normalizes. A Memory
 // is the only record that carries them, and they are generated on creation.
 func (h *ModelClient) Tags(ctx context.Context, text string) ([]string, error) {
 	parsed, err := ask[tags](ctx, h, []Message{
-		{Role: "system", Content: tagsPrompt},
+		{Role: "system", Content: pick(h.TagsPrompt, tagsPrompt)},
 		{Role: "user", Content: "fact: " + text},
 	}, turn{name: "tags", schema: tagsSchema})
 	if err != nil {
@@ -547,37 +526,4 @@ func snippet(content string) string {
 		return content
 	}
 	return content[:limit] + "…"
-}
-
-// verifyBlock is what the checker reads: the user's words first, then the row as it
-// would be stored. It is the whole input on purpose — no conversation, no
-// retrieval, nothing else to blame.
-func verifyBlock(c Proposal) string {
-	var block strings.Builder
-	block.WriteString("evidence: " + c.Evidence + "\n")
-	if c.Reminder == nil {
-		block.WriteString("reminder: none\n")
-	} else {
-		block.WriteString("reminder: " + reminderLine(*c.Reminder) + "\n")
-	}
-	if c.Fact == "" {
-		block.WriteString("fact: none")
-	} else {
-		block.WriteString("fact: " + c.Fact)
-	}
-	return block.String()
-}
-
-// reminderLine renders one proposed row the way it would be stored: the fact of
-// the row, when it rings, in which zone, and how it repeats.
-func reminderLine(reminder store.Reminder) string {
-	when := reminder.LocalDateTime
-	if when == "" {
-		when = wallClock(reminder.NextEmitAtUtc, reminder.Timezone)
-	}
-	frequency := "none"
-	if reminder.Rule != nil {
-		frequency = reminder.Rule.Frequency
-	}
-	return fmt.Sprintf("%s | %s %s | recurrence %s", reminder.Text, when, reminder.Timezone, frequency)
 }

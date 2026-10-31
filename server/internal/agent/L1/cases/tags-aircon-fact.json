@@ -1,0 +1,18 @@
+{
+  "layer": "L2",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "size": "small",
+  "stage": "tags",
+  "name": "tags-aircon-fact",
+  "source": "branch:tags:distinct-from-examples",
+  "fact": "Kenny fixes the aircon and he only does weekends",
+  "expect": {
+    "helper": {
+      "tags_has": [
+        "aircon"
+      ],
+      "tags_min": 3
+    }
+  }
+}

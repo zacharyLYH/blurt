@@ -129,36 +129,40 @@ var envValues = sync.OnceValue(func() map[string]string {
 	return values
 })
 
+// envValue is one setting: the process environment wins over .env, so a run can be pointed at
+// another model without editing the file. L1 and L2 read the same three-way fallback here.
+func envValue(key string) string {
+	if fromEnv := os.Getenv(key); fromEnv != "" {
+		return fromEnv
+	}
+	return envValues()[key]
+}
+
 // evalSettings is what one hosted run needs: a provider, an endpoint, a key and a model,
 // exactly the four the setup page stores on a User row. There is no default model on
 // purpose — the id belongs to the deployment, and a wrong one would score every case as
 // a model failure.
 func evalSettings() (agent.Settings, string) {
-	// The process environment wins over .env, so one run can be pointed at another model
-	// without editing the file.
-	value := func(key string) string {
-		if fromEnv := os.Getenv(key); fromEnv != "" {
-			return fromEnv
-		}
-		return envValues()[key]
-	}
-	key := value("BLURT_EVAL_KEY")
+	key := envValue("BLURT_EVAL_KEY")
 	if key == "" {
 		return agent.Settings{}, "set BLURT_EVAL_KEY and BLURT_EVAL_MODEL (in .env or the environment) to run the cases against a real model"
 	}
-	model := value("BLURT_EVAL_MODEL")
+	model := envValue("BLURT_EVAL_MODEL")
 	if model == "" {
 		return agent.Settings{}, "BLURT_EVAL_KEY is set but BLURT_EVAL_MODEL is not"
 	}
-	url := value("BLURT_EVAL_URL")
+	url := envValue("BLURT_EVAL_URL")
 	if url == "" {
 		url = defaultEvalURL
 	}
 	return agent.Settings{Provider: agent.ProviderOpenRouter, URL: url, APIKey: key, Model: model}, ""
 }
 
-// evalCases is the case set the flags asked for, in file order.
-func evalCases(t *testing.T) []Case {
+// evalCases is the case set the flags asked for, narrowed to the lane this test runs: L1 and
+// L2 share one directory, so each test takes only the cases it can run. A lane with nothing
+// for this test is a skip; a -case that matched nothing stays a loud failure, because that is
+// a name that does not exist rather than a layer this test does not serve.
+func evalCases(t *testing.T, lane func(Case) bool) []Case {
 	t.Helper()
 	all, err := loadCases(caseDir)
 	if err != nil {
@@ -172,13 +176,21 @@ func evalCases(t *testing.T) []Case {
 		if *evalCase != "" && c.Name != *evalCase {
 			continue
 		}
+		if !lane(c) {
+			continue
+		}
 		picked = append(picked, c)
 	}
-	if len(picked) == 0 {
+	if len(picked) == 0 && *evalCase != "" {
 		t.Fatalf("no case matched (%d loaded)", len(all))
 	}
 	return picked
 }
+
+// loopCase is L1's lane: the agent loop, seeded database and all. helperCase is L2's: the
+// two stages that run one call each, with no loop and no database behind them.
+func loopCase(c Case) bool   { return c.Stage == "" }
+func helperCase(c Case) bool { return c.Stage != "" }
 
 // TestPlannerCases is L1: one case, one fresh database, the real tools, the real lint retry
 // and the loop called directly. The settings come from .env (BLURT_EVAL_*), and -eval is
@@ -188,6 +200,10 @@ func evalCases(t *testing.T) []Case {
 func TestPlannerCases(t *testing.T) {
 	if !*evalRun {
 		t.Skip("pass -eval to run the cases against the real provider (settings come from .env)")
+	}
+	cases := evalCases(t, loopCase)
+	if len(cases) == 0 {
+		t.Skip("no L1 case matched: the helper stages run as -layer L2")
 	}
 	settings, skip := evalSettings()
 	if skip != "" {
@@ -203,14 +219,19 @@ func TestPlannerCases(t *testing.T) {
 	}
 	a := evalArm(t, settings, requests)
 	lines := []reportLine{}
-	for _, c := range evalCases(t) {
+	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
-			lines = append(lines, repeat(t, c, a, *evalRepeat, requests))
+			lines = append(lines, repeat(*evalRepeat, func() reportLine {
+				requests.forCase(c.Name)
+				return runCase(t, c, a)
+			}))
 		})
 	}
 	report := reportPath(a.name)
-	if *evalAudit {
-		report = "" // nothing was written, so nothing to point at
+	if *evalAudit || *evalCase != "" {
+		// Nothing worth pointing at: -audit writes no report, and a single-case run must not
+		// overwrite the whole layer's scorecard with one line.
+		report = ""
 	} else {
 		writeReport(t, a.name, lines)
 	}
@@ -287,7 +308,11 @@ func TestCaseRunScoresOffline(t *testing.T) {
 // is the server's own render, so a retrieval change or a prompt change shows up as a diff
 // here instead of as a suspicion in a report. Run with -update to write the goldens.
 func TestPlannerGoldens(t *testing.T) {
-	for _, c := range evalCases(t) {
+	cases := evalCases(t, loopCase)
+	if len(cases) == 0 {
+		t.Skip("no L1 case matched: a helper case pins no context block")
+	}
+	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
 			got := newCaseRun(t, c, nil, "").block(t)
 			path := filepath.Join(goldenDir, c.Name+".txt")

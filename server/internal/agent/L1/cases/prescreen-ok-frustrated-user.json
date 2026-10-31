@@ -1,0 +1,11 @@
+{
+  "name": "prescreen-ok-frustrated-user",
+  "source": "branch:false-refusal:frustration",
+  "layer": "L2",
+  "size": "small",
+  "stage": "prescreen",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "capture": "ugh I already told you, 6pm",
+  "expect": {"helper": {"verdict": "ok"}}
+}

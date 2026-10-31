@@ -62,10 +62,6 @@ func (s *scripted) Finalize(context.Context, agent.PlannerInput, []agent.Message
 	return answer, nil
 }
 
-func (s *scripted) Verify(context.Context, agent.Proposal) (agent.Verdict, error) {
-	return agent.Verdict{Outcome: "ok"}, nil
-}
-
 func (s *scripted) Tags(context.Context, string) ([]string, error) { return nil, nil }
 
 var _ agent.Model = (*scripted)(nil)
@@ -102,19 +98,15 @@ func answerWith(record agent.Record) agent.Answer {
 	return agent.Answer{Kind: agent.AnswerRecords, Records: []agent.Record{record}}
 }
 
-// sideStage stands in for the three stages L1 does not score. Prescreening and the
-// post-agent check pass every capture, so a case can only fail on the agent turn, the
-// strict call behind it and the lint retry; the tagger answers nothing, because a Memory's
-// search features come from the case's own seed. The two planner methods are the wiring's
-// business, so calling one is a test bug worth a loud error rather than a zero value.
+// sideStage stands in for the two stages L1 does not score: the screen passes every capture
+// and the tagger answers nothing, because a Memory's search features come from the case's own
+// seed, so a case can only fail on the agent turn, the strict call behind it and the lint
+// retry. The two planner methods are the wiring's business, so calling one is a test bug worth a
+// loud error rather than a zero value.
 type sideStage struct{}
 
 func (sideStage) Prescreen(context.Context, string) (agent.Verdict, error) {
 	return agent.Verdict{Outcome: verdictOK}, nil
-}
-
-func (sideStage) Verify(context.Context, agent.Proposal) (agent.Verdict, error) {
-	return agent.Verdict{Outcome: "ok"}, nil
 }
 
 func (sideStage) Tags(context.Context, string) ([]string, error) { return nil, nil }

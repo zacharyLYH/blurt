@@ -40,7 +40,6 @@ func setValid(t *testing.T) {
 		"BLURT_VAPID_SUBJECT":     "mailto:sender@example.com",
 		"BLURT_STT_URL":           "https://stt.example.com/v1/audio/transcriptions",
 		"BLURT_PRESCREEN_MODEL":   "screen-model",
-		"BLURT_CHECK_MODEL":       "check-model",
 		"BLURT_TAGS_MODEL":        "tags-model",
 	}
 	for name, value := range env {
@@ -251,8 +250,8 @@ func TestAgentFakeSwitch(t *testing.T) {
 	}
 }
 
-// The three cheap stages are the home gateway's, and each is required without the
-// fake: a capture that cannot be screened or checked could never be trusted.
+// The two cheap stages are the home gateway's, and each is required without the fake: a
+// capture that cannot be screened, or a fact left untagged, could never be trusted.
 func TestAuxStagesRequireAModel(t *testing.T) {
 	setValid(t)
 	t.Setenv("BLURT_PRESCREEN_MODEL", "")
@@ -265,7 +264,7 @@ func TestAuxStagesRequireAModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load with the fake: %v", err)
 	}
-	if cfg.Helper.Prescreen != "" || cfg.Helper.Verify != "check-model" {
+	if cfg.Helper.Prescreen != "" {
 		t.Fatalf("aux = %+v, want the fake to waive only the requirement", cfg.Helper)
 	}
 

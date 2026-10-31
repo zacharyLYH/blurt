@@ -58,7 +58,7 @@ func TestPipelineRetrievalPullsTheIntendedMemories(t *testing.T) {
 	}
 	// Retrieval runs on the server between the screen and the plan: the seeded
 	// Memories cost no model call of their own.
-	p.wantAsks(t, 1, 2, 1, 0)
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // A capture that shares no search term with any Memory still plans normally: an
@@ -76,7 +76,7 @@ func TestPipelineRetrievalReturnsNothingWhenNoMemoryMatches(t *testing.T) {
 	if in := p.plannedFor(t, capture); len(in.Remembered) != 0 {
 		t.Fatalf("remembered = %+v, want none", in.Remembered)
 	}
-	p.wantAsks(t, 1, 2, 1, 0)
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // The capture is prose, so it can carry punctuation an FTS5 MATCH expression
@@ -94,7 +94,7 @@ func TestPipelineRetrievalSurvivesPunctuation(t *testing.T) {
 	if in := p.plannedFor(t, capture); !recalled(in, fact) {
 		t.Fatalf("remembered = %+v, want the flight Memory", in.Remembered)
 	}
-	p.wantAsks(t, 1, 2, 1, 0)
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // Retrieval is owner-scoped inside the loop, not only in the store: another
@@ -123,5 +123,5 @@ func TestPipelineRetrievalStaysInsideTheOwner(t *testing.T) {
 		t.Fatalf("remembered = %d Memories, want only the owner's: %+v",
 			len(in.Remembered), in.Remembered)
 	}
-	p.wantAsks(t, 1, 2, 1, 0)
+	p.wantAsks(t, 1, 2, 0)
 }

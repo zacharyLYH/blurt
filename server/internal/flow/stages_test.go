@@ -13,11 +13,10 @@ import (
 	"blurt/internal/store"
 )
 
-// The split deployment's model ids. The planner is the Job owner's own provider; the
-// screen, the check and the tagger are the home gateway's three cheap models.
+// The split deployment's model ids. The planner is the Job owner's own provider; the screen
+// and the tagger are the home gateway's two cheap models.
 const (
 	screenModel  = "screen-model"
-	checkModel   = "check-model"
 	tagModel     = "tag-model"
 	plannerModel = "owner/planner-model"
 )
@@ -139,12 +138,12 @@ func (p *pump) wantStages(t *testing.T, script *stageScript, want map[string]sta
 	}
 }
 
-// TestPipelineFourStagesAskTheirOwnModel is the split-model pin. The planner rides the
-// Job owner's endpoint; the screen, the check and the tagger ride the home gateway,
-// each under its own model id. There is no single client to fall back on, which is the
-// production shape — so a stage wired to the wrong client, model or wire envelope fails
-// here rather than in a deployment where nobody is watching the gateway's logs.
-func TestPipelineFourStagesAskTheirOwnModel(t *testing.T) {
+// TestPipelineThreeStagesAskTheirOwnModel is the split-model pin. The planner rides the
+// Job owner's endpoint; the screen and the tagger ride the home gateway, each under its own
+// model id. There is no single client to fall back on, which is the production shape — so a
+// stage wired to the wrong client, model or wire envelope fails here rather than in a
+// deployment where nobody is watching the gateway's logs.
+func TestPipelineThreeStagesAskTheirOwnModel(t *testing.T) {
 	server, script := newStageScript(t)
 	p := newPump(t)
 	loop := p.loop
@@ -154,7 +153,7 @@ func TestPipelineFourStagesAskTheirOwnModel(t *testing.T) {
 		return agent.Stage{Name: name, Model: agent.NewModelClient(agent.Settings{
 			Provider: agent.ProviderGateway, URL: server.URL, APIKey: "helper", Model: name})}
 	}
-	loop.Prescreen, loop.Verify, loop.Tags = gateway(screenModel), gateway(checkModel), gateway(tagModel)
+	loop.Prescreen, loop.Tags = gateway(screenModel), gateway(tagModel)
 	loop.Resolver = fixedResolver{
 		model: agent.NewModelClient(agent.Settings{
 			Provider: agent.ProviderOpenRouter, URL: server.URL, APIKey: "owner", Model: plannerModel}),
@@ -172,7 +171,6 @@ func TestPipelineFourStagesAskTheirOwnModel(t *testing.T) {
 		"prescreen": {Model: screenModel, Envelope: "gateway"},
 		"agent":     {Model: plannerModel, Envelope: "openai"},
 		"planner":   {Model: plannerModel, Envelope: "openai"},
-		"verify":    {Model: checkModel, Envelope: "gateway"},
 		"tags":      {Model: tagModel, Envelope: "gateway"},
 	})
 	// The owner's model named the run, and the three gateway models are in the Trace.

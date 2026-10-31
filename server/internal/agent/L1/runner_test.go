@@ -62,7 +62,6 @@ func newCaseRun(t *testing.T, c Case, model agent.Model, modelName string) *case
 			},
 			Planner:        agent.Stage{Model: model, Name: modelName},
 			Prescreen:      agent.Stage{Model: sideStage{}},
-			Verify:         agent.Stage{Model: sideStage{}},
 			Tags:           agent.Stage{Model: sideStage{}},
 			Pusher:         &recordedPush{},
 			Timeout:        evalTimeout,

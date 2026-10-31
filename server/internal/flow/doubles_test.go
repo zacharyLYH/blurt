@@ -47,11 +47,11 @@ type scripted struct {
 // planner port: the free-form agent turn and the strict call behind submit_plan are the same
 // model, and a run that skipped either is not a run these flows should pass.
 type asks struct {
-	vet, plan, verify, tags int
+	vet, plan, tags int
 }
 
 func (a asks) String() string {
-	return fmt.Sprintf("vet=%d plan=%d verify=%d tags=%d", a.vet, a.plan, a.verify, a.tags)
+	return fmt.Sprintf("vet=%d plan=%d tags=%d", a.vet, a.plan, a.tags)
 }
 
 func (s *scripted) Prescreen(_ context.Context, _ string) (agent.Verdict, error) {
@@ -116,13 +116,6 @@ func (s *scripted) Finalize(_ context.Context, in agent.PlannerInput, _ []agent.
 	return turn, nil
 }
 
-func (s *scripted) Verify(_ context.Context, _ agent.Proposal) (agent.Verdict, error) {
-	s.mu.Lock()
-	s.asks.verify++
-	s.mu.Unlock()
-	return agent.Verdict{Outcome: "ok"}, nil
-}
-
 func (s *scripted) planned() []agent.PlannerInput {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -152,9 +145,9 @@ func (s *scripted) callCounts() asks {
 // wantAsks is the plumbing assertion at the stage ports: exactly these many asks per
 // stage. A run that asked the wrong AI, skipped a stage, or asked twice fails here
 // rather than in the rows it wrote.
-func (p *pump) wantAsks(t *testing.T, vet, plan, verify, tags int) {
+func (p *pump) wantAsks(t *testing.T, vet, plan, tags int) {
 	t.Helper()
-	want := asks{vet: vet, plan: plan, verify: verify, tags: tags}
+	want := asks{vet: vet, plan: plan, tags: tags}
 	p.declared, p.expectAt = true, &want
 	if got := p.model.callCounts(); got != want {
 		t.Fatalf("model asks = %s, want %s", got, want)
@@ -303,8 +296,8 @@ func newGatewayScript(t *testing.T, records ...string) (*httptest.Server, *gatew
 
 		script.mu.Lock()
 		script.requests = append(script.requests, gatewayCall{Schema: name, Messages: messages})
-		// The screen and the check pass by default; only the tests that script a
-		// refusal or a mismatch answer otherwise.
+		// The screen passes by default; only the tests that script a refusal answer
+		// otherwise.
 		content := `{"verdict":"ok","reason":"","question":""}`
 		switch name {
 		case "agent":

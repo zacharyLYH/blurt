@@ -128,17 +128,20 @@ func main() {
 	if cfg.FakeAgent {
 		slog.Warn("BLURT_FAKE_AGENT is on: the model is scripted — never do this on a public host")
 		fake := agent.Stage{Model: agent.Fake{}, Name: "fake"}
-		loop.Planner, loop.Prescreen, loop.Verify, loop.Tags = fake, fake, fake, fake
+		loop.Planner, loop.Prescreen, loop.Tags = fake, fake, fake
 	} else {
 		loop.Resolver = agent.UserModels{Users: users, Key: cfg.EncryptionKey}
 		// The cheap stages are the home gateway's, each with its own model. The
 		// core turn builds a transport per Job from the user's own settings.
-		helper := func(name string) agent.Stage {
+		helper := func(name string, temperature float64) agent.Stage {
 			return agent.Stage{Name: name, Model: agent.NewModelClient(agent.Settings{
-				Provider: agent.ProviderGateway, URL: cfg.Helper.URL, APIKey: cfg.Helper.APIKey, Model: name,
+				Provider: agent.ProviderGateway, URL: cfg.Helper.URL, APIKey: cfg.Helper.APIKey,
+				Model: name, Temperature: temperature,
 			})}
 		}
-		loop.Prescreen, loop.Verify, loop.Tags = helper(cfg.Helper.Prescreen), helper(cfg.Helper.Verify), helper(cfg.Helper.Tags)
+		// A screen is a decision, so it runs greedy. The tagger's answer is a guess at
+		// words nobody in the capture said, and heat is what finds them.
+		loop.Prescreen, loop.Tags = helper(cfg.Helper.Prescreen, 0), helper(cfg.Helper.Tags, 1)
 	}
 	agentWorker := &queue.Worker{Stream: agentQueue, Jobs: jobs, Step: loop.Step}
 

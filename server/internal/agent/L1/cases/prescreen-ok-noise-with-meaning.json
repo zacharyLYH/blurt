@@ -1,0 +1,11 @@
+{
+  "name": "prescreen-ok-noise-with-meaning",
+  "source": "branch:false-refusal:background-noise",
+  "layer": "L2",
+  "size": "small",
+  "stage": "prescreen",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "capture": "baby crying in the back, remind me to call the clinic at 4",
+  "expect": {"helper": {"verdict": "ok"}}
+}

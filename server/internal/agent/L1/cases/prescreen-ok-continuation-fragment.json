@@ -1,0 +1,11 @@
+{
+  "name": "prescreen-ok-continuation-fragment",
+  "source": "L1:continuation-answer-supplies-the-clock",
+  "layer": "L2",
+  "size": "small",
+  "stage": "prescreen",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "capture": "tomorrow at 6pm",
+  "expect": {"helper": {"verdict": "ok"}}
+}

@@ -1,0 +1,11 @@
+{
+  "name": "prescreen-incoherent-syllables",
+  "source": "prompt:example-3",
+  "layer": "L2",
+  "size": "small",
+  "stage": "prescreen",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "capture": "hmm ah the the",
+  "expect": {"helper": {"verdict": "incoherent"}}
+}

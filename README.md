@@ -22,7 +22,7 @@ Boot panics on any gap. Every `BLURT_FAKE_*` switch is local/e2e only: never set
 | Var | What |
 | --- | --- |
 | `BLURT_STT_URL` `_API_KEY` `_MODEL` | phonon transcription route. Not OpenAI-shaped: base64 WAV data URI in, `{"output":{"text":"…"}}` out. `_MODEL` must be `phonon`; a wrong key gets a 401 that Blurt treats as permanent. |
-| `BLURT_PRESCREEN_MODEL` `BLURT_CHECK_MODEL` `BLURT_TAGS_MODEL` | the three cheap stages: prescreen, post-agent check, memory tagger. Same gateway as STT, so URL and key default to `BLURT_STT_*`; `BLURT_AUX_URL` / `BLURT_AUX_API_KEY` override. |
+| `BLURT_PRESCREEN_MODEL` `BLURT_TAGS_MODEL` | the two cheap stages: prescreen and memory tagger. Same gateway as STT, so URL and key default to `BLURT_STT_*`; `BLURT_AUX_URL` / `BLURT_AUX_API_KEY` override. |
 | `BLURT_SMTP_*` | login-PIN mail. Gmail App Password (2FA required); nothing else to configure. |
 | `BLURT_PUBLIC_ORIGINS` | comma-separated CSRF allowlist. Empty = localhost:9998 + :5173 (dev only). Set it and localhost is no longer trusted unless listed. |
 | `BLURT_REDIS_URL` | queue transport. Default `redis://redis:6379/0`. |
@@ -46,9 +46,11 @@ Frontend dev server, proxying the docker stack: `cd web && npm install && npm ru
 Questionnaire questions live in `web/src/data/questionnaire/v1.json` (versioned file).
 SQLite holds the durable Job record; Redis Streams owns routing and crash recovery.
 
-## Eval (L1)
+## Eval (L1, L2)
 
-Scores the shipped prompt against a real provider. One case per file, in `server/internal/agent/L1/cases/`. Settings come from `.env` (the process environment wins), and a key is the only thing to supply:
+Scores the shipped prompts against real models. One case per file, in `server/internal/agent/L1/cases/`; the case's `layer` picks which test runs it. Settings come from `.env` (the process environment wins).
+
+**L1** is the agent loop, on the user's own hosted model — a key and a model id are the only things to supply:
 
 ```sh
 BLURT_EVAL_KEY=...                                              # required
@@ -56,20 +58,26 @@ BLURT_EVAL_MODEL=openai/gpt-6-luna                              # required
 BLURT_EVAL_URL=https://openrouter.ai/api/v1/chat/completions    # optional, this is the default
 
 cd server
-go test ./internal/agent/L1 -run TestPlannerCases -eval -v     # every case
+go test ./internal/agent/L1 -run TestPlannerCases -eval -v     # every L1 case
+```
+
+**L2** is the two helpers — prescreen and the tagger — one call each on the deployment's own gateway, so it reads the same settings the server boots on (`BLURT_STT_URL`/`_API_KEY`, falling back from `BLURT_AUX_*`, plus one model id per stage). Nothing queues and no database is seeded, so the whole layer runs in seconds:
+
+```sh
+go test ./internal/agent/L1 -run TestHelperCases -eval -layer L2 -repeat 10 -v   # pass rates, not bits
 ```
 
 | Flag | Does |
 | --- | --- |
 | `-eval` | opt in. Nothing else in `go test ./...` needs a provider |
-| `-case <name>` `-layer L1` | run one case, or one layer |
+| `-case <name>` `-layer L1\|L2` | run one case, or one layer |
 | `-repeat N` | N runs per case, reported as a pass rate |
 | `-audit` | print each turn and write no report |
 | `-update` | (re)write the goldens |
 | `-wire` | record every provider request and answer |
-| `-prompt <name>` | prompt variant from `L1/cases/_prompts/<name>.txt`; `full` is the shipped prompt |
+| `-prompt <name>` | prompt arm: `full` (shipped) or files in `cases/_prompts/`. L1 reads `<name>.txt`; L2 reads `<name>-<stage>.txt`, one file per helper |
 
-Output: a per-case scorecard on stdout (pass rate, calls, faults, latency — shown with `-v`, and on any failure), `server/eval-out/all-<model>-full.json`, and a per-case transcript beside the report.
+Output: a per-case scorecard on stdout (pass rate, calls, faults, latency — shown with `-v`, and on any failure), `server/eval-out/<layer>-<model>-<arm>.json`, and a per-case transcript beside the report.
 `L1/cases/_golden/*.txt` is the rendered context block; it runs offline inside `go test ./...`, so a prompt change shows up as a diff.
 
 ## Deploy

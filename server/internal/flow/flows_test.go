@@ -35,7 +35,7 @@ func TestPipelineVoiceClarifyThenReplyCommits(t *testing.T) {
 
 	done := p.settle(t, job.JobID, status(store.JobComplete), "the committed Reminder")
 	// Both the capture and its answer are screened, planned and checked.
-	p.wantAsks(t, 2, 4, 1, 0)
+	p.wantAsks(t, 2, 4, 0)
 	// The answer earns the whole budget back.
 	if done.RetryCount != 0 {
 		t.Fatalf("retry count = %d, want a fresh budget after the reply", done.RetryCount)
@@ -67,7 +67,7 @@ func TestPipelineVoiceReplyAfterClarificationCommits(t *testing.T) {
 	p.reply(t, job.JobID, store.Message{Audio: p.clip(t)})
 
 	done := p.settle(t, job.JobID, status(store.JobComplete), "the voiced answer to commit")
-	p.wantAsks(t, 2, 4, 1, 0)
+	p.wantAsks(t, 2, 4, 0)
 	if len(done.Conversation) != 4 {
 		t.Fatalf("conversation = %+v, want clip, question, clip, reply", done.Conversation)
 	}
@@ -147,7 +147,7 @@ func TestPipelinePromptCarriesZoneReferenceAndReply(t *testing.T) {
 	}
 	// Two captures and their reply, three plans: every user turn is screened.
 	p.wantWire(t, script, map[string]int{
-		"prescreen": 3, "agent": 3, "planner": 3, "verify": 2, "tags": 0,
+		"prescreen": 3, "agent": 3, "planner": 3, "tags": 0,
 	})
 	if got := p.reminders(t); got != 2 {
 		t.Fatalf("reminders = %d, want one per capture", got)
@@ -177,7 +177,7 @@ func TestPipelineFailedJobRecoversOnReply(t *testing.T) {
 	}
 	// Three poison-pill runs each spend their one turn on a dead provider, and the
 	// reply's run is the whole loop: a screen, a turn and the strict call behind it.
-	p.wantAsks(t, 4, 5, 1, 0)
+	p.wantAsks(t, 4, 5, 0)
 	if got := p.reminders(t); got != 1 {
 		t.Fatalf("reminders = %d, want the one the recovery committed", got)
 	}
@@ -215,7 +215,7 @@ func TestPipelineKeepsConcurrentUsersIsolated(t *testing.T) {
 	}
 	// Two people, two captures: one screen, plan and check each, and no tagger —
 	// neither capture is a fact.
-	p.wantAsks(t, 2, 4, 2, 0)
+	p.wantAsks(t, 2, 4, 0)
 }
 
 // The ingress is only real end to end when what the client posts reaches a
@@ -237,7 +237,7 @@ func TestPipelineHTTPIngressReachesTheWorkers(t *testing.T) {
 	uploaded := p.upload(t, client, base+"/api/jobs", "Asia/Singapore")
 	p.settle(t, uploaded.JobID, status(store.JobComplete), "the recorded capture")
 	// One run per ingress, and the clip's turn was transcribed before it was planned.
-	p.wantAsks(t, 2, 4, 2, 0)
+	p.wantAsks(t, 2, 4, 0)
 }
 
 // A clarification answered by voice, driven the way the thread drives it: a
@@ -278,7 +278,7 @@ func TestPipelineHTTPVoiceReplyAfterClarificationCommits(t *testing.T) {
 		t.Fatalf("reminders = %d, want the one the voiced answer committed", got)
 	}
 	// The clip and the reply are one conversation: two screens, two plans, one check.
-	p.wantAsks(t, 2, 4, 1, 0)
+	p.wantAsks(t, 2, 4, 0)
 }
 
 // Tags are search features rather than extra text: a Memory whose own words a later capture
@@ -311,7 +311,7 @@ func TestPipelineTagsMakeAMemoryFindableByOtherWording(t *testing.T) {
 		t.Fatalf("remembered = %+v, want the tag-recalled Memory", in.Remembered)
 	}
 	// Both captures are facts, so both pay for the tagger: one ask each stage, each time.
-	p.wantAsks(t, 2, 4, 2, 2)
+	p.wantAsks(t, 2, 4, 2)
 }
 
 // One capture can be both records: the reminder interrupts, the fact is kept for later.
@@ -364,7 +364,7 @@ func TestPipelineOneCaptureCommitsBothKinds(t *testing.T) {
 	// Every stage of one capture, once each, over the real transport: screen, plan,
 	// check, tag.
 	p.wantWire(t, script, map[string]int{
-		"prescreen": 1, "agent": 1, "planner": 1, "verify": 1, "tags": 1,
+		"prescreen": 1, "agent": 1, "planner": 1, "tags": 1,
 	})
 	// One run, one Trace row, both counts, and the evidence beside them.
 	trace := p.lastTrace(t, job.JobID)
@@ -440,7 +440,7 @@ func TestPipelineRecurringCaptureCommitsARule(t *testing.T) {
 	// Two captures, two commits: screened and planned once each, checked once per
 	// commit, and the tags stage never asked.
 	p.wantWire(t, script, map[string]int{
-		"prescreen": 2, "agent": 2, "planner": 2, "verify": 2, "tags": 0,
+		"prescreen": 2, "agent": 2, "planner": 2, "tags": 0,
 	})
 }
 
@@ -480,10 +480,10 @@ func TestPipelinePlannerTurnCarriesTheQuestion(t *testing.T) {
 	if last.Role != "assistant" || last.Text != "What time should I remind you about buying glue?" {
 		t.Fatalf("question turn = %+v, want the model's own question", last)
 	}
-	// An ask exit is screened and planned once, and never reaches the checker or the
-	// tagger: there is no row to read back and no fact to feature.
+	// An ask exit is screened and planned once, and never reaches the tagger: there is no
+	// fact to feature.
 	p.wantWire(t, script, map[string]int{
-		"prescreen": 1, "agent": 1, "planner": 1, "verify": 0, "tags": 0,
+		"prescreen": 1, "agent": 1, "planner": 1, "tags": 0,
 	})
 }
 
@@ -542,7 +542,7 @@ func TestPipelineThirdClarificationFallsBackToTheServersSentence(t *testing.T) {
 	// The wire says what the outcomes already show: four screens, four plans, one
 	// check for the commit, no tags.
 	p.wantWire(t, script, map[string]int{
-		"prescreen": 4, "agent": 4, "planner": 4, "verify": 1, "tags": 0,
+		"prescreen": 4, "agent": 4, "planner": 4, "tags": 0,
 	})
 }
 
@@ -560,7 +560,7 @@ func TestPipelinePrescreenRefusalNeverReachesThePlanner(t *testing.T) {
 	if last := done.Conversation[len(done.Conversation)-1]; last.Text != agent.FallbackMessage {
 		t.Fatalf("last turn = %+v, want the fallback sentence", last)
 	}
-	p.wantAsks(t, 1, 0, 0, 0)
+	p.wantAsks(t, 1, 0, 0)
 	if got := p.reminders(t); got != 0 {
 		t.Fatalf("reminders = %d, want the refused capture to commit nothing", got)
 	}
@@ -578,7 +578,7 @@ func TestPipelineTaggerFailureStillCommitsTheMemory(t *testing.T) {
 	done := p.settle(t, job.JobID, status(store.JobComplete), "the Memory without its features")
 	// The failed tag call still cost exactly one ask: a retry here would burn the
 	// user's capture on a best-effort feature.
-	p.wantAsks(t, 1, 2, 1, 1)
+	p.wantAsks(t, 1, 2, 1)
 
 	var fact, tags string
 	if err := p.handle.Read.QueryRow(`SELECT Text, Tags FROM Memory`).Scan(&fact, &tags); err != nil {
@@ -596,7 +596,7 @@ func TestPipelineTaggerFailureStillCommitsTheMemory(t *testing.T) {
 		t.Fatalf("outcomes = %s, want one committed run", got)
 	}
 	// One screen, one plan, one check for the commit, one tag call — the failed one.
-	p.wantAsks(t, 1, 2, 1, 1)
+	p.wantAsks(t, 1, 2, 1)
 	if done.RetryCount != 0 {
 		t.Fatalf("retry count = %d, want the tag call not to cost a retry", done.RetryCount)
 	}
@@ -646,7 +646,7 @@ func TestPipelineQuestionnaireAnswersBecomeCaptureContext(t *testing.T) {
 	}
 	// The answers were written by the ingress, not tagged by a model: only the
 	// capture paid for a run.
-	p.wantAsks(t, 1, 2, 1, 0)
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // An answer that still leaves the record short earns a second question rather than a
@@ -704,5 +704,5 @@ func TestPipelineSecondClarificationThenCommit(t *testing.T) {
 	}
 	// One capture and two replies on one Job: every run screens and plans, and only
 	// the commit is checked.
-	p.wantAsks(t, 3, 6, 1, 0)
+	p.wantAsks(t, 3, 6, 0)
 }

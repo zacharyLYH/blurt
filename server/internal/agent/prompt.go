@@ -142,56 +142,6 @@ const prescreenSchema = `{
   "required": ["verdict", "reason"]
 }`
 
-// verifyPrompt is the one stage that makes the record safe to trust: a model that
-// did not propose the row reads the user's words beside it. It may not re-word,
-// invent or plan — a mismatch becomes a question, because the user is the only
-// one who can settle it.
-const verifyPrompt = `You check one proposed record before Blurt stores it. You see the user's own words (evidence) and the record exactly as it would be stored: the event, when it rings, its zone and its recurrence, plus a fact when the capture carried one.
-
-Answer ok when every field is supported:
-- the event is the one the user named, not one borrowed from another record
-- the clock and the day are ones the user said, or a fair reading of them
-- the zone is the user's own or the place they are in for that date
-- the recurrence is what the user said
-- a fact is a fact, not the event copied a second time
-
-Answer mismatch when the row asserts something the user did not say: a clock, a day, a place or a zone they never named; an event from elsewhere; a repeat they did not ask for; a "fact" that is really the event.
-
-reason: one short line naming what did not match.
-question: for a mismatch, one sentence under twenty words ending in "?", asking the user for the part you could not verify, naming no time, date, place or zone they did not say. Empty when ok.
-
-Example
-evidence: the user said "at 6pm" for the notify and "dinner at 8pm" for the event
-reminder: Dinner at 8pm | 2026-10-25T18:00 Asia/Singapore | recurrence none
-fact: none
-->
-verdict: ok
-reason: the notify clock is the one the user gave
-question:
-
-Example
-evidence: the user said "when I'm home"
-reminder: Buy glue | 2026-10-25T17:00 Asia/Singapore | recurrence none
-fact: none
-->
-verdict: mismatch
-reason: the user named no day and no clock, and 17:00 is the nearby kids reminder
-question: What day and time should I remind you about buying glue?`
-
-// verifySchema carries the user-facing question beside the diagnostic reason: the
-// reason explains the verdict to a reader of the Trace, and the question is what
-// the user reads when the row is refused.
-const verifySchema = `{
-  "type": "object",
-  "additionalProperties": false,
-  "properties": {
-    "verdict":  {"type": "string", "enum": ["ok", "mismatch"]},
-    "reason":   {"type": "string"},
-    "question": {"type": "string"}
-  },
-  "required": ["verdict", "reason", "question"]
-}`
-
 // plannerAnswer is the schema's shape on the Go side.
 type plannerAnswer struct {
 	Kind       string   `json:"kind"`
@@ -209,13 +159,6 @@ type plannerAnswer struct {
 type prescreenAnswer struct {
 	Verdict string `json:"verdict"`
 	Reason  string `json:"reason"`
-}
-
-// verifyAnswer is the check schema's shape.
-type verifyAnswer struct {
-	Verdict  string `json:"verdict"`
-	Reason   string `json:"reason"`
-	Question string `json:"question"`
 }
 
 // answerFrom reads one strict answer into the Answer the loop acts on. The schema has one

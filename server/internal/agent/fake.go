@@ -25,7 +25,7 @@ const (
 	FakeRepeatWord = "every"
 	// FakeSoonWord marks a capture the fake resolves to the minute ahead: near enough
 	// that a spec can watch the emitter fire it, and still a future instant, which is
-	// what the check on a one-off requires.
+	// what lint's after-now check on a one-off requires.
 	FakeSoonWord = "soon"
 )
 
@@ -276,12 +276,6 @@ func fakeRecurrence(capture string) (string, bool) {
 		}
 	}
 	return "", false
-}
-
-// Verify is the dev checker: it accepts every row. The real one reads the evidence;
-// the deterministic stack asserts the flow, not the reading.
-func (Fake) Verify(_ context.Context, _ Proposal) (Verdict, error) {
-	return Verdict{Outcome: "ok"}, nil
 }
 
 // placed marks a turn the fake could place, and asked one it could not. The

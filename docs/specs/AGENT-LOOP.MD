@@ -3,7 +3,8 @@
 Status: built. The moves below are `internal/agent`: `loop.go` (the moves), `tools.go` (the
 tool table and what each call answers), `lint.go` (the checks and the note the model reads),
 `prompt.go` (the agent prompt, the record schema and the context block) and `model.go` (the
-two wire shapes). Eval: L1 is built (`L1/`); L2 and L3 are not yet.
+two wire shapes). Eval: L1 (the agent loop) and L2 (the three helpers) are built under `L1/`;
+L3, the chain, is not yet.
 
 Migration is not a constraint. Keep only what is already the best shape
 (`MissingFields`, `resolveDay`, the store, the two wire envelopes) and rebuild the
@@ -27,8 +28,8 @@ agent loop (≤10 calls): model ⇄ tools
 finalize (1 strict call)
    │
    ▼
-lint ─┬─ pass, records ─▶ resolve ─▶ verify ─┬─▶ commit
-      │                                      └─▶ question
+lint ─┬─ pass, records ─┬─▶ commit
+      │                 └─▶ question
       ├─ pass, question ─▶ clarification
       ├─ fault, first ───▶ agent loop (fresh budget)
       └─ fault, second ──▶ error + notify
@@ -40,9 +41,15 @@ lint ─┬─ pass, records ─▶ resolve ─▶ verify ─┬─▶ commit
 | `agent` | the tool loop, ending in `submit_plan` |
 | `finalize` | one strict-schema call |
 | `lint` | the server's deterministic checks on the final JSON |
-| `resolve` `verify` `commit` | unchanged, outside the loop |
+| `commit` | the accepted records become rows, stored in one step |
 
-`prescreen` and `verify` are independent turns. Neither is part of the agent loop.
+`prescreen` is an independent turn. It is not part of the agent loop.
+
+A second, model-based check of the accepted row used to sit between the plan and the commit.
+It was deleted: `lint` owns structure, the planner is the stronger model, and a weaker model
+judging its output refused correct rows (a reminder became a question). The reason it existed —
+a clock the user never said — is a comparison `lint` can make exactly. The `resolve` and
+`commit` moves were split for it to sit between; they are one move now.
 
 ## 2. The agent loop
 
@@ -91,7 +98,7 @@ finalization call, bad submit arguments, and a missing `submit_plan` are all lin
 follow the same retry rule.
 
 A `question` answer passes lint without field checks; asking is the point. It ends
-the agent and goes to the clarification path. `verify` does not run on it.
+the agent and goes to the clarification path.
 
 ## 4. Tools
 
@@ -145,8 +152,13 @@ Three layers, all on real models. One seed, one report. Never merge them.
 | Layer | Runs | What it answers |
 | --- | --- | --- |
 | **L1 agent** | the full agent loop: seeded DB, real tools, real lint retry | did it read this capture right, and which field missed |
-| **L2 helpers** | `Prescreen`, `Verify`, `Tags`: one call each | did this stage decide right |
+| **L2 helpers** | `Prescreen`, `Tags`: one call each | did this stage decide right |
 | **L3 chain** | the `internal/flow` pump: real DB, real workers, text capture | does a capture still become the right rows, end to end |
+
+L2 is built and cheap: a case is one call, so `-repeat` is where its answers mean something —
+a screen that refuses a good capture costs the user the thing they came to say, and one run
+cannot tell that from a coin flip. Its arm is the deployment's own: one gateway model id per
+stage, read from the same `.env` the server boots on.
 
 Nothing is stubbed. The case seeds the DB, the real tools find the real rows, and
 the model is the one the deployment would use. L1 mirrors the production loop,
@@ -203,6 +215,9 @@ server/internal/agent/L1/cases/_golden/<name>.txt      # rendered context block
   you read.
 - **`expect`** keeps today's keys and adds nothing until a case needs it.
   `asks_for` is a hard key and matches by substring.
+- **An L2 case** adds `stage` (`prescreen` or `tags`) plus that stage's input — the `capture`
+  or the `fact` — and its truth under `expect.helper`. The runner checks the pairing at load,
+  so a case that names a stage it cannot feed fails before it spends a call.
 
 ## 9. Seeding
 
@@ -242,8 +257,8 @@ diff rather than by two logs read side by side.
 ## 12. Order
 
 1. the seed helper (§9)
-2. L1, the score, and the fastest lane to iterate a prompt on
-3. L2
+2. L1, the score, and the fastest lane to iterate a prompt on — built
+3. L2, the three helpers, one call each — built
 4. L3, last because real calls make it the slowest
 
 ## 13. Out of scope

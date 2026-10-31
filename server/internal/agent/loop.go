@@ -27,7 +27,7 @@ const (
 	// free tier can be slower still.
 	attemptTimeout = 330 * time.Second
 	// defaultJobTimeout is the hard wall for one Job's run. It has to hold a whole agent
-	// loop, the finalize call and the checker; it is a ceiling, not a revision gate.
+	// loop and the finalize call behind it; it is a ceiling, not a revision gate.
 	defaultJobTimeout = 20 * time.Minute
 	// maxLoopCalls is the agent loop's budget: this many model calls, and then the one
 	// finalize call behind submit_plan. Tool calls are free within it, however many the
@@ -93,19 +93,18 @@ type Stage struct {
 }
 
 // AgentLoop runs one Job's Conversation into records: the prescreen, the agent loop, the
-// lint, the check and the commit. Every state is one move and every collaborator is
-// injected, so the loop's own body is only which move comes next.
+// lint and the commit. Every state is one move and every collaborator is injected, so the
+// loop's own body is only which move comes next.
 type AgentLoop struct {
 	Store  Store
 	Recall Recall
 	// Resolver builds the Job owner's own model. When set it wins; Planner.Model is the
 	// fixed double a test (or the fake stack) supplies instead.
 	Resolver ModelResolver
-	// Planner is the core turn, and the fallback for the three cheap stages below, which
-	// ask the home gateway each under its own model id.
+	// Planner is the core turn, and the fallback for the two cheap stages below, which ask
+	// the home gateway each under its own model id.
 	Planner   Stage
 	Prescreen Stage
-	Verify    Stage
 	Tags      Stage
 	Pusher    push.Notifier
 	// AgentQueue receives the next message when a run retries.
@@ -141,11 +140,10 @@ type jobRun struct {
 	faults    int
 	model     Model
 	modelName string
-	// prescreenVerdict, answer and verifyVerdict are the three model answers this run
-	// got, kept whole so the Trace can show what each stage decided.
+	// prescreenVerdict and answer are the two model answers this run got, kept whole so the
+	// Trace can show what each stage decided.
 	prescreenVerdict Verdict
 	answer           Answer
-	verifyVerdict    Verdict
 	records          []Record
 	// lint is every fault the server raised against this run's answers, in the model's own
 	// terms: what the Trace keeps so a refused answer is readable after the fact.
@@ -160,15 +158,15 @@ type jobRun struct {
 	looked []string
 }
 
-// Run drives one Job. Four moves decide the outcome, and each names the next one:
+// Run drives one Job. Three moves decide the outcome, and each names the next one:
 //
-//	prescreen ──▶ agent ──▶ resolve ──▶ verify ──┬──▶ commit ──▶ done
-//	   │                                          └──▶ question ──▶ done
+//	prescreen ──▶ agent ──┬──▶ commit ──▶ done
+//	   │                  └──▶ question ──▶ done
 //	   └──▶ failed (a verdict that is not ok)
 //
 // The agent move is a loop of its own: the model calls tools, submits a plan, and the strict
 // call behind that plan is linted. Every failure lands in the one place that decides retry or
-// fail.
+// fail. The commit move asks instead of storing a pattern the calendar cannot place.
 func (l *AgentLoop) Run(ctx context.Context, job store.Job, attempt int) {
 	ctx, cancel := context.WithTimeout(ctx, l.jobTimeout())
 	defer cancel()
@@ -239,7 +237,7 @@ func (r *jobRun) agent(ctx context.Context) (state, error) {
 				return (*jobRun).question, nil
 			}
 			r.records = answer.Records
-			return (*jobRun).resolve, nil
+			return (*jobRun).commit, nil
 		}
 		r.lint = append(r.lint, fault)
 		r.faults++
@@ -291,10 +289,11 @@ func (r *jobRun) runLoop(ctx context.Context, in PlannerInput, sent []Message) (
 	return Answer{}, sent, "the loop spent its calls without submit_plan", nil
 }
 
-// resolve turns the accepted records into the rows the commit would store. Lint accepted
-// every field already, so a pattern the calendar cannot place is the one thing left, and
-// that is the user's to say.
-func (r *jobRun) resolve(ctx context.Context) (state, error) {
+// commit is the last move: the accepted records become the rows Blurt stores, and both kinds
+// land in one step, which is why a bad one asks instead of committing half a turn. Lint
+// accepted every field already, so a pattern the calendar cannot place is the one thing left,
+// and that is the user's to say.
+func (r *jobRun) commit(ctx context.Context) (state, error) {
 	for _, record := range r.records {
 		if record.Kind == KindMemory {
 			r.memories = append(r.memories, store.Memory{Text: record.Text})
@@ -314,45 +313,6 @@ func (r *jobRun) resolve(ctx context.Context) (state, error) {
 		}
 		r.reminders = append(r.reminders, reminder)
 	}
-	return (*jobRun).verify, nil
-}
-
-// verify is the postagentcheck: a model that did not propose the row reads it back
-// against the user's own words. A mismatch commits nothing; it becomes a question,
-// because the user is the only one who can settle it. An error here is an ordinary
-// model failure and retries, like every other stage.
-func (r *jobRun) verify(ctx context.Context) (state, error) {
-	evidence := r.evidence()
-	// A turn can carry several facts, and every one of them is read: the common fault a
-	// checker catches is a "fact" that is really the event copied a second time, and a
-	// turn with three facts must not have two of them slip past unread.
-	fact := strings.Join(r.factTexts(), "; ")
-	proposals := make([]Proposal, 0, len(r.reminders))
-	for i := range r.reminders {
-		proposals = append(proposals, Proposal{Evidence: evidence, Reminder: &r.reminders[i], Fact: fact})
-	}
-	if len(proposals) == 0 && fact != "" {
-		// A fact-only turn still gets read: the common fault a checker catches is a
-		// "fact" that is really the event copied a second time.
-		proposals = append(proposals, Proposal{Evidence: evidence, Fact: fact})
-	}
-	for _, proposal := range proposals {
-		verdict, err := r.loop.verifyModel(ctx, proposal)
-		if err != nil {
-			return nil, err
-		}
-		r.verifyVerdict = verdict
-		if verdict.Outcome == "mismatch" {
-			return (*jobRun).question, nil
-		}
-	}
-	return (*jobRun).commit, nil
-}
-
-// commit stores the records the accepted records resolve to and closes the Job. Both kinds
-// are committed in one step, which is why a bad one sends the whole turn to a question
-// instead: an ask exit commits nothing at all.
-func (r *jobRun) commit(ctx context.Context) (state, error) {
 	if err := r.saveStep(ctx, store.JobComplete, r.replyFor(), r.reminders, r.memories); err != nil {
 		return nil, err
 	}
@@ -409,15 +369,6 @@ func (r *jobRun) evidence() string {
 		}
 	}
 	return ""
-}
-
-// factTexts is every fact this turn is committing, in the order the answer gave them.
-func (r *jobRun) factTexts() []string {
-	facts := make([]string, 0, len(r.memories))
-	for _, memory := range r.memories {
-		facts = append(facts, memory.Text)
-	}
-	return facts
 }
 
 // question keeps the Job open on the question the user has to answer, and pushes.

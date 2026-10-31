@@ -13,7 +13,7 @@ import (
 // UserModels resolves the model a Job's owner configured on the setup page. The
 // PRD keeps model settings out of `.env`: one provider, endpoint, key and model per
 // user, stored on the User row with the key encrypted at rest. This model plans one
-// Job; the screen, the check and the tagger are the home gateway's own three models,
+// Job; the screen and the tagger are the home gateway's own two models,
 // so a missing setting here never silently falls back to the cheap stages.
 type UserModels struct {
 	Users *store.UserStore

@@ -56,21 +56,16 @@ type STT struct {
 	Model  string
 }
 
-// Helper is the home gateway the three cheap stages ask: prescreening, the post-agent check and
-// the memory tagger. They share the gateway that serves phonon, so the URL and key fall back to
-// the STT ones and only the model differs per stage. The core turn is the one that rides a
-// user's own hosted provider.
+// Helper is the home gateway the two cheap stages ask: prescreening and the memory tagger.
+// They share the gateway that serves phonon, so the URL and key fall back to the STT ones and
+// only the model differs per stage. The core turn is the one that rides a user's own hosted
+// provider.
 type Helper struct {
 	URL       string
 	APIKey    string
 	Prescreen string // prescreening
-	Verify    string // postagentcheck
 	Tags      string // memory tags
 }
-
-// fakeSTTModes are the dev failure-injection modes. They mirror BLURT_FAKE_PIN:
-// useful locally and in e2e, fatal on a public host.
-var fakeSTTModes = map[string]bool{"ok": true, "error": true, "illegible": true, "flaky": true}
 
 // Config is the fully resolved runtime configuration.
 type Config struct {
@@ -94,7 +89,7 @@ type Config struct {
 	// FakeAgent is dev only: a scripted model stands in so the AgentLoop can be
 	// exercised without a provider. Never set it on a public host.
 	FakeAgent bool
-	// Helper is the local gateway for the three cheap stages. It is required unless
+	// Helper is the local gateway for the two cheap stages. It is required unless
 	// the fake is on, which is how the local/e2e stack runs.
 	Helper Helper
 	// FakeClockFastForward is dev only: the emitter's clock starts this far ahead, so a
@@ -190,7 +185,6 @@ func Load() (*Config, error) {
 		URL:       opt("BLURT_AUX_URL"),
 		APIKey:    opt("BLURT_AUX_API_KEY"),
 		Prescreen: opt("BLURT_PRESCREEN_MODEL"),
-		Verify:    opt("BLURT_CHECK_MODEL"),
 		Tags:      opt("BLURT_TAGS_MODEL"),
 	}
 	if cfg.Helper.URL == "" {
@@ -209,7 +203,6 @@ func Load() (*Config, error) {
 	if !cfg.FakeAgent {
 		for _, key := range []struct{ name, value string }{
 			{"BLURT_PRESCREEN_MODEL", cfg.Helper.Prescreen},
-			{"BLURT_CHECK_MODEL", cfg.Helper.Verify},
 			{"BLURT_TAGS_MODEL", cfg.Helper.Tags},
 		} {
 			if key.value == "" {

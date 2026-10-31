@@ -32,7 +32,7 @@ func TestRedisFlowBootsGroupThenServesACapture(t *testing.T) {
 	p.settle(t, job.JobID, status(store.JobComplete), "the capture over real Redis")
 	// A broker-level re-delivery must not add a run: one message, one capture's worth
 	// of asks.
-	p.wantAsks(t, 1, 2, 1, 0)
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // A capture worker that dies mid-transcription must have its message reclaimed
@@ -65,7 +65,7 @@ func TestRedisFlowClaimerRecoversAfterCaptureWorkerDies(t *testing.T) {
 	p.startCapture()
 	p.settle(t, job.JobID, status(store.JobComplete), "the recovered Job")
 	p.stopClaimers()
-	p.wantAsks(t, 1, 2, 1, 0)
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // A model call that hangs past the attempt deadline retries, and at the poison
@@ -83,6 +83,6 @@ func TestRedisFlowSlowModelRetriesThenFails(t *testing.T) {
 	if failed.RetryCount != store.MaxAttempts {
 		t.Fatalf("retry count = %d, want %d", failed.RetryCount, store.MaxAttempts)
 	}
-	p.wantAsks(t, 3, 3, 0, 0)
+	p.wantAsks(t, 3, 3, 0)
 	p.drain(t, p.agent, "agent queue")
 }

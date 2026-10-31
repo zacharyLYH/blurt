@@ -47,13 +47,6 @@ func (l *AgentLoop) finalizeModel(ctx context.Context, model Model, in PlannerIn
 	return model.Finalize(callCtx, in, sent)
 }
 
-// verifyModel is one bounded call to the checker, with the same fallback as the screen.
-func (l *AgentLoop) verifyModel(ctx context.Context, c Proposal) (Verdict, error) {
-	callCtx, cancel := context.WithTimeout(ctx, l.modelTimeout())
-	defer cancel()
-	return l.model(l.Verify).Verify(callCtx, c)
-}
-
 // Input assembles the context one turn is built from: the Job's conversation, the anchor zone
 // and clock, and the memories worth having to hand. It is built once per request, because a
 // lint retry reads the same context. A retrieval failure is logged and dropped rather than

@@ -231,9 +231,9 @@ func TestGatewayOpenRouterEnvelope(t *testing.T) {
 	}
 }
 
-// The screen and the check are the same transport with their own prompts and
-// schemas, and each answer is read only after its enum is validated.
-func TestGatewayScreenAndCheck(t *testing.T) {
+// The screen is the same transport with its own prompt and schema, and its answer is read
+// only after the enum is validated.
+func TestGatewayScreen(t *testing.T) {
 	var names []string
 	gateway := modelServer(t, Settings{Model: "local-model"}, func(w http.ResponseWriter, r *http.Request) {
 		var body gatewayRequest
@@ -249,12 +249,6 @@ func TestGatewayScreenAndCheck(t *testing.T) {
 				t.Errorf("screen turn = %q", body.Payload.Messages[1].Content)
 			}
 			_, _ = w.Write(gatewayAnswer(t, "stop", `{"verdict":"ok","reason":"a thing to do"}`))
-		case "verify":
-			if !strings.Contains(body.Payload.Messages[1].Content, "reminder: Buy glue | 2026-10-25T18:00 Asia/Singapore") {
-				t.Errorf("check turn = %q", body.Payload.Messages[1].Content)
-			}
-			_, _ = w.Write(gatewayAnswer(t, "stop",
-				`{"verdict":"mismatch","reason":"the user said no clock","question":"When should I remind you about buying glue?"}`))
 		default:
 			t.Errorf("unexpected schema %q", name)
 		}
@@ -267,20 +261,7 @@ func TestGatewayScreenAndCheck(t *testing.T) {
 	if screen.Outcome != "ok" || screen.Reason != "a thing to do" {
 		t.Fatalf("screen = %+v", screen)
 	}
-
-	local := time.Date(2026, 10, 25, 18, 0, 0, 0, pinned.Location())
-	verdict, err := gateway.Verify(context.Background(), Proposal{
-		Evidence: "the user said \"when I'm home\"",
-		Reminder: &store.Reminder{Text: "Buy glue", Timezone: zone,
-			LocalDateTime: local.Format("2006-01-02T15:04")},
-	})
-	if err != nil {
-		t.Fatalf("Verify: %v", err)
-	}
-	if verdict.Outcome != "mismatch" || verdict.Ask == "" || verdict.Reason == "" {
-		t.Fatalf("check = %+v, want the verdict, reason and question", verdict)
-	}
-	if !reflect.DeepEqual(names, []string{"prescreen", "verify"}) {
+	if !reflect.DeepEqual(names, []string{"prescreen"}) {
 		t.Fatalf("schemas = %v", names)
 	}
 }
