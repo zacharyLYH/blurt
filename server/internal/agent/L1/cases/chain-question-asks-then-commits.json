@@ -1,0 +1,37 @@
+{
+  "name": "chain-question-asks-then-commits",
+  "source": "L3:feedback-loop — a capture Blurt cannot place, then the answer that places it",
+  "layer": "L3",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to buy glue",
+      "expect": {
+        "kind": "question",
+        "reminders": [],
+        "memories": [],
+        "asks_for": ["when", "what time", "time"]
+      }
+    },
+    {
+      "reply": "tomorrow at 6pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["glue"],
+            "datetime": "2026-10-25T18:00",
+            "utc": "2026-10-25T10:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    }
+  ]
+}

@@ -53,8 +53,27 @@ type Case struct {
 	Capture string `json:"capture"`
 	// Fact is an L2 tags case's whole input: the one remembered fact whose search
 	// features are asked for.
-	Fact   string `json:"fact,omitempty"`
+	Fact string `json:"fact,omitempty"`
+	// Steps is an L3 case's chain: captures and replies in order, each with what the
+	// database must hold afterwards. L1 and L2 are one turn, so they use Capture.
+	Steps  []Step `json:"steps,omitempty"`
 	Expect Expect `json:"expect"`
+}
+
+// Step is one turn of an L3 chain: a capture that opens a Job, or a reply to the Job still
+// waiting on the user. Exactly one of the three turn fields is set.
+type Step struct {
+	// Capture opens a new Job with the user's words.
+	Capture string `json:"capture,omitempty"`
+	// Clip opens a new Job with a recorded clip, which the transcription worker has to turn
+	// into a turn before the agent sees it.
+	Clip string `json:"clip,omitempty"`
+	// Reply answers the newest Job still waiting on the user.
+	Reply string `json:"reply,omitempty"`
+	// TranscriptHas is what the clip's own turn must say once it is transcribed. The whole
+	// sentence belongs to phonon, so a case pins the words that carry the meaning.
+	TranscriptHas []string `json:"transcript_has,omitempty"`
+	Expect        Expect   `json:"expect"`
 }
 
 // Turn is one earlier Conversation turn, which is how a continuation case is written.
@@ -154,10 +173,16 @@ type ExpectRule struct {
 	Month     int    `json:"month,omitempty"`
 }
 
-// ExpectMemory is one fact the commit must leave, matched by substring.
+// ExpectMemory is one fact the commit must leave, matched by substring. TagsMin is the
+// L3-only count: the tagger's own answer is not deterministic, but a fact that earned
+// fewer than a handful of features is a fact a later capture cannot reach.
 type ExpectMemory struct {
 	Contains []string `json:"contains"`
+	TagsMin  int      `json:"tags_min,omitempty"`
 }
+
+// kindFailed is a chain step's third outcome: the prescreen closed the Job.
+const kindFailed = "failed"
 
 // loadCases reads every case file under dir, in name order so a report is stable.
 func loadCases(dir string) ([]Case, error) {
@@ -206,8 +231,19 @@ func loadCase(dir, file string) (Case, error) {
 
 // check refuses a case whose layer and inputs disagree, at load rather than at run: an L2
 // case names one helper and carries that helper's input, and a typo in the stage would
-// otherwise spend a call to answer nothing.
+// otherwise spend a call to answer nothing. An L3 case is its steps and nothing else.
 func (c Case) check() error {
+	switch c.Layer {
+	case "L1", "L2", "L3":
+	default:
+		return fmt.Errorf("unknown layer %q", c.Layer)
+	}
+	if c.Layer == "L3" {
+		return c.checkChain()
+	}
+	if len(c.Steps) > 0 {
+		return errors.New("steps are an L3 field; name layer L3")
+	}
 	if c.Stage == "" {
 		if c.Expect.Helper != nil {
 			return errors.New("helper is an L2 field; name a stage")
@@ -232,7 +268,38 @@ func (c Case) check() error {
 	return nil
 }
 
-// pullFixture seeds a named fixture's rows first and the case's own after them, so a case
+// checkChain refuses a chain that cannot be run: an L3 case is a list of steps, one turn
+// each, and every step has to say what the database must hold. A reply that opens the case
+// would answer nothing, so it fails at load rather than as an empty Conversation.
+func (c Case) checkChain() error {
+	if c.Stage != "" || c.Capture != "" || c.Fact != "" || len(c.History) > 0 {
+		return errors.New("an L3 case is its steps, not a single capture, history or a stage")
+	}
+	if len(c.Steps) == 0 {
+		return errors.New("an L3 case needs steps")
+	}
+	for i, step := range c.Steps {
+		turns := 0
+		for _, turn := range []string{step.Capture, step.Clip, step.Reply} {
+			if turn != "" {
+				turns++
+			}
+		}
+		if turns != 1 {
+			return fmt.Errorf("step %d sets %d of capture, clip and reply", i+1, turns)
+		}
+		if i == 0 && step.Reply != "" {
+			return errors.New("step 1 replies, but no Job is waiting on the user yet")
+		}
+		switch step.Expect.Kind {
+		case agent.AnswerRecords, agent.AnswerQuestion, kindFailed:
+		default:
+			return fmt.Errorf("step %d has kind %q", i+1, step.Expect.Kind)
+		}
+	}
+	return nil
+}
+
 // can lean on a shared starting state without repeating it.
 func (c *Case) pullFixture(dir string) error {
 	if c.Use == "" {

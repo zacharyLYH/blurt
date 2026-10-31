@@ -3,8 +3,8 @@
 Status: built. The moves below are `internal/agent`: `loop.go` (the moves), `tools.go` (the
 tool table and what each call answers), `lint.go` (the checks and the note the model reads),
 `prompt.go` (the agent prompt, the record schema and the context block) and `model.go` (the
-two wire shapes). Eval: L1 (the agent loop) and L2 (the three helpers) are built under `L1/`;
-L3, the chain, is not yet.
+two wire shapes). Eval: L1 (the agent loop), L2 (the two helpers) and L3 (the chain) are built
+under `L1/`.
 
 Migration is not a constraint. Keep only what is already the best shape
 (`MissingFields`, `resolveDay`, the store, the two wire envelopes) and rebuild the
@@ -153,7 +153,7 @@ Three layers, all on real models. One seed, one report. Never merge them.
 | --- | --- | --- |
 | **L1 agent** | the full agent loop: seeded DB, real tools, real lint retry | did it read this capture right, and which field missed |
 | **L2 helpers** | `Prescreen`, `Tags`: one call each | did this stage decide right |
-| **L3 chain** | the `internal/flow` pump: real DB, real workers, text capture | does a capture still become the right rows, end to end |
+| **L3 chain** | `internal/backend` over HTTP: real DB, real workers, text and recorded capture | does a capture still become the right rows, end to end |
 
 L2 is built and cheap: a case is one call, so `-repeat` is where its answers mean something —
 a screen that refuses a good capture costs the user the thing they came to say, and one run
@@ -166,6 +166,16 @@ including the single lint retry.
 
 L3 is the sanity pass, and coarse on purpose: it says a capture failed, not which
 stage. L1 and L2 are the diagnosis, and they are cheaper because nothing queues.
+
+L3 is also the only lane where the feedback loop is real: a capture becomes a question, the
+reply is a new user turn, and the row it commits is read back. Several schedules in one
+database are its other shape — a trip as Memory, then a Reminder inside the trip's dates —
+which no single-turn case can express. It drives `internal/backend` — the same assembly main
+boots — through the HTTP surface a browser uses, so the upload, the streams and the
+transcription are production's and only the models and the clock are the test's. Its arm is
+the whole deployment: planner from `BLURT_EVAL_*`, prescreen and tagger from the gateway, and
+`BLURT_STT_*` for the one step that records. A row's prose and a Memory's tags belong to a
+model, so a case pins a substring and `tags_min`, never the exact words.
 
 The pump's existing scripted runs stay put: they are the plumbing tests, and they
 separate a broken pipe from a broken model.
@@ -181,6 +191,7 @@ golden.
 server/internal/agent/L1/cases/<name>.json
 server/internal/agent/L1/cases/_fixtures/<name>.json   # named large seeds
 server/internal/agent/L1/cases/_golden/<name>.txt      # rendered context block
+server/internal/agent/L1/cases/_audio/<name>.wav       # an L3 clip capture
 ```
 
 ```json
@@ -218,6 +229,10 @@ server/internal/agent/L1/cases/_golden/<name>.txt      # rendered context block
 - **An L2 case** adds `stage` (`prescreen` or `tags`) plus that stage's input — the `capture`
   or the `fact` — and its truth under `expect.helper`. The runner checks the pairing at load,
   so a case that names a stage it cannot feed fails before it spends a call.
+- **An L3 case** is `steps`, in order, each with its own `expect`: a `capture` opens a Job,
+  a `clip` opens one from a recorded fixture, and a `reply` answers the newest Job still
+  waiting on the user. Its `kind` is `records`, `question` or `failed`; a Memory may carry
+  `tags_min`, because the tagger's answer is a guess and the count is the claim.
 
 ## 9. Seeding
 
@@ -228,8 +243,8 @@ the rest of the harness lives:
 seed(ctx, db, Case) → inserts Reminder, RecurringReminder and Memory rows
 ```
 
-`flow` and the hosted runs reuse it when their layers are built; today only the L1
-runner calls it.
+`flow` and the hosted runs reuse it when their layers are built; today the L1 and L3
+runners call it.
 
 Each case runs against a fresh database. Row ids are stable, so goldens do not
 drift.
@@ -258,8 +273,8 @@ diff rather than by two logs read side by side.
 
 1. the seed helper (§9)
 2. L1, the score, and the fastest lane to iterate a prompt on — built
-3. L2, the three helpers, one call each — built
-4. L3, last because real calls make it the slowest
+3. L2, the two helpers, one call each — built
+4. L3, the chain, last because real calls make it the slowest — built
 
 ## 13. Out of scope
 

@@ -129,22 +129,23 @@ func (r *caseRun) outcome(t *testing.T, rec *recorder) outcome {
 	if rec != nil {
 		got.tools = rec.tools()
 	}
-	got.reminders = r.reminders(t, ctx)
-	got.memories = r.memories(t, ctx)
-	got.trace = r.lastTrace(t, ctx)
+	got.reminders = readReminders(t, ctx, r.handle, r.job.JobID)
+	got.memories = readMemories(t, ctx, r.handle, r.job.JobID)
+	got.trace = lastAgentTrace(t, ctx, r.handle, r.job.JobID)
 	return got
 }
 
-// reminders reads the rows the run committed for its own Job. A seeded row carries no
-// SourceJobId, so this reads the commit and nothing else.
-func (r *caseRun) reminders(t *testing.T, ctx context.Context) []store.Reminder {
+// readReminders reads the rows the run committed for its own Job. A seeded row carries no
+// SourceJobId, so this reads the commit and nothing else. The chain runner reads one Job it
+// did not open through caseRun, which is why the handle and the id are the arguments.
+func readReminders(t *testing.T, ctx context.Context, handle *db.DB, jobID int64) []store.Reminder {
 	t.Helper()
-	rows, err := r.handle.Read.QueryContext(ctx, `
+	rows, err := handle.Read.QueryContext(ctx, `
 		SELECT r.ReminderId, r.Text, r.Timezone, COALESCE(r.LocalDateTime, ''),
 		       COALESCE(r.EmitAtUtc, ''), r.Status, COALESCE(c.Rule, ''), COALESCE(c.NextEmitAtUtc, '')
 		FROM Reminder r
 		LEFT JOIN RecurringReminder c ON c.ReminderId = r.ReminderId
-		WHERE r.SourceJobId = ? ORDER BY r.ReminderId`, r.job.JobID)
+		WHERE r.SourceJobId = ? ORDER BY r.ReminderId`, jobID)
 	if err != nil {
 		t.Fatalf("read reminders: %v", err)
 	}
@@ -173,11 +174,11 @@ func (r *caseRun) reminders(t *testing.T, ctx context.Context) []store.Reminder 
 	return found
 }
 
-// memories reads the facts the run committed for its own Job, oldest first.
-func (r *caseRun) memories(t *testing.T, ctx context.Context) []string {
+// readMemories reads the facts the run committed for its own Job, oldest first.
+func readMemories(t *testing.T, ctx context.Context, handle *db.DB, jobID int64) []string {
 	t.Helper()
-	rows, err := r.handle.Read.QueryContext(ctx,
-		`SELECT Text FROM Memory WHERE SourceJobId = ? ORDER BY MemoryId`, r.job.JobID)
+	rows, err := handle.Read.QueryContext(ctx,
+		`SELECT Text FROM Memory WHERE SourceJobId = ? ORDER BY MemoryId`, jobID)
 	if err != nil {
 		t.Fatalf("read memories: %v", err)
 	}
@@ -196,14 +197,15 @@ func (r *caseRun) memories(t *testing.T, ctx context.Context) []string {
 	return found
 }
 
-// lastTrace is the newest Trace row's detail: what the run recorded about itself, whatever
-// it decided. A Job that never reached a commit has one too, because failing writes one.
-func (r *caseRun) lastTrace(t *testing.T, ctx context.Context) map[string]any {
+// lastAgentTrace is the newest agent Trace row's detail: what the run recorded about itself,
+// whatever it decided. A Job that never reached a commit has one too, because failing writes
+// one.
+func lastAgentTrace(t *testing.T, ctx context.Context, handle *db.DB, jobID int64) map[string]any {
 	t.Helper()
 	var raw string
-	err := r.handle.Read.QueryRowContext(ctx,
+	err := handle.Read.QueryRowContext(ctx,
 		`SELECT Detail FROM Trace WHERE JobId = ? AND Stage = ? ORDER BY TraceId DESC LIMIT 1`,
-		r.job.JobID, store.AgentStage).Scan(&raw)
+		jobID, store.AgentStage).Scan(&raw)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil
 	}

@@ -219,8 +219,11 @@ const functionType = "function"
 // cap at the top, a strict schema when the turn names one, and the two knobs that keep a
 // hosted router honest.
 type openRouterRequest struct {
-	Model          string          `json:"model"`
-	Temperature    float64         `json:"temperature"`
+	Model string `json:"model"`
+	// Temperature is sent only when a stage names one. A hosted reasoning model pins its own
+	// temperature, and the router reads a zero as a requirement, so an always-present field
+	// finds no endpoint that can take it.
+	Temperature    float64         `json:"temperature,omitempty"`
 	Messages       []Message       `json:"messages"`
 	Tools          []Tool          `json:"tools,omitempty"`
 	MaxTokens      int             `json:"max_tokens"`

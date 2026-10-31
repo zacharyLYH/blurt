@@ -22,8 +22,11 @@ type miss struct {
 // does not.
 func compare(c Case, got outcome) []miss {
 	wantStatus := store.JobComplete
-	if c.Expect.Kind == agent.AnswerQuestion {
+	switch c.Expect.Kind {
+	case agent.AnswerQuestion:
 		wantStatus = store.JobClarifying
+	case kindFailed:
+		wantStatus = store.JobFailed
 	}
 	var misses []miss
 	if got.status != wantStatus {
@@ -32,6 +35,11 @@ func compare(c Case, got outcome) []miss {
 	if got.status == store.JobFailed {
 		if reason := traceString(got.trace, "error"); reason != "" {
 			misses = append(misses, miss{"error", reason})
+		}
+		// A closed Job still owes the user a sentence; the fallback is the server's own,
+		// so nothing reached the screen if this is empty.
+		if got.reply == "" {
+			misses = append(misses, miss{"reply", "a failed Job carries no sentence for the user"})
 		}
 	}
 	if c.Expect.Kind == agent.AnswerQuestion {

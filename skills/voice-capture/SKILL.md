@@ -39,6 +39,8 @@ curl -s https://<gateway>/v1/infer -H "Authorization: Bearer $KEY" \
 - Missing or wrong key is `401 unauthorized`, quickly. Blurt treats it as permanent, so a bad key never burns three retries.
 - `timestamps: true` adds a `segments` list; Blurt omits it to keep the reply small.
 - Latency varies a lot with clip length and host load: ~0.5 s for a few seconds, 4–30 s for a full minute. Blurt's client timeout is 120 s and the worker's attempt timeout 150 s.
+- **No `User-Agent` gets a Cloudflare `403`.** `curl` sends one and works; a bare `urllib`/`requests` call does not. If a hand-run probe needs a UA, that is why.
+- **A test clip must be canonical.** `say -o x.wav --data-format=LEI16@16000 "..."` is mono 16 kHz, but macOS writes a `JUNK` chunk before `fmt`, which `SniffAudio` refuses. Strip it; the L3 fixture reader has the exact script (`server/internal/agent/L1/cases/_audio/README.md`).
 
 ## The permission gate eats your navigation
 

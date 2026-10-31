@@ -1,0 +1,54 @@
+{
+  "name": "chain-open-question-does-not-block",
+  "source": "L3:two-schedules — a waiting question, a new capture, then the answer; each Job owns its row",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to call mum",
+      "expect": {
+        "kind": "question",
+        "reminders": [],
+        "memories": [],
+        "asks_for": ["when", "what time", "time"]
+      }
+    },
+    {
+      "capture": "remind me to take out the trash tomorrow at 9pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["trash"],
+            "datetime": "2026-10-25T21:00",
+            "utc": "2026-10-25T13:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    },
+    {
+      "reply": "tomorrow at 7pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["mum"],
+            "datetime": "2026-10-25T19:00",
+            "utc": "2026-10-25T11:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    }
+  ]
+}

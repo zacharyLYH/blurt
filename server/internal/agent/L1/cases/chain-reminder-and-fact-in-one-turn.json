@@ -1,0 +1,33 @@
+{
+  "name": "chain-reminder-and-fact-in-one-turn",
+  "source": "prd:litmus-6 — one capture, one Reminder and one Memory, in one commit",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to pack the charger tomorrow at 7am; also the hotel has a pool",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["charger"],
+            "datetime": "2026-10-25T07:00",
+            "utc": "2026-10-24T23:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": [
+          {
+            "contains": ["pool"],
+            "tags_min": 3
+          }
+        ]
+      }
+    }
+  ]
+}

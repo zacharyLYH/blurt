@@ -15,6 +15,7 @@ import (
 
 	"blurt/internal/agent"
 	"blurt/internal/auth"
+	"blurt/internal/backend"
 	"blurt/internal/capture"
 	"blurt/internal/config"
 	"blurt/internal/db"
@@ -111,10 +112,6 @@ func main() {
 	} else {
 		transcriber = stt.NewHTTP(cfg.STT)
 	}
-	transcriptionWorker := &capture.TranscriptionWorker{
-		Jobs: jobs, Audio: audio, STT: transcriber, Pusher: notifier, Model: cfg.STT.Model,
-		TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue,
-	}
 
 	// The model is the user's: the loop resolves it from the User row and builds
 	// the transport per Job. The fake is the local/e2e escape hatch that keeps the
@@ -143,45 +140,6 @@ func main() {
 		// words nobody in the capture said, and heat is what finds them.
 		loop.Prescreen, loop.Tags = helper(cfg.Helper.Prescreen, 0), helper(cfg.Helper.Tags, 1)
 	}
-	agentWorker := &queue.Worker{Stream: agentQueue, Jobs: jobs, Step: loop.Step}
-
-	srv := &http.Server{
-		Addr: cfg.Bind,
-		Handler: httpapi.New(httpapi.Deps{
-			DB:             handle.Write,
-			Users:          users,
-			Sessions:       sessions,
-			Pins:           auth.NewPinStore(5*time.Minute, fixedPIN),
-			Mailer:         mailer,
-			Pusher:         notifier,
-			EncryptionKey:  cfg.EncryptionKey,
-			Jobs:           jobs,
-			Reminders:      reminders,
-			Audio:          audio,
-			Queues:         &queue.Queues{TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue},
-			VAPIDPublicKey: cfg.VAPID.PublicKey,
-			AllowedOrigins: cfg.PublicOrigins,
-		}),
-		ReadHeaderTimeout: 10 * time.Second,
-		ReadTimeout:       30 * time.Second,
-		WriteTimeout:      60 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	go transcriptionWorker.Run(ctx)
-	go agentWorker.Run(ctx)
-	go (&queue.Claimer{
-		Stream: transcriptionQueue, Jobs: jobs, Stage: store.TranscriptionStage,
-		Fallback: capture.FallbackMessage, MinIdle: 360 * time.Second,
-	}).Run(ctx)
-	go (&queue.Claimer{
-		Stream: agentQueue, Jobs: jobs, Stage: store.AgentStage,
-		Fallback: agent.FallbackMessage, MinIdle: 1080 * time.Second,
-	}).Run(ctx)
-	go (&queue.Sweeper{Jobs: jobs, TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue}).Run(ctx)
 
 	// The emitter is the only worker that runs on a clock rather than on the user's
 	// last capture: it sweeps for Reminders whose instant has arrived.
@@ -191,7 +149,36 @@ func main() {
 			"offset", cfg.FakeClockFastForward)
 		emit.Now = func() time.Time { return time.Now().Add(cfg.FakeClockFastForward) }
 	}
-	go emit.Run(ctx)
+
+	// One assembly owns the surface and the workers, so a test boots what this boots.
+	app := backend.New(backend.Deps{
+		DB: handle, Users: users, Jobs: jobs, Sessions: sessions, Reminders: reminders,
+		Audio: audio,
+		Queues: &queue.Queues{
+			TranscriptionQueue: transcriptionQueue,
+			AgentQueue:         agentQueue,
+		},
+		Loop: loop, STT: transcriber, STTModel: cfg.STT.Model,
+		Pins:   auth.NewPinStore(5*time.Minute, fixedPIN),
+		Mailer: mailer, Pusher: notifier, Emitter: emit,
+		EncryptionKey:  cfg.EncryptionKey,
+		VAPIDPublicKey: cfg.VAPID.PublicKey,
+		AllowedOrigins: cfg.PublicOrigins,
+	})
+
+	srv := &http.Server{
+		Addr:              cfg.Bind,
+		Handler:           app.Handler(),
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      60 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	go app.Run(ctx)
 
 	go func() {
 		slog.Info("listening", "addr", cfg.Bind)

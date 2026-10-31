@@ -1,0 +1,47 @@
+{
+  "name": "chain-recurring-then-one-off",
+  "source": "L3:two-schedules — a repeat writes its rule row, then a one-off lands beside it",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to take my vitamins every day at 9am",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["vitamin"],
+            "utc": "2026-10-25T01:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "daily",
+            "rule": {
+              "frequency": "daily",
+              "time": "09:00"
+            }
+          }
+        ],
+        "memories": []
+      }
+    },
+    {
+      "capture": "remind me to bring the laptop tomorrow at 8:45",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["laptop"],
+            "datetime": "2026-10-25T08:45",
+            "utc": "2026-10-25T00:45:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    }
+  ]
+}

@@ -68,6 +68,11 @@ is an enum, `recurrence` is an enum, and `time` is pinned by a pattern that also
 matches the empty string. Empty is a legal answer wherever the user said nothing:
 the server's `MissingFields`, not the model, decides what is committable.
 
+**Do not send `temperature` unless a stage named one.** A reasoning model pins its own
+temperature, and `require_parameters: true` turns a `"temperature": 0` into a requirement
+no endpoint can meet: every call comes back `404 No endpoints found that can handle the
+requested parameters`, which reads like a dead model id and is not.
+
 ## What the server owns
 
 - `kind` is read first, and the two kinds are exclusive: a `question` carrying a

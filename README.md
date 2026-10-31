@@ -46,7 +46,7 @@ Frontend dev server, proxying the docker stack: `cd web && npm install && npm ru
 Questionnaire questions live in `web/src/data/questionnaire/v1.json` (versioned file).
 SQLite holds the durable Job record; Redis Streams owns routing and crash recovery.
 
-## Eval (L1, L2)
+## Eval (L1, L2, L3)
 
 Scores the shipped prompts against real models. One case per file, in `server/internal/agent/L1/cases/`; the case's `layer` picks which test runs it. Settings come from `.env` (the process environment wins).
 
@@ -66,6 +66,14 @@ go test ./internal/agent/L1 -run TestPlannerCases -eval -v     # every L1 case
 ```sh
 go test ./internal/agent/L1 -run TestHelperCases -eval -layer L2 -repeat 10 -v   # pass rates, not bits
 ```
+
+**L3** is the chain — the backend `main.go` boots (`internal/backend`), driven through the real HTTP ingress with a real database and real provider behind every stage (planner from `BLURT_EVAL_*`, prescreen/tagger from the gateway, plus `BLURT_STT_*` for a case that records). A case is a list of steps: a text or recorded capture posts to the API, a reply posts to the thread, and each step asserts the rows it left. It is the only lane that can run the question loop and several schedules in one database, so it is also the slowest:
+
+```sh
+go test ./internal/agent/L1 -run TestChainCases -eval -layer L3 -v -timeout 40m
+```
+
+Tags are the model's guess at words nobody said, so a chain case pins `tags_min` and never the exact list. `-wire` covers L1 and L2 only.
 
 | Flag | Does |
 | --- | --- |

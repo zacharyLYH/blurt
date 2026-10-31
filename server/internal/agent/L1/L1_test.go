@@ -188,9 +188,11 @@ func evalCases(t *testing.T, lane func(Case) bool) []Case {
 }
 
 // loopCase is L1's lane: the agent loop, seeded database and all. helperCase is L2's: the
-// two stages that run one call each, with no loop and no database behind them.
-func loopCase(c Case) bool   { return c.Stage == "" }
+// two stages that run one call each, with no loop and no database behind them. chainCase is
+// L3's: a list of steps through the workers, which is neither of the other two.
+func loopCase(c Case) bool   { return c.Stage == "" && c.Layer != "L3" }
 func helperCase(c Case) bool { return c.Stage != "" }
+func chainCase(c Case) bool  { return c.Layer == "L3" }
 
 // TestPlannerCases is L1: one case, one fresh database, the real tools, the real lint retry
 // and the loop called directly. The settings come from .env (BLURT_EVAL_*), and -eval is

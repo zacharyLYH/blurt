@@ -1,0 +1,46 @@
+{
+  "name": "chain-two-rounds-then-commits",
+  "source": "L3:feedback-loop — the second question the cap allows, then the row",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to take the trash out",
+      "expect": {
+        "kind": "question",
+        "reminders": [],
+        "memories": [],
+        "asks_for": ["when", "what time", "time"]
+      }
+    },
+    {
+      "reply": "at 9",
+      "expect": {
+        "kind": "question",
+        "reminders": [],
+        "memories": [],
+        "asks_for": ["day", "date", "when", "which day", "tomorrow", "today"]
+      }
+    },
+    {
+      "reply": "tomorrow at 9pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["trash"],
+            "datetime": "2026-10-25T21:00",
+            "utc": "2026-10-25T13:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    }
+  ]
+}
