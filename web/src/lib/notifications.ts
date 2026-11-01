@@ -50,6 +50,12 @@ export async function submitNotificationFeedback(
   })
 }
 
+// cancelReminder calls one off. The row stays, so the past keeps its history,
+// but a cancelled reminder emits nothing, so the calendar loses its dot.
+export function cancelReminder(reminderId: number): Promise<void> {
+  return api<void>(`/api/reminders/${reminderId}/cancel`, { method: 'POST' })
+}
+
 // The month is the one the user is viewing, in the zone they are viewing it from.
 // Nothing is cached: a month change asks the server again.
 export function listNotificationsForMonth(month: string, timezone: string): Promise<NotificationMonth> {

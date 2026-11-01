@@ -33,7 +33,7 @@ test.describe('service worker', () => {
     await signIn(page, { name: 'E2E', email: uniqueEmail('sw') })
     await completeQuestionnaire(page)
 
-    await expect(page.getByTestId('home-heading')).toContainText('Hi E2E')
+    await expect(page.getByTestId('calendar-month')).toBeVisible()
     await expect(page.getByTestId('push-status')).toBeVisible()
     // No model configuration step: the first recording starts right after setup.
     await expect(page.getByTestId('mic-status')).toHaveText('Mic ready')
@@ -49,7 +49,7 @@ test.describe('service worker', () => {
     // A full page load is a new app entry, so the permission check runs again.
     await passPermissions(page)
     await expect(page).toHaveURL(/\/home$/)
-    await expect(page.getByTestId('home-heading')).toContainText('Hi E2E')
+    await expect(page.getByTestId('calendar-month')).toBeVisible()
   })
 
   test('push payload becomes a notification aimed at /home', async ({ page, context }) => {

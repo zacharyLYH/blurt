@@ -1,13 +1,11 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 import Calendar from './pages/Calendar'
-import Home from './pages/Home'
 import Job from './pages/Job'
 import JobReply from './pages/JobReply'
 import Login from './pages/Login'
 import NotificationDetail from './pages/NotificationDetail'
 import Permissions from './pages/Permissions'
 import Questionnaire from './pages/Questionnaire'
-import Reminders from './pages/Reminders'
 import { permissionsChecked } from './lib/permissions'
 import { UserProvider, useUser } from './lib/user'
 
@@ -33,6 +31,13 @@ function Gated({ children }: { children: React.ReactNode }) {
     return <Navigate to="/permissions" replace state={{ from: location.pathname + location.search }} />
   }
   return <>{children}</>
+}
+
+// CalendarAlias keeps the month someone already has in a link or a bookmark:
+// the calendar is Home now, so the old path forwards with its query intact.
+function CalendarAlias() {
+  const { search } = useLocation()
+  return <Navigate to={{ pathname: '/home', search }} replace />
 }
 
 export default function App() {
@@ -64,7 +69,7 @@ export default function App() {
             element={
               <Protected>
                 <Gated>
-                  <Home />
+                  <Calendar />
                 </Gated>
               </Protected>
             }
@@ -73,11 +78,8 @@ export default function App() {
           {/* The boom for one Job's spoken reply. A route of its own, so the
               browser's back gesture is the way out of it. */}
           <Route path="/jobs/:jobId/reply" element={<Protected><Gated><JobReply /></Gated></Protected>} />
-          {/* What is scheduled and what already happened. A notification opens straight
-              into it, so it is a route of its own rather than a panel on Home. */}
-          <Route path="/reminders" element={<Protected><Gated><Reminders /></Gated></Protected>} />
-          {/* The month view: every entry is a Reminder the poll found due. */}
-          <Route path="/calendar" element={<Protected><Gated><Calendar /></Gated></Protected>} />
+          {/* The calendar is Home now; the old path still works, month and all. */}
+          <Route path="/calendar" element={<CalendarAlias />} />
           {/* The page a push opens: the Reminder itself, with feedback per submission. */}
           <Route path="/notifications/:reminderId" element={<Protected><Gated><NotificationDetail /></Gated></Protected>} />
           <Route path="*" element={<Navigate to="/home" replace />} />

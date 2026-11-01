@@ -2,14 +2,13 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Boom } from '@/components/Boom'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Card, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { replyWithAudio } from '@/lib/jobs'
 import { useMicrophone } from '@/lib/useMicrophone'
 import { MAX_RECORDING_MS, useRecorder } from '@/lib/useRecorder'
 
-// The boom on its own screen, for answering one Job out loud. It is the same
-// control and the same recorder the home screen opens on, so a spoken reply is
-// the capture experience pointed at a conversation that already exists.
+// The voice screen for answering one Job out loud. It is the same control and
+// the same recorder the home screen opens on, so a spoken reply is the capture
+// experience pointed at a conversation that already exists.
 //
 // The screen is a route rather than a mode inside the thread, which is what
 // makes the browser's own back gesture the way out of it: no custom reverse
@@ -37,57 +36,60 @@ export default function JobReply() {
   const failed = state.kind === 'failed' ? state : null
 
   return (
-    <main className="grid min-h-dvh place-items-center px-4 py-8">
-      <Card className="w-full max-w-xl items-center gap-3 bg-card/80 p-5">
-        <CardHeader className="items-center text-center">
-          <CardTitle data-testid="reply-heading">Answer out loud</CardTitle>
-          <CardDescription>Blurt is listening. Cancel to drop the clip, or send it as your answer.</CardDescription>
-        </CardHeader>
+    <main
+      data-testid="voice-screen"
+      className="fixed inset-0 flex flex-col items-center justify-center gap-5 bg-background px-6 py-8"
+    >
+      <h1 data-testid="reply-heading" className="sr-only">
+        Answer out loud
+      </h1>
 
-        <Boom
-          session={session}
-          recording={state.kind === 'recording'}
-          remainingMs={MAX_RECORDING_MS - recorded}
-          onRecord={recorder.start}
-          onCancel={() => void recorder.cancel().then(back)}
-          onSend={() => void recorder.send()}
-        />
+      <Boom
+        fullscreen
+        session={session}
+        recording={state.kind === 'recording'}
+        remainingMs={MAX_RECORDING_MS - recorded}
+        onRecord={recorder.start}
+        onCancel={() => void recorder.cancel().then(back)}
+        onSend={() => void recorder.send()}
+      />
 
-        {state.kind === 'sending' && (
-          <CardDescription data-testid="reply-status">Sending…</CardDescription>
-        )}
+      {state.kind === 'sending' && (
+        <p data-testid="reply-status" className="text-sm text-muted-foreground">
+          Sending…
+        </p>
+      )}
 
-        {failed && (
-          <div className="flex w-full flex-col items-center gap-3">
-            <Alert variant="destructive" data-testid="reply-error">
-              <AlertDescription className="text-destructive">{failed.message}</AlertDescription>
-            </Alert>
-            <div className="flex gap-2">
-              {failed.recording && (
-                <Button type="button" data-testid="reply-retry" onClick={() => void recorder.retry()}>
-                  Retry upload
-                </Button>
-              )}
-              <Button type="button" variant="ghost" onClick={back}>
-                Type instead
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {status !== 'ready' && (
-          <div className="flex flex-col items-center gap-2">
-            <CardDescription data-testid="reply-mic-note" className="text-xs">
-              {note ?? 'Microphone unavailable.'}
-            </CardDescription>
-            {status !== 'starting' && (
-              <Button type="button" variant="ghost" size="sm" onClick={retry}>
-                Try mic again
+      {failed && (
+        <div className="flex w-full max-w-sm flex-col items-center gap-3">
+          <Alert variant="destructive" data-testid="reply-error">
+            <AlertDescription className="text-destructive">{failed.message}</AlertDescription>
+          </Alert>
+          <div className="flex gap-2">
+            {failed.recording && (
+              <Button type="button" data-testid="reply-retry" onClick={() => void recorder.retry()}>
+                Retry upload
               </Button>
             )}
+            <Button type="button" variant="ghost" onClick={back}>
+              Type instead
+            </Button>
           </div>
-        )}
-      </Card>
+        </div>
+      )}
+
+      {status !== 'ready' && (
+        <div className="flex flex-col items-center gap-2">
+          <p data-testid="reply-mic-note" className="text-center text-xs text-muted-foreground">
+            {note ?? 'Microphone unavailable.'}
+          </p>
+          {status !== 'starting' && (
+            <Button type="button" variant="ghost" size="sm" onClick={retry}>
+              Try mic again
+            </Button>
+          )}
+        </div>
+      )}
     </main>
   )
 }

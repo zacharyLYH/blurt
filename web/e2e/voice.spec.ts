@@ -6,7 +6,7 @@ import { completeQuestionnaire, denyMicrophone, signIn, uniqueEmail } from './he
 // capture, the WAV rewrite, upload, temp file, worker, Job Conversation.
 const FAKE_TRANSCRIPT = 'Remind me to buy glue on the way home.'
 
-test('records a clip, uploads it, and shows the transcript', async ({ page }) => {
+test('records a clip, uploads it, and its question waits in the inbox', async ({ page }) => {
   await signIn(page, { name: 'Lam', email: uniqueEmail('voice') })
   await completeQuestionnaire(page)
 
@@ -19,8 +19,12 @@ test('records a clip, uploads it, and shows the transcript', async ({ page }) =>
   await page.waitForTimeout(800)
   await page.getByTestId('send-audio').click()
 
-  await expect(page.getByTestId('job-message').first()).toHaveText(FAKE_TRANSCRIPT)
+  // The clip does not open a thread: it lands on the calendar, and the question
+  // it becomes waits in the inbox.
   await expect(page.getByTestId('capture-status')).toHaveCount(0)
+  await expect(page).toHaveURL(/\/home$/)
+  await page.getByTestId('inbox-toggle').click()
+  await expect(page.getByTestId('inbox-item')).toHaveCount(1)
 })
 
 // Cancel is the way out of a clip the user does not want, and it puts them
@@ -46,10 +50,11 @@ test('falls back to typing when the mic is denied', async ({ page }) => {
   await completeQuestionnaire(page)
 
   await expect(page.getByTestId('mic-status')).toHaveText('Mic blocked')
-  // Nothing can be recorded, so the boom waits for a tap it cannot honour.
-  await expect(page.getByTestId('boom-record')).toBeDisabled()
+  // The halo is the calendar's only voice door, and it cannot be honoured.
+  await expect(page.getByTestId('halo')).toBeDisabled()
 
   await page.getByTestId('capture-text').fill(FAKE_TRANSCRIPT)
   await page.getByTestId('send-text').click()
-  await expect(page.getByTestId('job-message').first()).toHaveText(FAKE_TRANSCRIPT)
+  await page.getByTestId('inbox-toggle').click()
+  await expect(page.getByTestId('inbox-item')).toHaveCount(1)
 })

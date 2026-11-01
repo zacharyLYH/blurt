@@ -18,7 +18,14 @@ async function askAQuestion(page: Page, email: string) {
   await page.getByTestId('cancel-audio').click()
   await page.getByTestId('capture-text').fill('buy glue when I am home')
   await page.getByTestId('send-text').click()
-  await expect(page.getByTestId('pull-up-mic')).toBeVisible()
+  // The question is answered in its thread, and the thread is only reachable
+  // through its inbox row.
+  await page.getByTestId('inbox-toggle').click()
+  await page.getByTestId('inbox-item').first().click()
+  // The mic stays disabled until the question settles, so the drag below has
+  // to start from the enabled state.
+  await expect(page.getByTestId('reply-text')).toBeVisible()
+  await expect(page.getByTestId('pull-up-mic')).toBeEnabled()
 }
 
 // The gesture: pulling the cue up opens the boom on its own screen, the clip is
