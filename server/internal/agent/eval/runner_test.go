@@ -113,9 +113,13 @@ type outcome struct {
 	status    string
 	reply     string
 	reminders []store.Reminder
-	memories  []string
-	tools     []string
-	trace     map[string]any
+	updated   []store.Reminder
+	// others is every reminder the user has, which is what lets a case say what must NOT
+	// have moved: an overlapping chain is only half-checked by the row it changed.
+	others   []store.Reminder
+	memories []string
+	tools    []string
+	trace    map[string]any
 }
 
 func (r *caseRun) outcome(t *testing.T, rec *recorder) outcome {
@@ -130,8 +134,10 @@ func (r *caseRun) outcome(t *testing.T, rec *recorder) outcome {
 		got.tools = rec.tools()
 	}
 	got.reminders = readReminders(t, ctx, r.handle, r.job.JobID)
+	got.others = readEvery(t, ctx, r.handle)
 	got.memories = readMemories(t, ctx, r.handle, r.job.JobID)
 	got.trace = lastAgentTrace(t, ctx, r.handle, r.job.JobID)
+	got.updated = readUpdated(t, ctx, r.handle, got.trace)
 	return got
 }
 
@@ -140,12 +146,48 @@ func (r *caseRun) outcome(t *testing.T, rec *recorder) outcome {
 // did not open through caseRun, which is why the handle and the id are the arguments.
 func readReminders(t *testing.T, ctx context.Context, handle *db.DB, jobID int64) []store.Reminder {
 	t.Helper()
+	return readRows(t, ctx, handle, `r.SourceJobId = ?`, jobID)
+}
+
+// readUpdated reads the rows a change rewrote. A rewrite keeps the row's own Job, so it is never
+// among the rows readReminders finds; the Trace names the rows the turn's update ops landed on.
+func readUpdated(t *testing.T, ctx context.Context, handle *db.DB, trace map[string]any) []store.Reminder {
+	t.Helper()
+	var found []store.Reminder
+	for _, id := range traceIDs(trace, "reminderIds") {
+		found = append(found, readRows(t, ctx, handle, `r.ReminderId = ?`, id)...)
+	}
+	return found
+}
+
+// traceIDs reads one of a Trace detail's id lists, which JSON decoding leaves as numbers.
+func traceIDs(detail map[string]any, key string) []int64 {
+	list, _ := detail[key].([]any)
+	ids := make([]int64, 0, len(list))
+	for _, item := range list {
+		if id, ok := item.(float64); ok {
+			ids = append(ids, int64(id))
+		}
+	}
+	return ids
+}
+
+// readEvery reads every reminder in the case's database. One case is one user, so this is
+// the user's own table: it is what an unchanged expectation is read against.
+func readEvery(t *testing.T, ctx context.Context, handle *db.DB) []store.Reminder {
+	t.Helper()
+	return readRows(t, ctx, handle, `r.ReminderId > ?`, 0)
+}
+
+// readRows reads reminder rows by one predicate, oldest first, rule and all.
+func readRows(t *testing.T, ctx context.Context, handle *db.DB, where string, arg any) []store.Reminder {
+	t.Helper()
 	rows, err := handle.Read.QueryContext(ctx, `
 		SELECT r.ReminderId, r.Text, r.Timezone, COALESCE(r.LocalDateTime, ''),
 		       COALESCE(r.EmitAtUtc, ''), r.Status, COALESCE(c.Rule, ''), COALESCE(c.NextEmitAtUtc, '')
 		FROM Reminder r
 		LEFT JOIN RecurringReminder c ON c.ReminderId = r.ReminderId
-		WHERE r.SourceJobId = ? ORDER BY r.ReminderId`, jobID)
+		WHERE `+where+` ORDER BY r.ReminderId`, arg)
 	if err != nil {
 		t.Fatalf("read reminders: %v", err)
 	}

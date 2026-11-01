@@ -1,0 +1,29 @@
+{
+  "name": "update-turns-a-one-off-into-a-repeat",
+  "source": "L1:change — a one-off that becomes a repeat keeps its row and gains a rule",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {
+    "reminders": [
+      { "text": "Pay the credit card bill", "local": "2026-11-03T20:00" }
+    ]
+  },
+  "history": [],
+  "capture": "the credit card bill is monthly now",
+  "expect": {
+    "kind": "records",
+    "updated": [
+      {
+        "text_contains": ["credit card"],
+        "utc": "2026-11-03T12:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "monthly",
+        "rule": { "frequency": "monthly", "time": "20:00", "day": 3 }
+      }
+    ],
+    "tools": ["find_reminders", "check_update"],
+    "reply_contains": ["updated"]
+  }
+}

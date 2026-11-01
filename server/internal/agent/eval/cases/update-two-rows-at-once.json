@@ -1,0 +1,41 @@
+{
+  "name": "update-two-rows-at-once",
+  "source": "L1:change — a capture that moves two rows is two ops, and both land in one step",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {
+    "reminders": [
+      { "text": "Dentist", "local": "2026-10-27T10:00" },
+      { "text": "Gym", "local": "2026-10-26T18:00" }
+    ]
+  },
+  "history": [],
+  "capture": "move the dentist to 3pm and the gym to 5pm",
+  "expect": {
+    "kind": "records",
+    "reminders": [],
+    "updated": [
+      {
+        "text_contains": ["dentist"],
+        "datetime": "2026-10-27T15:00",
+        "utc": "2026-10-27T07:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      },
+      {
+        "text_contains": ["gym"],
+        "datetime": "2026-10-26T17:00",
+        "utc": "2026-10-26T09:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": [],
+    "tools": ["find_reminders"],
+    "reply_contains": ["updated"]
+  }
+}

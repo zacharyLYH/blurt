@@ -305,7 +305,7 @@ func newGatewayScript(t *testing.T, records ...string) (*httptest.Server, *gatew
 		case "planner":
 			// The answer a flow that scripts too few turns falls back on: the capture
 			// could not be placed, so the model asks rather than proposing nothing.
-			content = `{"kind":"question","text":"","memories":[],"zone":"","day":"","time":"","recurrence":"none","evidence":"","question":"When should I remind you?"}`
+			content = `{"kind":"question","question":"When should I remind you?"}`
 			if len(script.records) > 0 {
 				content, script.records = script.records[0], script.records[1:]
 			}

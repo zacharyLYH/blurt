@@ -11,7 +11,7 @@
   "capture": "move the dentist to 20 december",
   "expect": {
     "kind": "records",
-    "reminders": [
+    "updated": [
       {
         "text_contains": ["dentist"],
         "datetime": "2026-12-20T10:00",
@@ -22,6 +22,7 @@
       }
     ],
     "memories": [],
-    "tools": ["find_reminders"]
+    "tools": ["find_reminders", "check_update"],
+    "reply_contains": ["updated"]
   }
 }

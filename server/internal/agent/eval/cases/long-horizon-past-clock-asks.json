@@ -12,6 +12,6 @@
     "kind": "question",
     "reminders": [],
     "memories": [],
-    "asks_for": ["when", "time", "passed"]
+    "asks_for": ["when", "time", "passed", "tomorrow"]
   }
 }

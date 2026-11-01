@@ -1,0 +1,3 @@
+current_tz: Asia/Singapore
+now_local: 2026-10-24T18:30
+capture: move the dentist to 3pm and the gym to 5pm

@@ -1,0 +1,16 @@
+{
+  "name": "big-calendar-calls-a-row-off",
+  "source": "branch:call-off:busy-calendar — twelve rows in sight, and none of them written",
+  "layer": "L1",
+  "size": "large",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "use": "busy-calendar",
+  "seed": {},
+  "history": [],
+  "capture": "cancel the dentist appointment",
+  "expect": {
+    "kind": "records",
+    "reply_contains": ["doesn't cancel reminders"]
+  }
+}

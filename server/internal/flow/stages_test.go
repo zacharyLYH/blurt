@@ -72,7 +72,7 @@ func newStageScript(t *testing.T) (*httptest.Server, *stageScript) {
 		case tools > 0:
 			name, content = "agent", `{"tool":"submit_plan"}`
 		case name == "planner":
-			content = `{"kind":"records","text":"","memories":["milk is cheaper at store a"],"zone":"","day":"","time":"","recurrence":"","evidence":"","question":""}`
+			content = `{"kind":"records","ops":[],"memories":["milk is cheaper at store a"],"evidence":"","question":""}`
 		case name == "tags":
 			content = `{"tags":"grocery,dairy"}`
 		}

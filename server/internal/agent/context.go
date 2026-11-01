@@ -23,6 +23,10 @@ func (r Retrieval) FindMemories(ctx context.Context, userID int64, query string,
 	return r.Memories.Search(ctx, userID, query, limit)
 }
 
+func (r Retrieval) FindReminder(ctx context.Context, userID, reminderID int64) (store.Reminder, bool, error) {
+	return r.Reminders.ByID(ctx, userID, reminderID)
+}
+
 // prescreenModel is one bounded call to the prescreen stage: its own stage model
 // when a stack has split the stages, the loop's Model otherwise (every test double).
 func (l *AgentLoop) prescreenModel(ctx context.Context, capture string) (Verdict, error) {

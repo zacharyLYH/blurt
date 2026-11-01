@@ -1,0 +1,118 @@
+{
+  "name": "chain-a-day-of-changes",
+  "source": "L3:overlap — five turns on one database: create, a change in the row's own zone, another create, a call-off, then a change to the row the call-off left alone",
+  "layer": "L3",
+  "size": "large",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {
+    "reminders": [
+      { "text": "Flight", "local": "2026-10-28T09:00", "zone": "Asia/Tokyo" }
+    ]
+  },
+  "steps": [
+    {
+      "capture": "remind me to buy glue tomorrow at 6pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["glue"],
+            "datetime": "2026-10-25T18:00",
+            "utc": "2026-10-25T10:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "unchanged": [
+          {
+            "text_contains": ["flight"],
+            "datetime": "2026-10-28T09:00",
+            "zone": "Asia/Tokyo",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    },
+    {
+      "capture": "move the flight to 10am",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "updated": [
+          {
+            "text_contains": ["flight"],
+            "datetime": "2026-10-28T10:00",
+            "utc": "2026-10-28T01:00:00Z",
+            "zone": "Asia/Tokyo",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "unchanged": [
+          { "text_contains": ["glue"], "datetime": "2026-10-25T18:00" }
+        ],
+        "memories": [],
+        "reply_contains": ["updated"]
+      }
+    },
+    {
+      "capture": "also remind me to pack tomorrow at 5pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["pack"],
+            "datetime": "2026-10-25T17:00",
+            "utc": "2026-10-25T09:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    },
+    {
+      "capture": "cancel the glue reminder",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "updated": [],
+        "unchanged": [
+          { "text_contains": ["glue"], "datetime": "2026-10-25T18:00" },
+          { "text_contains": ["flight"], "datetime": "2026-10-28T10:00" },
+          { "text_contains": ["pack"], "datetime": "2026-10-25T17:00" }
+        ],
+        "memories": [],
+        "reply_contains": ["doesn't cancel reminders"]
+      }
+    },
+    {
+      "capture": "now move the glue to 8pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "updated": [
+          {
+            "text_contains": ["glue"],
+            "datetime": "2026-10-25T20:00",
+            "utc": "2026-10-25T12:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "unchanged": [
+          { "text_contains": ["pack"], "datetime": "2026-10-25T17:00" },
+          { "text_contains": ["flight"], "datetime": "2026-10-28T10:00", "zone": "Asia/Tokyo" }
+        ],
+        "memories": [],
+        "reply_contains": ["updated"]
+      }
+    }
+  ]
+}

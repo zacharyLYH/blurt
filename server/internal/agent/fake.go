@@ -74,11 +74,11 @@ func (Fake) Finalize(_ context.Context, in PlannerInput, _ []Message) (Answer, e
 	capture := strings.ToLower(lastText(in))
 	if fact, ok := fakeFact(lastText(in)); ok {
 		// A fact is context rather than an interruption, so it carries no clock.
-		return placed(Answer{Records: []Record{{Kind: KindMemory, Text: fact}}}), nil
+		return placed(Answer{Memories: []string{fact}}), nil
 	}
 	if record, ok := fakeNotifyAndEvent(in, capture); ok && fakeAhead(in, record) {
 		// The capture names both clocks: the notification time and the event's own.
-		return placed(Answer{Records: []Record{record}}), nil
+		return placed(Answer{Ops: []Op{{Intent: IntentCreate, Record: record}}}), nil
 	}
 	if fakeSoonRe.MatchString(capture) && !namesClock(capture) {
 		// The minute ahead, in the zone the device named: a clock the fake can place
@@ -94,11 +94,11 @@ func (Fake) Finalize(_ context.Context, in PlannerInput, _ []Message) (Answer, e
 			return asked(defaultQuestion), nil
 		}
 		at := in.Now.In(loc).Add(time.Minute)
-		return placed(Answer{Records: []Record{{
+		return placed(Answer{Ops: []Op{{Intent: IntentCreate, Record: Record{
 			Kind: KindReminder, Text: text, Zone: in.CurrentTZ,
 			Date: at.Format("2006-01-02"), Time: at.Format("15:04"),
-			Recurrence: RecurrenceNone, Evidence: "the user said " + capture,
-		}}}), nil
+			Recurrence: RecurrenceNone,
+		}}}}), nil
 	}
 	if !namesClock(capture) || clocksIn(capture) > 1 {
 		// No clock is a time the fake cannot pin, and two of them are more than one
@@ -138,7 +138,7 @@ func (Fake) Finalize(_ context.Context, in PlannerInput, _ []Message) (Answer, e
 		// A one-off the clock has already passed is not a time the fake can place.
 		return asked(defaultQuestion), nil
 	}
-	return placed(Answer{Records: []Record{record}}), nil
+	return placed(Answer{Ops: []Op{{Intent: IntentCreate, Record: record}}}), nil
 }
 
 // fakeNotifyAndEvent splits a capture that names both a notification time and an
@@ -232,7 +232,6 @@ func fakeRecord(in PlannerInput, text, day, clock, recurrence, capture string) R
 	return Record{
 		Kind: KindReminder, Text: text, Zone: in.CurrentTZ,
 		Date: day, Time: clock, Recurrence: recurrence,
-		Evidence: "the user said " + capture,
 	}
 }
 

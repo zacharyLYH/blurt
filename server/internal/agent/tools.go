@@ -6,18 +6,20 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"blurt/internal/store"
 )
 
-// The agent's whole vocabulary: two lookups and the call that ends the loop. Nothing here
-// writes, and every lookup is scoped by the Job's own UserId, so the model never sees an id
-// it can pass and never supplies one. The answer is not a tool: submit_plan triggers the one
+// The agent's whole vocabulary: two lookups, one pre-check and the call that ends the loop.
+// Nothing here writes, and every read is scoped by the Job's own UserId, so the model never
+// reaches a row the caller does not own. The answer is not a tool: submit_plan triggers the one
 // strict call behind the loop, which is the loop's only exit.
 const (
 	toolFindReminders = "find_reminders"
 	toolFindMemories  = "find_memories"
+	toolCheckUpdate   = "check_update"
 	toolSubmitPlan    = "submit_plan"
 )
 
@@ -30,6 +32,7 @@ const toolRows = 5
 var agentTools = []Tool{
 	tool(toolFindReminders, "Find the user's own reminders by words in their text. Use it when the capture refers to something already scheduled, or when a repeat or a correction needs the row it is about. An empty result is an answer.", findRemindersSchema),
 	tool(toolFindMemories, "Find the user's own remembered facts by words. Use it when the capture leans on something the user told Blurt earlier.", findMemoriesSchema),
+	tool(toolCheckUpdate, "Check one change before you submit it: whether that row can still be rewritten, and whether the new text, zone, day, clock and recurrence pass the server's checks. Name only what the capture moves: an empty field keeps the row's own, the way your answer will.", checkUpdateSchema),
 	tool(toolSubmitPlan, "End the loop and write the final answer. Call it once the capture has everything it needs.", noArgumentsSchema),
 }
 
@@ -54,6 +57,20 @@ const (
 }`
 
 	noArgumentsSchema = `{"type": "object", "additionalProperties": false, "properties": {}}`
+
+	checkUpdateSchema = `{
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "reminder_id": {"type": "integer", "description": "the id of the row being changed, copied from a find_reminders result"},
+    "text":       {"type": "string", "description": "the row's event phrase, changed when the capture renames it"},
+    "zone":       {"type": "string", "description": "the IANA zone the row rings in"},
+    "day":        {"type": "string", "description": "the day after the change, as the user's own word or a bare date YYYY-MM-DD; empty keeps the row's day"},
+    "time":       {"type": "string", "description": "notify clock HH:MM 24-hour"},
+    "recurrence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly", "yearly"], "description": "none for a one-off"}
+  },
+  "required": ["reminder_id", "text", "zone", "day", "time", "recurrence"]
+}`
 )
 
 // runTool answers one tool call: the rows a lookup found, or the end of the loop. A lookup
@@ -70,6 +87,11 @@ func (r *jobRun) runTool(ctx context.Context, call ToolCall, left int) (string, 
 		}
 		result := reminderRows(rows)
 		r.looked = append(r.looked, result)
+		for _, reminder := range rows {
+			// The ids this run may name later: the whitelist's whole memory is what the
+			// model was shown.
+			r.found = append(r.found, reminder.ReminderID)
+		}
 		return counted(result, left), false
 	case toolFindMemories:
 		rows, err := r.findMemories(ctx, call)
@@ -78,6 +100,12 @@ func (r *jobRun) runTool(ctx context.Context, call ToolCall, left int) (string, 
 		}
 		result := memoryRows(rows)
 		r.looked = append(r.looked, result)
+		return counted(result, left), false
+	case toolCheckUpdate:
+		result, err := r.checkUpdate(ctx, call)
+		if err != nil {
+			return failed(name, err, left), false
+		}
 		return counted(result, left), false
 	case toolSubmitPlan:
 		return counted("submitted", left), true
@@ -102,6 +130,77 @@ func (r *jobRun) findMemories(ctx context.Context, call ToolCall) ([]store.Memor
 		return nil, err
 	}
 	return r.loop.Recall.FindMemories(ctx, r.job.UserID, query, toolRows)
+}
+
+// named reports whether an id is one this run's own find_reminders printed. A small integer is a
+// real row somebody owns, so an id the model never saw is refused rather than trusted.
+func (r *jobRun) named(id int64) bool {
+	return slices.Contains(r.found, id)
+}
+
+// checkUpdate is the change pre-check: whether that row is still the caller's to change, then the
+// record the arguments describe run through the linter's own checks, so a place this accepts is a
+// place lint accepts. It is advisory, the way recall is: a refusal is a tool result the model
+// reads, never a fault, and lint still decides at submit.
+func (r *jobRun) checkUpdate(ctx context.Context, call ToolCall) (string, error) {
+	var args struct {
+		ReminderID int64  `json:"reminder_id"`
+		Text       string `json:"text"`
+		Zone       string `json:"zone"`
+		Day        string `json:"day"`
+		Time       string `json:"time"`
+		Recurrence string `json:"recurrence"`
+	}
+	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
+		return "", fmt.Errorf("arguments are not a change: %w", err)
+	}
+	if !r.named(args.ReminderID) {
+		return fmt.Sprintf("cannot update id=%d: it is not a row this run looked up", args.ReminderID), nil
+	}
+	reminder, ok, err := r.loop.Recall.FindReminder(ctx, r.job.UserID, args.ReminderID)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return fmt.Sprintf("cannot update id=%d: no such reminder", args.ReminderID), nil
+	}
+	if reminder.Status != store.ReminderResolved {
+		return fmt.Sprintf("cannot update id=%d: it is %s", args.ReminderID, reminderState(reminder)), nil
+	}
+	// The check answers for the row too: a change names only what it changes, so every field it
+	// left unsaid is the row's — exactly as the commit will fill it.
+	text := strings.TrimSpace(args.Text)
+	if text == "" {
+		text = reminder.Text
+	}
+	zone := strings.TrimSpace(args.Zone)
+	if zone == "" {
+		zone = reminder.Timezone
+	}
+	day := strings.TrimSpace(args.Day)
+	date, clock := rowWhen(reminder)
+	if day == "" {
+		day = date
+	} else if at, ok := resolveDay(day, inZone(r.started, zone)); ok {
+		date = at.Format("2006-01-02")
+	} else {
+		date = ""
+	}
+	time := strings.TrimSpace(args.Time)
+	if time == "" {
+		time = clock
+	}
+	recurrence := strings.TrimSpace(args.Recurrence)
+	if recurrence == "" {
+		recurrence = rowRecurrence(reminder)
+	}
+	record := Record{Kind: KindReminder, Text: text, Zone: zone, Day: day, Date: date,
+		Time: time, Recurrence: recurrence}
+	if faults := lintRecord(record, r.started); len(faults) > 0 {
+		return fmt.Sprintf("cannot update id=%d: %s", args.ReminderID, strings.Join(faults, "; ")), nil
+	}
+	return fmt.Sprintf("can update id=%d to %s on %s %s",
+		args.ReminderID, record.Time, record.Date, record.Zone), nil
 }
 
 // queryOf is the search phrase one tool call carries. The arguments are the model's own JSON, so
@@ -142,7 +241,7 @@ func reminderRows(reminders []store.Reminder) string {
 	lines := make([]string, 0, len(reminders))
 	for _, reminder := range reminders {
 		lines = append(lines, fmt.Sprintf("id=%d %s | %s | %s",
-			reminder.ReminderID, reminder.Text, reminderWhen(reminder), reminder.Status))
+			reminder.ReminderID, reminder.Text, reminderWhen(reminder), reminderState(reminder)))
 	}
 	return strings.Join(lines, "\n")
 }

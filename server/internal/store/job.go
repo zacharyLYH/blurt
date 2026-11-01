@@ -80,10 +80,12 @@ type OpenJob struct {
 // AgentStep is the whole durable outcome of one AgentLoop step that commits.
 type AgentStep struct {
 	Reminders []Reminder
-	Memories  []Memory
-	Reply     Message
-	Status    string
-	Detail    map[string]any
+	// Updates are rows this step rewrites in place, each carrying its own ReminderID.
+	Updates  []Reminder
+	Memories []Memory
+	Reply    Message
+	Status   string
+	Detail   map[string]any
 }
 
 // PendingAudio returns the first user clip that has not been transcribed.
@@ -359,6 +361,12 @@ func (s *JobStore) CommitAgentStep(ctx context.Context, jobID int64, step AgentS
 		for _, reminder := range step.Reminders {
 			reminder.UserID, reminder.SourceJobID = job.UserID, jobID
 			if err := insertReminder(ctx, tx, reminder); err != nil {
+				return err
+			}
+		}
+		for _, reminder := range step.Updates {
+			reminder.UserID = job.UserID
+			if err := rewriteReminder(ctx, tx, reminder); err != nil {
 				return err
 			}
 		}

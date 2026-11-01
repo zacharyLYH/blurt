@@ -4,10 +4,15 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 )
+
+// ErrReminderStale is a rewrite that matched no row: the Reminder fired, or was called off,
+// between the lookup and the commit, so the change has nowhere to land.
+var ErrReminderStale = errors.New("reminder is no longer resolved")
 
 // A Reminder is never deleted, so its Status is the whole lifecycle: it starts
 // resolved, the emitter turns a one-off fired the moment it rings, and a repeat
@@ -154,6 +159,28 @@ func (s *ReminderStore) Search(ctx context.Context, userID int64, query string, 
 	return scanReminders(rows)
 }
 
+// ByID reads one of the user's own Reminders. The owner is in the predicate, so an id that
+// belongs to somebody else is simply not there: whatever a model wrote, it cannot reach a row
+// the caller does not own.
+func (s *ReminderStore) ByID(ctx context.Context, userID, reminderID int64) (Reminder, bool, error) {
+	rows, err := s.read.QueryContext(ctx, `
+		SELECT `+reminderColumns+`
+		FROM Reminder r LEFT JOIN RecurringReminder c ON c.ReminderId = r.ReminderId
+		WHERE r.ReminderId = ? AND r.UserId = ?`, reminderID, userID)
+	if err != nil {
+		return Reminder{}, false, fmt.Errorf("read reminder: %w", err)
+	}
+	defer rows.Close()
+	reminders, err := scanReminders(rows)
+	if err != nil {
+		return Reminder{}, false, err
+	}
+	if len(reminders) == 0 {
+		return Reminder{}, false, nil
+	}
+	return reminders[0], true, nil
+}
+
 // Due returns the Reminders whose instant has arrived, oldest first: every resolved
 // one-off whose EmitAtUtc and every resolved repeat whose next occurrence is at or
 // before now. This is the emitter's query, so it is the one read that filters on
@@ -272,6 +299,48 @@ func insertRecurring(ctx context.Context, tx execer, reminder Reminder) error {
 		SELECT ReminderId, ?, ? FROM Reminder WHERE SourceJobId = ? AND Text = ?`,
 		string(raw), reminder.NextEmitAtUtc, nullID(reminder.SourceJobID), reminder.Text); err != nil {
 		return fmt.Errorf("insert recurring reminder: %w", err)
+	}
+	return nil
+}
+
+// rewriteReminder replaces one resolved Reminder's own fields in place, keeping its id, its
+// status, its CreatedAt and the Job that made it. The predicate is Cancel's — this user's own
+// row, still resolved — so a row that has left the schedule cannot be changed behind the user's
+// back, and a change that finds nothing to change is refused rather than invented.
+func rewriteReminder(ctx context.Context, tx execer, reminder Reminder) error {
+	res, err := tx.ExecContext(ctx, `
+		UPDATE Reminder SET Text = ?, Timezone = ?, LocalDateTime = ?, EmitAtUtc = ?
+		WHERE ReminderId = ? AND UserId = ? AND Status = ?`,
+		reminder.Text, reminder.Timezone, nullText(reminder.LocalDateTime), nullText(reminder.EmitAtUtc),
+		reminder.ReminderID, reminder.UserID, ReminderResolved)
+	if err != nil {
+		return fmt.Errorf("rewrite reminder: %w", err)
+	}
+	matched, err := claimedRow(res)
+	if err != nil {
+		return err
+	}
+	if !matched {
+		return ErrReminderStale
+	}
+	if reminder.Rule == nil {
+		// A repeat that became a one-off keeps no rule: the rule's next instant would
+		// otherwise outlive the row's own and read as the later of the two.
+		if _, err := tx.ExecContext(ctx,
+			`DELETE FROM RecurringReminder WHERE ReminderId = ?`, reminder.ReminderID); err != nil {
+			return fmt.Errorf("clear reminder rule: %w", err)
+		}
+		return nil
+	}
+	raw, err := json.Marshal(reminder.Rule)
+	if err != nil {
+		return fmt.Errorf("encode rule: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO RecurringReminder (ReminderId, Rule, NextEmitAtUtc) VALUES (?, ?, ?)
+		ON CONFLICT (ReminderId) DO UPDATE SET Rule = excluded.Rule, NextEmitAtUtc = excluded.NextEmitAtUtc`,
+		reminder.ReminderID, string(raw), reminder.NextEmitAtUtc); err != nil {
+		return fmt.Errorf("rewrite reminder rule: %w", err)
 	}
 	return nil
 }

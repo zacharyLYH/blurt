@@ -2,6 +2,7 @@ package agent
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -13,36 +14,77 @@ type check func(Record, time.Time) []string
 // checks is the whole linter, in the order its faults read in: the day token leads, because an
 // unreadable one is what leaves the date empty, and naming the token is the actionable half of
 // that pair. checkAfterNow comes last, so it speaks only for a record whose fields are whole. A
-// new check is a new function on this list and nothing else; the target whitelist joins it when
-// a record can name a row it is about, which nothing writes yet.
+// new check is a new function on this list and nothing else. The target whitelist is not one of
+// them: it is about the answer rather than a record, so lint runs it first.
 var checks = []check{checkDay, checkFields, checkAfterNow}
 
-// lint is the server's verdict on the answer the loop is about to act on: every check over
-// every record it proposes, all faults collected, or nil when the answer stands. It reads the
-// answer alone, and it is the server's own authority — the same checks that would have been put
-// to the user as a question, offered to the model first instead.
+// lint is the server's verdict on the answer the loop is about to act on: every op's verb, the
+// row it names, and every check over the record it proposes — all faults collected, or nil when
+// the answer stands. It reads the answer and the ids this run's own lookups printed, and nothing
+// else; it is the server's own authority, the same checks that would have been put to the user as
+// a question, offered to the model first instead.
 //
-// Two things are not here because they are not records: the strict shape (one kind, and the
-// fields the other kind does not use) is answerFrom's, where the JSON is read, and a question
-// carries no record, so asking passes lint for free.
-func lint(answer Answer, now time.Time) []string {
+// The strict shape (one kind, and the fields the other kind does not use) is answerFrom's, where
+// the JSON is read, and a question carries no op, so asking passes lint for free. A call-off is
+// whole with no record at all: the app owns that write, so its op only has to say where it is.
+func lint(answer Answer, now time.Time, found []int64) []string {
 	switch answer.Kind {
 	case AnswerQuestion:
 		return nil
 	case AnswerRecords:
 	default:
-		// The server never infers the kind from an empty field, and a Model may be a
-		// double: the answer has to say which of the two it is.
+		// The server never infers the kind from an empty field, and a Model may be a double:
+		// the answer has to say which of the two it is.
 		return []string{fmt.Sprintf("kind %q is neither records nor question", answer.Kind)}
 	}
-	if len(answer.Records) == 0 {
-		return []string{"no record proposed: answer with a record, or ask a question"}
+	if len(answer.Ops) == 0 && len(answer.Memories) == 0 {
+		return []string{"nothing proposed: answer with an op, a fact, or a question"}
 	}
 	faults := []string{}
-	for _, record := range answer.Records {
-		for _, check := range checks {
-			faults = append(faults, check(record, now)...)
+	for _, op := range answer.Ops {
+		faults = append(faults, lintOp(op, now, found)...)
+	}
+	return faults
+}
+
+// lintOp is the verdict on one op: the verb it names, the row it names, and the record it
+// proposes. It speaks for that op alone, so a two-op answer reads as two verdicts and the model
+// is told about both at once.
+func lintOp(op Op, now time.Time, found []int64) []string {
+	switch op.Intent {
+	case IntentCreate:
+		if op.ReminderID != 0 {
+			return []string{fmt.Sprintf("a create names no row, but reminder_id is %d", op.ReminderID)}
 		}
+	case IntentUpdate:
+		if op.ReminderID == 0 {
+			return []string{"an update names the row it changes: reminder_id is 0"}
+		}
+	case IntentCancel:
+		// A call-off names no row and proposes no record: it only says where the write is done.
+		if op.ReminderID != 0 {
+			return []string{fmt.Sprintf("a call-off names no row, but reminder_id is %d", op.ReminderID)}
+		}
+		return nil
+	default:
+		// A verb the server does not know is named rather than guessed at, the way kind is.
+		return []string{fmt.Sprintf("intent %q is neither create, update nor cancel", op.Intent)}
+	}
+	// The whitelist: a row may be named only if this run's own lookups printed it. The ids are
+	// small integers over one user's own rows, so a guessed one is somebody's real Reminder.
+	if op.ReminderID != 0 && !slices.Contains(found, op.ReminderID) {
+		return []string{fmt.Sprintf(
+			"reminder_id %d was not one of this run's own find_reminders results", op.ReminderID)}
+	}
+	return lintRecord(op.Record, now)
+}
+
+// lintRecord is every check over one record, all faults collected: the linter's body, so a
+// pre-check on a change runs the same list rather than a second rulebook.
+func lintRecord(record Record, now time.Time) []string {
+	faults := []string{}
+	for _, check := range checks {
+		faults = append(faults, check(record, now)...)
 	}
 	return faults
 }
@@ -117,7 +159,7 @@ func checkDay(record Record, now time.Time) []string {
 	}
 	if _, ok := resolveDay(record.Day, inZone(now, record.Zone)); !ok {
 		return []string{fmt.Sprintf(
-			"day %q is not today, tonight, tomorrow, in:<N>d, this:<weekday>, next:<weekday>, next:<N>:<weekday> or on:<MM-DD>",
+			"day %q is not today, tonight, tomorrow, in:<N>d, this:<weekday>, next:<weekday>, next:<N>:<weekday>, or a date like 2026-12-02",
 			record.Day)}
 	}
 	return nil

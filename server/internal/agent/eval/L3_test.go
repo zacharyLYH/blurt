@@ -340,11 +340,14 @@ func (r *chainRun) settle(t *testing.T, jobID int64) store.Job {
 func (r *chainRun) outcome(t *testing.T, job store.Job) outcome {
 	t.Helper()
 	ctx := context.Background()
+	trace := lastAgentTrace(t, ctx, r.handle, job.JobID)
 	return outcome{
 		status: job.Status, reply: lastReply(job),
 		reminders: readReminders(t, ctx, r.handle, job.JobID),
+		updated:   readUpdated(t, ctx, r.handle, trace),
+		others:    readEvery(t, ctx, r.handle),
 		memories:  readMemories(t, ctx, r.handle, job.JobID),
-		trace:     lastAgentTrace(t, ctx, r.handle, job.JobID),
+		trace:     trace,
 	}
 }
 

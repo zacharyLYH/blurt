@@ -125,6 +125,16 @@ type Expect struct {
 	// Reminders and Memories are exact: the count is asserted, not only the contents.
 	Reminders []ExpectReminder `json:"reminders"`
 	Memories  []ExpectMemory   `json:"memories"`
+	// Updated is what a change rewrote in place. A rewrite keeps the row's own Job, so it is
+	// never among the rows this run inserted; the Trace names the row it landed on.
+	Updated []ExpectReminder `json:"updated,omitempty"`
+	// Unchanged is what the run had to leave alone: rows of the user's table, found by the
+	// same substring a reminder is asserted with, that have to be exactly as they were. It
+	// is how an overlapping chain says the change landed on one row and not its neighbours.
+	Unchanged []ExpectReminder `json:"unchanged,omitempty"`
+	// ReplyContains is the sentence the user reads, by substring. A commit's reply is the
+	// server's own words, so this pins the branch the run took and not the model's prose.
+	ReplyContains []string `json:"reply_contains,omitempty"`
 	// AsksFor is what a question has to be about, by substring: one of these counts, so
 	// "when" and "what time" are the same ask.
 	AsksFor []string `json:"asks_for,omitempty"`
@@ -233,6 +243,9 @@ func loadCase(dir, file string) (Case, error) {
 // case names one helper and carries that helper's input, and a typo in the stage would
 // otherwise spend a call to answer nothing. An L3 case is its steps and nothing else.
 func (c Case) check() error {
+	if err := c.checkUnchanged(); err != nil {
+		return err
+	}
 	switch c.Layer {
 	case "L1", "L2", "L3":
 	default:
@@ -268,6 +281,17 @@ func (c Case) check() error {
 	return nil
 }
 
+// checkUnchanged refuses an unchanged expectation that names nothing to find: the row is
+// looked up by that first substring, so an empty list is a case that could never fail.
+func (c Case) checkUnchanged() error {
+	for _, want := range c.Expect.Unchanged {
+		if len(want.TextContains) == 0 {
+			return errors.New("an unchanged row is found by text, but text_contains is empty")
+		}
+	}
+	return nil
+}
+
 // checkChain refuses a chain that cannot be run: an L3 case is a list of steps, one turn
 // each, and every step has to say what the database must hold. A reply that opens the case
 // would answer nothing, so it fails at load rather than as an empty Conversation.
@@ -290,6 +314,12 @@ func (c Case) checkChain() error {
 		}
 		if i == 0 && step.Reply != "" {
 			return errors.New("step 1 replies, but no Job is waiting on the user yet")
+		}
+		// A chain has no recorder in front of the model, so the tool names a run chose are
+		// not read back; a case that asked for them would never pass. The whitelist makes
+		// the lookup itself a precondition of naming a row, so nothing is lost.
+		if len(step.Expect.Tools) > 0 {
+			return fmt.Errorf("step %d asserts tools, which only L1 can see", i+1)
 		}
 		switch step.Expect.Kind {
 		case agent.AnswerRecords, agent.AnswerQuestion, kindFailed:

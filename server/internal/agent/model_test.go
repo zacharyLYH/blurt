@@ -73,8 +73,9 @@ func TestModelClientFinalizeSendsTheStructuredSchema(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
 			t.Errorf("decode request: %v", err)
 		}
-		answer := `{"kind":"records","text":"Call mum","memories":[],"zone":"Asia/Singapore",` +
-			`"day":"tomorrow","time":"19:00","recurrence":"none",` +
+		answer := `{"kind":"records","ops":[{"intent":"create","reminder_id":0,` +
+			`"text":"Call mum","zone":"Asia/Singapore","day":"tomorrow","time":"19:00",` +
+			`"recurrence":"none"}],"memories":[],` +
 			`"evidence":"they said tomorrow at 7pm","question":""}`
 		_, _ = w.Write(gatewayAnswer(t, "stop", answer))
 	})
@@ -109,23 +110,31 @@ func TestModelClientFinalizeSendsTheStructuredSchema(t *testing.T) {
 	if err := json.Unmarshal(got.Payload.ResponseFormat.JSONSchema.Schema, &schema); err != nil {
 		t.Fatalf("decode schema: %v", err)
 	}
-	// Nine fields, all required, and the object closed: that is the shape a strict
+	// Five fields, all required, and the object closed: that is the shape a strict
 	// structured output accepts, and the kind is one of them so the server never
-	// infers an answer from an empty string.
-	if len(schema.Properties) != 9 || len(schema.Required) != 9 || schema.AdditionalProperties {
-		t.Fatalf("schema has %d fields, %d required, additionalProperties %v; want 9, 9, false",
+	// infers an answer from an empty string. The ops are the rows: one entry each, and a
+	// closed object of their own, so the model fills a list rather than a second shape.
+	if len(schema.Properties) != 5 || len(schema.Required) != 5 || schema.AdditionalProperties {
+		t.Fatalf("schema has %d fields, %d required, additionalProperties %v; want 5, 5, false",
 			len(schema.Properties), len(schema.Required), schema.AdditionalProperties)
 	}
-	for _, field := range []string{"kind", "text", "memories", "zone", "day", "time", "recurrence", "evidence", "question"} {
+	for _, field := range []string{"kind", "ops", "memories", "evidence", "question"} {
 		if _, ok := schema.Properties[field]; !ok {
 			t.Fatalf("schema = %s, want the %s field", got.Payload.ResponseFormat.JSONSchema.Schema, field)
 		}
 	}
+	// An op carries the verb, the row it names, and the fields the capture said.
+	for _, field := range []string{"intent", "reminder_id", "text", "zone", "day", "time", "recurrence"} {
+		if !strings.Contains(string(got.Payload.ResponseFormat.JSONSchema.Schema), `"`+field+`":{`) {
+			t.Fatalf("schema = %s, want the %s field in an op",
+				got.Payload.ResponseFormat.JSONSchema.Schema, field)
+		}
+	}
 	// Every field may be the empty string, which is what makes "I am not sure"
-	// expressible, and recurrence is an enum, so a pattern the server cannot read
-	// never even arrives.
+	// expressible — and on a change an empty field is "as it was" — and recurrence is an
+	// enum, so a pattern the server cannot read never even arrives.
 	if !strings.Contains(string(got.Payload.ResponseFormat.JSONSchema.Schema),
-		`"enum":["none","daily","weekly","monthly","yearly"]`) {
+		`"enum":["","none","daily","weekly","monthly","yearly"]`) {
 		t.Fatalf("schema = %s, want the recurrence enum", got.Payload.ResponseFormat.JSONSchema.Schema)
 	}
 	if len(got.Payload.Messages) != 2 {
@@ -142,9 +151,9 @@ func TestModelClientFinalizeSendsTheStructuredSchema(t *testing.T) {
 		t.Fatalf("user turn = %q, want the local clock in it", got.Payload.Messages[1].Content)
 	}
 
-	if turn.Kind != AnswerRecords || len(turn.Records) != 1 || turn.Records[0].Date != "2026-10-25" ||
-		turn.Records[0].Day != "tomorrow" || turn.Records[0].Recurrence != RecurrenceNone ||
-		turn.Records[0].Evidence == "" {
+	if turn.Kind != AnswerRecords || len(turn.Ops) != 1 || turn.Ops[0].Record.Date != "2026-10-25" ||
+		turn.Ops[0].Record.Day != "tomorrow" || turn.Ops[0].Record.Recurrence != RecurrenceNone ||
+		turn.Evidence == "" {
 		t.Fatalf("turn = %+v, want one resolved reminder", turn)
 	}
 }
@@ -175,7 +184,7 @@ func TestModelClientChatOffersToolsAndReadsACall(t *testing.T) {
 		t.Fatalf("response format = %+v, want none on a tool turn", got.ResponseFormat)
 	}
 	if len(got.Tools) != len(agentTools) || got.Tools[0].Function.Name != toolFindReminders ||
-		got.Tools[2].Function.Name != toolSubmitPlan {
+		got.Tools[3].Function.Name != toolSubmitPlan {
 		t.Fatalf("tools = %+v, want the agent's own list", got.Tools)
 	}
 	if len(got.Messages) != 3 || got.Messages[2].Role != "tool" || got.Messages[2].ToolCallID != "call_1" {
@@ -199,8 +208,9 @@ func TestGatewayOpenRouterEnvelope(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 		}
 		_, _ = w.Write(openRouterAnswer(t, "stop",
-			`{"kind":"records","text":"Buy glue","memories":[],"zone":"Asia/Singapore",`+
-				`"day":"tomorrow","time":"18:00","recurrence":"none","evidence":"tomorrow at 6pm","question":""}`))
+			`{"kind":"records","ops":[{"intent":"create","reminder_id":0,"text":"Buy glue",`+
+				`"zone":"Asia/Singapore","day":"tomorrow","time":"18:00","recurrence":"none"}],`+
+				`"memories":[],"evidence":"tomorrow at 6pm","question":""}`))
 	})
 
 	turn, err := gateway.Finalize(context.Background(), PlannerInput{
@@ -226,7 +236,7 @@ func TestGatewayOpenRouterEnvelope(t *testing.T) {
 	if got.MaxTokens < 2000 {
 		t.Fatalf("max_tokens = %d, want headroom for reasoning", got.MaxTokens)
 	}
-	if turn.Kind != AnswerRecords || len(turn.Records) != 1 || turn.Records[0].Time != "18:00" {
+	if turn.Kind != AnswerRecords || len(turn.Ops) != 1 || turn.Ops[0].Record.Time != "18:00" {
 		t.Fatalf("turn = %+v, want the records answer off the OpenAI envelope", turn)
 	}
 }
@@ -281,51 +291,70 @@ func TestGatewayRefusesAnUnreadableAnswer(t *testing.T) {
 	}
 }
 
-// answerFrom is the whole shape decision: which kind it is, what that kind proposed, and the
-// strictness the decoder cannot give us — a question filled no record and a record did not also
-// ask. The day is the one field the server reads rather than copies.
-func TestTurnOf(t *testing.T) {
+// answerFrom is the whole shape decision: which kind it is, what that kind proposed, one op per
+// row the capture acts on, and the strictness the decoder cannot give us — a question filled
+// nothing and a records answer did not also ask. The day is the one field the server reads
+// rather than copies.
+func TestAnswerFrom(t *testing.T) {
 	cases := []struct {
 		name   string
 		parsed plannerAnswer
 		kind   string
-		want   []Record
+		want   []Op
 	}{
-		{"a resolved reminder", plannerAnswer{Kind: AnswerRecords, Text: " Call mum ", Zone: " Asia/Singapore ",
-			Day: "tomorrow", Time: "19:00", Recurrence: "none", Evidence: " they said 7pm "},
-			AnswerRecords, []Record{{Kind: KindReminder, Text: "Call mum", Zone: "Asia/Singapore", Day: "tomorrow",
-				Date: "2026-10-25", Time: "19:00", Recurrence: RecurrenceNone, Evidence: "they said 7pm"}}},
-		{"a repeat", plannerAnswer{Kind: AnswerRecords, Text: "Trash", Zone: "Asia/Singapore", Day: "this:tuesday",
-			Time: "19:00", Recurrence: "weekly"},
-			AnswerRecords, []Record{{Kind: KindReminder, Text: "Trash", Zone: "Asia/Singapore", Day: "this:tuesday",
-				Date: "2026-10-27", Time: "19:00", Recurrence: store.FrequencyWeekly}}},
-		{"a day count", plannerAnswer{Kind: AnswerRecords, Text: "Renew the pass", Zone: "Asia/Singapore", Day: "in:13d",
-			Time: "09:00", Recurrence: "none"},
-			AnswerRecords, []Record{{Kind: KindReminder, Text: "Renew the pass", Zone: "Asia/Singapore", Day: "in:13d",
-				Date: "2026-11-06", Time: "09:00", Recurrence: RecurrenceNone}}},
-		{"an unanswered pattern", plannerAnswer{Kind: AnswerRecords, Text: "Buy glue"},
-			AnswerRecords, []Record{{Kind: KindReminder, Text: "Buy glue", Recurrence: RecurrenceNone}}},
-		{"a token the server cannot read", plannerAnswer{Kind: AnswerRecords, Text: "Buy glue", Zone: "Asia/Singapore",
-			Day: "when I'm home", Time: "18:00", Recurrence: "none"},
-			AnswerRecords, []Record{{Kind: KindReminder, Text: "Buy glue", Zone: "Asia/Singapore",
-				Day: "when I'm home", Time: "18:00", Recurrence: RecurrenceNone}}},
-		{"a fact alone", plannerAnswer{Kind: AnswerRecords, Memories: []string{" Milk is cheaper at store A "}},
-			AnswerRecords, []Record{{Kind: KindMemory, Text: "Milk is cheaper at store A"}}},
-		{"an event and a fact", plannerAnswer{Kind: AnswerRecords, Text: "Lunch at Ikea", Memories: []string{"I have an Ikea voucher"},
-			Zone: "Asia/Singapore", Day: "this:friday", Time: "13:00", Recurrence: "none"},
-			AnswerRecords, []Record{
-				{Kind: KindReminder, Text: "Lunch at Ikea", Zone: "Asia/Singapore", Day: "this:friday",
-					Date: "2026-10-30", Time: "13:00", Recurrence: RecurrenceNone},
-				{Kind: KindMemory, Text: "I have an Ikea voucher"},
-			}},
-		{"no event, no record", plannerAnswer{Kind: AnswerRecords, Zone: "Asia/Singapore", Day: "tomorrow"}, AnswerRecords, nil},
-		{"blanks read as nothing", plannerAnswer{Kind: AnswerRecords, Text: "   ", Memories: []string{"  "}}, AnswerRecords, nil},
-		// A question asks and nothing else: recurrence carries the schema's own default here,
-		// which is not something the model proposed.
-		{"a question", plannerAnswer{Kind: AnswerQuestion, Recurrence: RecurrenceNone, Question: " When? "},
-			AnswerQuestion, nil},
+		{"a resolved reminder", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
+			Intent: "create", Text: " Call mum ", Zone: " Asia/Singapore ", Day: "tomorrow",
+			Time: "19:00", Recurrence: "none"}}, Evidence: " they said 7pm "},
+			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder, Text: "Call mum",
+				Zone: "Asia/Singapore", Day: "tomorrow", Date: "2026-10-25", Time: "19:00",
+				Recurrence: RecurrenceNone}}}},
+		{"a repeat", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
+			Intent: "create", Text: "Trash", Zone: "Asia/Singapore", Day: "this:tuesday",
+			Time: "19:00", Recurrence: "weekly"}}},
+			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder, Text: "Trash",
+				Zone: "Asia/Singapore", Day: "this:tuesday", Date: "2026-10-27", Time: "19:00",
+				Recurrence: store.FrequencyWeekly}}}},
+		{"a day count", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
+			Intent: "create", Text: "Renew the pass", Zone: "Asia/Singapore", Day: "in:13d",
+			Time: "09:00", Recurrence: "none"}}},
+			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder,
+				Text: "Renew the pass", Zone: "Asia/Singapore", Day: "in:13d", Date: "2026-11-06",
+				Time: "09:00", Recurrence: RecurrenceNone}}}},
+		{"an unanswered pattern", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
+			Intent: "create", Text: "Buy glue"}}},
+			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder,
+				Text: "Buy glue", Recurrence: RecurrenceNone}}}},
+		{"a token the server cannot read", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
+			Intent: "create", Text: "Buy glue", Zone: "Asia/Singapore", Day: "when I'm home",
+			Time: "18:00", Recurrence: "none"}}},
+			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder, Text: "Buy glue",
+				Zone: "Asia/Singapore", Day: "when I'm home", Time: "18:00",
+				Recurrence: RecurrenceNone}}}},
+		// A change is a delta: it names the row and only what it changes, so its record is
+		// built with no words of its own, and the fields it left out wait for the row's.
+		{"a change with only a clock", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
+			Intent: "update", ReminderID: 7, Time: "20:00"}}},
+			AnswerRecords, []Op{{Intent: IntentUpdate, ReminderID: 7, Record: Record{Kind: KindReminder,
+				Time: "20:00"}}}},
+		// Two rows are two ops, in the order the capture said them.
+		{"two changes", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{
+			{Intent: "update", ReminderID: 7, Time: "20:00"},
+			{Intent: "update", ReminderID: 9, Day: "tomorrow"}}},
+			AnswerRecords, []Op{
+				{Intent: IntentUpdate, ReminderID: 7, Record: Record{Kind: KindReminder, Time: "20:00"}},
+				{Intent: IntentUpdate, ReminderID: 9, Record: Record{Kind: KindReminder, Day: "tomorrow",
+					Date: "2026-10-25"}}}},
+		{"a call-off", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{Intent: "cancel"}}},
+			AnswerRecords, []Op{{Intent: IntentCancel}}},
+		{"an event and a fact", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
+			Intent: "create", Text: "Lunch at Ikea", Zone: "Asia/Singapore", Day: "this:friday",
+			Time: "13:00", Recurrence: "none"}}, Memories: []string{"I have an Ikea voucher"}},
+			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder,
+				Text: "Lunch at Ikea", Zone: "Asia/Singapore", Day: "this:friday", Date: "2026-10-30",
+				Time: "13:00", Recurrence: RecurrenceNone}}}},
+		{"a question", plannerAnswer{Kind: AnswerQuestion, Question: " When? "}, AnswerQuestion, nil},
 		// A kind the server does not know proposes nothing, and the linter is what names it.
-		{"a kind that is neither", plannerAnswer{Kind: "cancel", Text: "Buy glue"}, "cancel", nil},
+		{"a kind that is neither", plannerAnswer{Kind: "cancel"}, "cancel", nil},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -336,11 +365,44 @@ func TestTurnOf(t *testing.T) {
 			if turn.Kind != test.kind {
 				t.Fatalf("kind = %q, want %q", turn.Kind, test.kind)
 			}
-			if len(turn.Records) != len(test.want) || (len(test.want) > 0 && !reflect.DeepEqual(turn.Records, test.want)) {
-				t.Fatalf("records = %+v, want %+v", turn.Records, test.want)
+			if len(turn.Ops) != len(test.want) || (len(test.want) > 0 && !reflect.DeepEqual(turn.Ops, test.want)) {
+				t.Fatalf("ops = %+v, want %+v", turn.Ops, test.want)
 			}
 			if test.kind == AnswerQuestion && turn.Question != "When?" {
 				t.Fatalf("question = %q, want it kept", turn.Question)
+			}
+		})
+	}
+	// The facts are read as sentences, and blanks are not facts.
+	turn, err := answerFrom(plannerAnswer{Kind: AnswerRecords, Memories: []string{
+		" Milk is cheaper at store A ", "  "}, Question: "", Ops: nil}, pinned)
+	if err != nil {
+		t.Fatalf("answerFrom: %v", err)
+	}
+	if got := turn.Memories; !reflect.DeepEqual(got, []string{"Milk is cheaper at store A"}) {
+		t.Fatalf("memories = %+v, want the one trimmed fact", got)
+	}
+}
+
+// An ask carries no op, no fact and no evidence: the shape the decoder cannot enforce, refused
+// where the JSON is read. The verb and the row each op names are lint's to refuse, so the model
+// meets both kinds of refusal the same way.
+func TestAnswerFromRefusesAnAskThatProposes(t *testing.T) {
+	cases := []struct {
+		name   string
+		parsed plannerAnswer
+	}{
+		{"an ask with an op", plannerAnswer{Kind: AnswerQuestion, Question: "When?",
+			Ops: []plannerOp{{Intent: "create", Text: "Call mum"}}}},
+		{"an ask with a fact", plannerAnswer{Kind: AnswerQuestion, Question: "When?",
+			Memories: []string{"milk is cheaper at store A"}}},
+		{"an ask with evidence", plannerAnswer{Kind: AnswerQuestion, Question: "When?", Evidence: "tomorrow"}},
+		{"a records answer that asks", plannerAnswer{Kind: AnswerRecords, Question: "When?"}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := answerFrom(test.parsed, pinned); err == nil {
+				t.Fatal("answerFrom accepted an answer that both proposes and asks")
 			}
 		})
 	}
@@ -349,13 +411,14 @@ func TestTurnOf(t *testing.T) {
 // A day token is the user's calendar, not the server's: at 00:30 in Singapore the
 // server's UTC clock still reads the previous day, and "today" must not slip back one.
 func TestAnswerFromResolvesTheDayInTheRecordZone(t *testing.T) {
-	turn, err := answerFrom(plannerAnswer{Kind: AnswerRecords, Text: "Buy glue",
-		Zone: zone, Day: "today", Time: "09:00", Recurrence: RecurrenceNone},
+	turn, err := answerFrom(plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
+		Intent: "create", Text: "Buy glue", Zone: zone, Day: "today", Time: "09:00",
+		Recurrence: RecurrenceNone}}},
 		time.Date(2026, 10, 24, 16, 30, 0, 0, time.UTC))
 	if err != nil {
 		t.Fatalf("answerFrom: %v", err)
 	}
-	if got := turn.Records[0].Date; got != "2026-10-25" {
+	if got := turn.Ops[0].Record.Date; got != "2026-10-25" {
 		t.Fatalf("date = %q, want the user's own day", got)
 	}
 }

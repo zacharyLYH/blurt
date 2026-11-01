@@ -1,0 +1,35 @@
+{
+  "name": "create-two-reminders-at-once",
+  "source": "L1:create — a capture that names two events is two ops, so neither is dropped",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me to buy glue tomorrow at 6pm and to call mum at 7pm",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["glue"],
+        "datetime": "2026-10-25T18:00",
+        "utc": "2026-10-25T10:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      },
+      {
+        "text_contains": ["mum"],
+        "datetime": "2026-10-25T19:00",
+        "utc": "2026-10-25T11:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "updated": [],
+    "memories": [],
+    "reply_contains": ["set"]
+  }
+}

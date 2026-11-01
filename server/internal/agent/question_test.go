@@ -44,7 +44,7 @@ func TestQuestionQuotesOnlyTheUsersClocks(t *testing.T) {
 
 	looked := &jobRun{
 		job:    store.Job{Conversation: []store.Message{{Role: "user", Text: "push the dentist to next friday"}}},
-		looked: []string{"id=1 Dentist | 2026-10-27T10:00 Asia/Singapore | resolved\nloop calls left: 9"},
+		looked: []string{"id=1 Dentist | 2026-10-27 10:00 Asia/Singapore | pending\nloop calls left: 9"},
 	}
 
 	for _, test := range []struct {

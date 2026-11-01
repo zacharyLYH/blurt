@@ -47,6 +47,12 @@ const (
 	// server's, so a commit is visible in the Conversation at no model cost.
 	reminderReply = "Reminder set."
 	memoryReply   = "Noted."
+	updateReply   = "Reminder updated."
+	// cancelReply is the one sentence for the one answer that writes nothing. A call-off is the
+	// app's own write, so the reply is the app's own button, and it is fixed for the reason
+	// every reply is: the schema has no field for prose, and a model sentence about a row
+	// nothing touched is the one place a wrong claim would cost nothing to make.
+	cancelReply = "I think you asked to cancel a reminder? Blurt doesn't cancel reminders on your behalf, but you may go ahead and delete it on the app yourself!"
 	// defaultQuestion is what the user reads when no model wrote a usable question of its own.
 	defaultQuestion = "What should I remind you about, and when?"
 	// maxQuestions caps the questions one Job may ask. The next round falls back
@@ -75,6 +81,9 @@ type Store interface {
 type Recall interface {
 	FindReminders(ctx context.Context, userID int64, query string, limit int) ([]store.Reminder, error)
 	FindMemories(ctx context.Context, userID int64, query string, limit int) ([]store.Memory, error)
+	// FindReminder reads one of the user's own rows by id: what a change names, and what the
+	// pre-check confirms is still there to change.
+	FindReminder(ctx context.Context, userID, reminderID int64) (store.Reminder, bool, error)
 }
 
 // Stage is one model stage: the model it asks, and the name the Trace reports it under. A
@@ -138,14 +147,21 @@ type jobRun struct {
 	// lint is every fault the server raised against this run's answers, in the model's own
 	// terms: what the Trace keeps so a refused answer is readable after the fact.
 	lint []string
-	// reminders and memories are what the answer's accepted records resolve to, each
-	// kind its own row.
+	// reminders and memories are what the answer resolved to: the rows it adds, the rows it
+	// rewrites, and the facts worth keeping.
 	reminders []store.Reminder
 	memories  []store.Memory
 	// looked is what this run's own lookups answered. With the user's own turns it is the
 	// only evidence a question may quote a clock from: a time the model supplied itself
 	// would reach the user as theirs.
 	looked []string
+	// found is the ids those lookups printed, which is the whole of the whitelist: a change
+	// may name one of them and nothing else.
+	found []int64
+	// updates are the rows this run rewrites in place, each carrying its own id.
+	updates []store.Reminder
+	// stale is set when a rewrite found its row gone between the lookup and the commit.
+	stale bool
 }
 
 // Run drives one Job. Three moves decide the outcome, and each names the next one:
@@ -207,7 +223,11 @@ func (r *jobRun) agent(ctx context.Context) (state, error) {
 		}
 		sent = conversation
 		if fault == "" {
-			if faults := lint(answer, r.started); len(faults) > 0 {
+			answer, err = r.settle(ctx, answer)
+			if err != nil {
+				return nil, err
+			}
+			if faults := lint(answer, r.started, r.found); len(faults) > 0 {
 				fault = note(faults)
 			}
 		}
@@ -216,7 +236,6 @@ func (r *jobRun) agent(ctx context.Context) (state, error) {
 			if answer.Kind == AnswerQuestion {
 				return (*jobRun).question, nil
 			}
-			r.records = answer.Records
 			return (*jobRun).commit, nil
 		}
 		r.lint = append(r.lint, fault)
@@ -228,6 +247,84 @@ func (r *jobRun) agent(ctx context.Context) (state, error) {
 		// server refused and places the capture again, on a budget of its own.
 		sent = append(sent, Message{Role: "user", Content: fault})
 	}
+}
+
+// settle fills what the model left unsaid, so it never has to copy a field the server already
+// holds. A change says only what it changes: the rest is the row's — its words, its zone, the day
+// it falls on, its clock and its repeat. A create that names no place rings in the user's own
+// zone. Filling here rather than trusting a copy means the copy cannot be wrong, and the linter
+// still sees a whole record either way. Two changes are two rows, so this fills op by op.
+func (r *jobRun) settle(ctx context.Context, answer Answer) (Answer, error) {
+	for i := range answer.Ops {
+		op := &answer.Ops[i]
+		row := store.Reminder{}
+		if op.Intent == IntentUpdate {
+			found, ok, err := r.loop.Recall.FindReminder(ctx, r.job.UserID, op.ReminderID)
+			if err != nil {
+				return answer, err
+			}
+			// A row that is not there is lint's to refuse: it names the id and the reason.
+			if ok {
+				row = found
+			}
+		}
+		settleRecord(&op.Record, row, deviceZone(r.job), r.started)
+	}
+	return answer, nil
+}
+
+// settleRecord is one op's fill: the row it changes, or the user's own zone for a create. An
+// empty field means "as it was", and a day token is read the way answerFrom reads it, so a double
+// hands over the token alone and lint sees the same record either way.
+func settleRecord(record *Record, row store.Reminder, zone string, now time.Time) {
+	if record.Zone == "" {
+		record.Zone = row.Timezone
+		if record.Zone == "" {
+			record.Zone = zone
+		}
+	}
+	if record.Date == "" && record.Day != "" {
+		if at, ok := resolveDay(record.Day, inZone(now, record.Zone)); ok {
+			record.Date = at.Format("2006-01-02")
+		}
+	}
+	if row.ReminderID == 0 {
+		return
+	}
+	if record.Text == "" {
+		record.Text = row.Text
+	}
+	date, clock := rowWhen(row)
+	if record.Date == "" && record.Day == "" {
+		record.Day, record.Date = date, date
+	}
+	if record.Time == "" {
+		record.Time = clock
+	}
+	if record.Recurrence == "" {
+		record.Recurrence = rowRecurrence(row)
+	}
+}
+
+// rowWhen is the day and clock a row already carries: a one-off's own, a repeat's next
+// occurrence in the row's zone.
+func rowWhen(row store.Reminder) (string, string) {
+	when := row.LocalDateTime
+	if when == "" {
+		when = wallClock(row.NextEmitAtUtc, row.Timezone)
+	}
+	if date, clock, ok := strings.Cut(when, "T"); ok {
+		return date, clock
+	}
+	return "", ""
+}
+
+// rowRecurrence is the repeat a row carries, or none for a one-off.
+func rowRecurrence(row store.Reminder) string {
+	if row.Rule == nil {
+		return RecurrenceNone
+	}
+	return row.Rule.Frequency
 }
 
 // runLoop is one agent loop and the strict call behind it: the model calls tools until it
@@ -272,13 +369,15 @@ func (r *jobRun) runLoop(ctx context.Context, in PlannerInput, sent []Message) (
 // commit is the last move: the accepted records become the rows Blurt stores, and both kinds
 // land in one step, which is why a bad one asks instead of committing half a turn. Lint
 // accepted every field already, so a pattern the calendar cannot place is the one thing left,
-// and that is the user's to say.
+// and that is the user's to say. A change rewrites the row it names instead of adding one; a
+// call-off writes nothing at all, because the app owns that write.
 func (r *jobRun) commit(ctx context.Context) (state, error) {
-	for _, record := range r.records {
-		if record.Kind == KindMemory {
-			r.memories = append(r.memories, store.Memory{Text: record.Text})
+	for _, op := range r.answer.Ops {
+		// A call-off writes nothing: the app owns that write, and the sentence says where.
+		if op.Intent == IntentCancel {
 			continue
 		}
+		record := op.Record
 		loc, err := time.LoadLocation(record.Zone)
 		if err != nil {
 			// Lint accepted this zone, so this is the zone database
@@ -291,9 +390,22 @@ func (r *jobRun) commit(ctx context.Context) (state, error) {
 			// lint has already accepted every field this pattern was built from.
 			return (*jobRun).question, nil
 		}
+		if op.Intent == IntentUpdate {
+			// The row the op named, rewritten where it stands: its id, its status and
+			// the Job that made it all stay, so nothing that points at it goes stale.
+			reminder.ReminderID = op.ReminderID
+			r.updates = append(r.updates, reminder)
+			continue
+		}
 		r.reminders = append(r.reminders, reminder)
 	}
-	if err := r.saveStep(ctx, store.JobComplete, r.replyFor(), r.reminders, r.memories); err != nil {
+	for _, text := range r.answer.Memories {
+		r.memories = append(r.memories, store.Memory{Text: text})
+	}
+	if err := r.saveStep(ctx, store.JobComplete, r.replyFor(), r.reminders, r.updates, r.memories); err != nil {
+		// A row that fired or was called off between the lookup and this commit has
+		// nowhere to put the change: the turn fails rather than inventing a row for it.
+		r.stale = errors.Is(err, store.ErrReminderStale)
 		return nil, err
 	}
 	// The records and the reply are durable before the features are even asked for, so a slow
@@ -331,31 +443,36 @@ func (r *jobRun) tagMemories(parent context.Context) {
 	}
 }
 
-// replyFor is the sentence the user reads. Committing is reached only with something
-// accepted, so a Reminder is the answer unless the turn carried a fact alone.
+// replyFor is the sentence the user reads: the call-off's fixed one when the turn asked for
+// anything to be called off, because it says where the app does that write; then the change's,
+// the reminder's, and last the fact's. It speaks for the turn, not for every row in it.
 func (r *jobRun) replyFor() string {
-	if len(r.reminders) > 0 {
+	calledOff := false
+	for _, op := range r.answer.Ops {
+		calledOff = calledOff || op.Intent == IntentCancel
+	}
+	switch {
+	case calledOff:
+		return cancelReply
+	case len(r.updates) > 0:
+		return updateReply
+	case len(r.reminders) > 0:
 		return reminderReply
 	}
 	return memoryReply
 }
 
-// evidence is the user's own words the planner model read the row from. Every record in
-// one turn shares it.
+// evidence is the user's own words the planner model read the row from. Every op in one turn
+// shares it.
 func (r *jobRun) evidence() string {
-	for _, record := range r.records {
-		if record.Evidence != "" {
-			return record.Evidence
-		}
-	}
-	return ""
+	return r.answer.Evidence
 }
 
 // question keeps the Job open on the question the user has to answer, and pushes.
 // It commits no records: an ask exit is exclusive, so the Job holds only the question.
 func (r *jobRun) question(ctx context.Context) (state, error) {
 	question := r.questionText()
-	if err := r.saveStep(ctx, store.JobClarifying, question, nil, nil); err != nil {
+	if err := r.saveStep(ctx, store.JobClarifying, question, nil, nil, nil); err != nil {
 		return nil, err
 	}
 	// The push only saves the user a look: the Job already says the same thing.

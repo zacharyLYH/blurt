@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"testing"
 
 	"blurt/internal/agent"
 	"blurt/internal/store"
@@ -45,7 +46,35 @@ func compare(c Case, got outcome) []miss {
 	if c.Expect.Kind == agent.AnswerQuestion {
 		return append(misses, compareQuestion(c, got)...)
 	}
-	return append(misses, compareRecords(c, got)...)
+	for _, part := range c.Expect.ReplyContains {
+		if !containsFold(got.reply, part) {
+			misses = append(misses, miss{"reply", fmt.Sprintf("%q is not in %q", part, got.reply)})
+		}
+	}
+	misses = append(misses, compareRecords(c, got)...)
+	return append(misses, compareUnchanged(c, got)...)
+}
+
+// compareUnchanged is the other half of an overlapping chain: the rows the run had to leave
+// exactly as they were. A row is found by the first substring the case would assert it with,
+// and it has to be there once — a missing row is as much a miss as a moved one.
+func compareUnchanged(c Case, got outcome) []miss {
+	var misses []miss
+	for _, want := range c.Expect.Unchanged {
+		found := []store.Reminder{}
+		for _, row := range got.others {
+			if containsFold(row.Text, want.TextContains[0]) {
+				found = append(found, row)
+			}
+		}
+		if len(found) != 1 {
+			misses = append(misses, miss{"unchanged", fmt.Sprintf("%d rows match %q, want 1: %s",
+				len(found), want.TextContains[0], reminderSummary(found))})
+			continue
+		}
+		misses = append(misses, compareReminder("unchanged", want, found[0])...)
+	}
+	return misses
 }
 
 // compareQuestion is the ask half: a question commits nothing, and it has to be about the
@@ -77,7 +106,17 @@ func compareRecords(c Case, got outcome) []miss {
 		if i >= len(got.reminders) {
 			break
 		}
-		misses = append(misses, compareReminder(i, want, got.reminders[i])...)
+		misses = append(misses, compareReminder(fmt.Sprintf("reminders[%d]", i), want, got.reminders[i])...)
+	}
+	if len(got.updated) != len(c.Expect.Updated) {
+		misses = append(misses, miss{"updated", fmt.Sprintf("%d rows rewritten, want %d: %s",
+			len(got.updated), len(c.Expect.Updated), reminderSummary(got.updated))})
+	}
+	for i, want := range c.Expect.Updated {
+		if i >= len(got.updated) {
+			break
+		}
+		misses = append(misses, compareReminder(fmt.Sprintf("updated[%d]", i), want, got.updated[i])...)
 	}
 	if len(got.memories) != len(c.Expect.Memories) {
 		misses = append(misses, miss{"count", fmt.Sprintf("%d memories, want %d: %v",
@@ -105,10 +144,11 @@ func compareRecords(c Case, got outcome) []miss {
 
 // compareReminder is one row: the event by substring, then every derived field exactly. An
 // empty key is not asserted, which is how a case about a repeat leaves the local date time
-// alone.
-func compareReminder(i int, want ExpectReminder, got store.Reminder) []miss {
+// alone. The key says where the row was read from: the rows this run inserted, or the one it
+// rewrote in place.
+func compareReminder(row string, want ExpectReminder, got store.Reminder) []miss {
 	var misses []miss
-	key := func(field string) string { return fmt.Sprintf("reminders[%d].%s", i, field) }
+	key := func(field string) string { return row + "." + field }
 	for _, part := range want.TextContains {
 		if !containsFold(got.Text, part) {
 			misses = append(misses, miss{key("text"), fmt.Sprintf("%q is not in %q", part, got.Text)})
@@ -235,4 +275,35 @@ func traceStrings(detail map[string]any, key string) []string {
 func traceCount(detail map[string]any, key string) int {
 	count, _ := detail[key].(float64)
 	return int(count)
+}
+
+// TestCompareUnchanged pins the assertion the overlapping chains lean on: a row the case says
+// must not move is found by its text, and a row that moved or is gone is a miss either way.
+func TestCompareUnchanged(t *testing.T) {
+	c := Case{Expect: Expect{Unchanged: []ExpectReminder{
+		{TextContains: []string{"glue"}, DateTime: "2026-10-25T18:00"},
+	}}}
+	cases := []struct {
+		name  string
+		rows  []store.Reminder
+		field string
+	}{
+		{"untouched", []store.Reminder{{Text: "Buy glue", LocalDateTime: "2026-10-25T18:00"}}, ""},
+		{"moved", []store.Reminder{{Text: "Buy glue", LocalDateTime: "2026-10-25T20:00"}}, "unchanged.datetime"},
+		{"gone", nil, "unchanged"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			misses := compareUnchanged(c, outcome{others: test.rows})
+			if test.field == "" {
+				if len(misses) > 0 {
+					t.Fatalf("an untouched row scored %v", misses)
+				}
+				return
+			}
+			if len(misses) != 1 || misses[0].Field != test.field {
+				t.Fatalf("scored %v, want one %s miss", misses, test.field)
+			}
+		})
+	}
 }

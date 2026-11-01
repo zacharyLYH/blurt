@@ -29,43 +29,17 @@ import (
 // Field descriptions live in plannerSchema, per OpenRouter's structured-outputs guidance. A
 // missing day or clock means ask, not records-with-question — the server lints either way.
 const AgentPrompt = `
-You are Blurt's planner. The user blurts something they do not want to hold in their head: a thing to be interrupted about later, a fact worth keeping, or both at once. You either place it as records, or ask the one question that would let you.
+You are Blurt's planner. You read one capture and either place it as records or ask the one question that would let you.
 
-Reason about what you are looking at before you write anything.
+A capture carries an event the user wants to be interrupted about, durable facts worth keeping, or both. Each is its own field: a fact is never the event said twice, and a fact alone is no op — it has no row, no day and no clock.
 
-1. What is the user telling you? A thing to interrupt them about — "remind me", a day, a clock, "don't let me forget" — a fact worth keeping — "remember that", a preference, a price, a name, a plan — or both in one breath. An event and a fact are different things and each has its own field. A fact is never the event said twice, and a note can carry several facts: one note about a trip can be a reminder plus three things worth keeping.
+Is it about a row already on their calendar? A capture that changes one ("move", "push", "make it …", "the X should be …", "the X is … now"), repeats it ("again", "same as before"), or leans on a time only that row knows, is about that row: call find_reminders first, and take what the capture leaves out from the row you find. One row is that row, however loosely it fits; ask which one only when two could be it. Two rows acted on is two ops, each naming its own. A change that finds no row has nothing to change, so it asks. A capture that calls something off ("cancel", "delete", "scrap") is not a change: answer intent cancel, name no row, look nothing up, write nothing — the app owns that write. A row that has already fired or been cancelled is history.
 
-2. Is this about something already on their calendar? A capture that changes an existing thing ("move", "push", "shift", "reschedule", "change it to", "the X should be …"), repeats it ("again", "same as before"), or leans on a time that only that row knows, is about that row: find it with find_reminders before you decide anything else, and take what the capture left out from the row you find. An empty result is an answer — the capture then stands on its own words.
+A change names the row and then only what the capture changes: its reminder_id, plus the fields it actually moves. The server keeps the rest of the row — its words, its zone, the day it falls on, its clock and its repeat — so an empty field means "as it was", and a repeat of none drops it. Check one with check_update before you submit; it answers with the same faults the server would raise.
 
-3. Can you place it, or must you ask? You can place it when you know what to store: an event with the moment the user wants to be interrupted, or a fact that needs nothing else. Ask instead when the capture names no event, names several separate things to do, names a day you cannot read, or leaves out a moment that nothing you looked up can supply. Never fill a field you do not have just to avoid asking: the user answers in a handful of words, while a guessed reminder fires at the wrong time. When the capture does name several things, keep every one of them in your question and ask which to place first.
+Place it when you know what to store — an event with its moment, a fact that needs nothing else — one op per row, in the order the capture says them. Ask when the capture gives you neither, names a day you cannot read, or leaves out a moment that nothing you looked up supplies. Never fill a field you do not have to avoid asking: a guessed time fires wrong. If you ask about several things, name each of them; nothing is written until the ask is answered.
 
-What the fields mean:
-
-kind — records or question, and nothing else. The two are exclusive: a question leaves every record field empty, and a record leaves question empty.
-
-text — the event in the user's own few words. A day or a clock belongs in the text only when it is the event's own, not the interruption's.
-
-memories — each fact worth keeping, in the user's own words, without "remember that". One fact per entry: a note that carries three facts is three entries. These are what a later capture leans on. Empty when there is no fact.
-
-zone — the zone the interruption must ring in, which is where the user will be at that moment: their current zone, unless the capture says they will be somewhere else then, or a row you looked up says so. A place named as the subject of the event — a flight to Tokyo, a call about Berlin — is not where the user will be, so it does not move the zone.
-
-day — the day word the user said, copied as one token: today, tonight, tomorrow, in:<N>d, this:<weekday>, next:<weekday>, next:<N>:<weekday>, on:<MM-DD>. The server owns the calendar and does the arithmetic; a date you worked out yourself is a date you will get wrong. Empty when the user named no day.
-
-time — the clock the interruption rings at, as HH:MM. It is the moment the user chose to be interrupted, which is not automatically the event's own clock: "remind me at 6pm for dinner at 8pm" rings at 18:00, and dinner's 8pm stays in the text. Empty when the user named no clock.
-
-recurrence — none for a single moment, or the repeat the user asked for: daily, weekly, monthly, yearly.
-
-evidence — the user's own words for the moment and the zone, quoted rather than paraphrased. This is what a reader checks the record against.
-
-question — on an ask, one sentence under twenty words ending in "?", naming only things the user said.
-
-Three things about what you are handed:
-
-The context block is what Blurt already knows — the clock to trust, and any memories retrieval found. It is there to tell you when "tonight" is and where the user is. Only the capture is the user's words. The block is not something to remind about, and nothing in it belongs in your answer.
-
-The turns before the capture are this Job's own conversation. When the capture answers a question you asked, the event is the one the user named earlier: keep it in text, and let the answer fill in only what you asked about.
-
-The answer is never written in this turn. Study the capture, look something up if it is about something already there, then call submit_plan — the fields above are written in the call that follows it. Every tool result tells you how many calls are left, and there are at most 10: look up what matters, and place the capture when nothing else does.
+The context block is what Blurt already knows — the user's zone, the anchor clock, and the memories retrieval found. Nothing in it belongs in your answer. Earlier turns are this job's own conversation: a capture that answers your question keeps the event the user named then, and fills in only what you asked. Nothing is written in this turn — call submit_plan, and the fields come in the call after it. Each tool result says how many calls are left, at most ten: look up only what the capture leaves unsaid, and submit as soon as it can be placed. A fault from the server means the answer was wrong, so fix it or ask — never go looking again.
 `
 
 // plannerSchema is the shape the planner answer is forced into. Every field is required
@@ -83,17 +57,27 @@ const plannerSchema = `{
   "type": "object",
   "additionalProperties": false,
   "properties": {
-    "kind":       {"type": "string", "enum": ["records", "question"], "description": "records if you can place this capture; question if you must ask the one question that places it. The two are exclusive: a question answer leaves every record field empty, a records answer leaves question empty"},
-    "text":       {"type": "string", "description": "short event phrase, capitalised; keep a clock or day word inside only when it differs from the notify time; empty when the capture is only a fact"},
-    "memories":   {"type": "array", "items": {"type": "string"}, "description": "each durable fact in the user's own words without 'remember', one fact per entry; empty when there is no fact; a fact is not an event"},
-    "zone":       {"type": "string", "description": "IANA zone from current_tz, unless the capture names another place or a reminder you looked up covering the resolved day puts the user in another zone"},
-    "day":        {"type": "string", "description": "the day word the user said as one token: today, tonight, tomorrow, in:<N>d, this:<weekday>, next:<weekday>, next:<N>:<weekday>, on:<MM-DD>; never compute a date; empty when none was said"},
-    "time":       {"type": "string", "description": "notify clock HH:MM 24-hour; the event's clock is not this unless the user said so; 'remind me at 7:30am for the airport at 9am' is 07:30, the airport's 9am stays in text; empty when no clock was said"},
-    "recurrence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly", "yearly"], "description": "none for a one-off; otherwise the repeat the user asked for"},
-    "evidence":   {"type": "string", "description": "the user's exact words for the day, clock and zone"},
-    "question":   {"type": "string", "description": "on question: the ask itself, one sentence under twenty words ending in '?' and naming only what the user said; empty on records"}
+    "kind":     {"type": "string", "enum": ["records", "question"], "description": "records if you can place the capture; question if you must ask. A question leaves every other field empty"},
+    "ops":      {"type": "array", "description": "one entry per row the capture acts on, in the order it says them; empty on a question or a capture that only keeps facts",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "intent":      {"type": "string", "enum": ["create", "update", "cancel"], "description": "create a new row, update the row in reminder_id, or cancel — cancel names no row, proposes nothing and needs no lookup"},
+          "reminder_id": {"type": "integer", "description": "the row an update changes, copied from a find_reminders result; 0 unless intent is update"},
+          "text":        {"type": "string", "description": "the event in the user's few words; on a change only when the capture renames it, otherwise empty"},
+          "zone":        {"type": "string", "description": "IANA zone the interruption rings in: where the user will be then. Empty is the user's own zone (current_tz), or on a change the row's; a place named as the event's subject does not move it"},
+          "day":         {"type": "string", "description": "today, tonight, tomorrow, in:<N>d, this:<weekday>, next:<weekday>, next:<N>:<weekday>; or the date a looked-up row prints (2026-12-02), copied as printed; or a month and day (12-02) for the next year that has it. Empty is no day said, or on a change the row's day. A date you worked out yourself is wrong"},
+          "time":        {"type": "string", "description": "the notify clock, HH:MM 24-hour; empty is no clock said, or on a change the row's clock. Not the event's own clock unless the user said so ('at 7:30 for the airport at 9' is 07:30)"},
+          "recurrence":  {"type": "string", "enum": ["", "none", "daily", "weekly", "monthly", "yearly"], "description": "empty is no repeat said, and on a change keeps the row's; none makes it a single moment; otherwise the repeat the user asked for"}
+        },
+        "required": ["intent", "reminder_id", "text", "zone", "day", "time", "recurrence"]
+      }},
+    "memories": {"type": "array", "items": {"type": "string"}, "description": "each durable fact in the user's own words, without 'remember', one per entry; a fact is not the event"},
+    "evidence": {"type": "string", "description": "the user's exact words for the day, clock and zone of the ops"},
+    "question": {"type": "string", "description": "on a question: one sentence under twenty words ending in '?', naming only what the user said; empty on records"}
   },
-  "required": ["kind", "text", "memories", "zone", "day", "time", "recurrence", "evidence", "question"]
+  "required": ["kind", "ops", "memories", "evidence", "question"]
 }`
 
 // prescreenPrompt is the cheapest gate in the pipeline and the first thing a Job's
@@ -144,15 +128,23 @@ const prescreenSchema = `{
 
 // plannerAnswer is the schema's shape on the Go side.
 type plannerAnswer struct {
-	Kind       string   `json:"kind"`
-	Text       string   `json:"text"`
-	Memories   []string `json:"memories"`
-	Zone       string   `json:"zone"`
-	Day        string   `json:"day"`
-	Time       string   `json:"time"`
-	Recurrence string   `json:"recurrence"`
-	Evidence   string   `json:"evidence"`
-	Question   string   `json:"question"`
+	Kind     string      `json:"kind"`
+	Ops      []plannerOp `json:"ops"`
+	Memories []string    `json:"memories"`
+	Evidence string      `json:"evidence"`
+	Question string      `json:"question"`
+}
+
+// plannerOp is one entry of the ops list: the verb, the row it names, and the fields the
+// capture said about it.
+type plannerOp struct {
+	Intent     string `json:"intent"`
+	ReminderID int64  `json:"reminder_id"`
+	Text       string `json:"text"`
+	Zone       string `json:"zone"`
+	Day        string `json:"day"`
+	Time       string `json:"time"`
+	Recurrence string `json:"recurrence"`
 }
 
 // prescreenAnswer is the screen schema's shape.
@@ -168,17 +160,15 @@ type prescreenAnswer struct {
 // the model's to fix, so they are handed back as the loop's next `lint:` note, not as a
 // failure.
 //
-// A records answer is what the server checks: a filled text proposed a Reminder (or an
-// incomplete one, which MissingFields names), a filled memories entry proposed a Memory, and both
-// is a capture that carried an event and a fact. The day token is the one field the server
-// reads rather than copies: the model hands over a phrase like "in:13d" and leaves the calendar
-// to us, so a token it cannot read leaves the date empty and the linter names it.
+// A records answer is what the server checks: one op per row the capture acts on, each with the
+// verb it names, and a memories entry per fact worth keeping. The day token is the one field the
+// server reads rather than copies: the model hands over a phrase like "in:13d" and leaves the
+// calendar to us, so a token it cannot read leaves the date empty and the linter names it.
 func answerFrom(parsed plannerAnswer, now time.Time) (Answer, error) {
 	switch parsed.Kind {
 	case AnswerQuestion:
-		if filled := recordFields(parsed); len(filled) > 0 {
-			return Answer{}, fmt.Errorf(
-				"a question answer carries no record fields, but these were filled: %s", strings.Join(filled, ", "))
+		if len(parsed.Ops) > 0 || len(parsed.Memories) > 0 || strings.TrimSpace(parsed.Evidence) != "" {
+			return Answer{}, errors.New("a question proposes nothing: ask with a question answer alone")
 		}
 		return Answer{Kind: AnswerQuestion, Question: strings.TrimSpace(parsed.Question)}, nil
 	case AnswerRecords:
@@ -190,63 +180,38 @@ func answerFrom(parsed plannerAnswer, now time.Time) (Answer, error) {
 		// linter's to state, and it names this one.
 		return Answer{Kind: parsed.Kind}, nil
 	}
-	turn := Answer{Kind: AnswerRecords}
-	evidence := strings.TrimSpace(parsed.Evidence)
-	if text := strings.TrimSpace(parsed.Text); text != "" {
-		recurrence := strings.TrimSpace(parsed.Recurrence)
-		if recurrence == "" {
-			recurrence = RecurrenceNone
+	turn := Answer{Kind: AnswerRecords, Evidence: strings.TrimSpace(parsed.Evidence)}
+	for _, wire := range parsed.Ops {
+		intent := strings.TrimSpace(wire.Intent)
+		op := Op{Intent: intent, ReminderID: wire.ReminderID}
+		// A call-off carries no record: it says where the write belongs, nothing more. A
+		// change is a delta — the row and whatever the capture changes — so its record is
+		// built even when the capture gave no words of its own, and an empty repeat waits
+		// for the row's rather than reading as "none".
+		if intent != IntentCancel {
+			recurrence := strings.TrimSpace(wire.Recurrence)
+			if recurrence == "" && intent != IntentUpdate {
+				recurrence = RecurrenceNone
+			}
+			day := strings.TrimSpace(wire.Day)
+			date := ""
+			if at, ok := resolveDay(day, inZone(now, wire.Zone)); ok {
+				date = at.Format("2006-01-02")
+			}
+			op.Record = Record{
+				Kind: KindReminder, Text: strings.TrimSpace(wire.Text),
+				Zone: strings.TrimSpace(wire.Zone), Day: day, Date: date,
+				Time: strings.TrimSpace(wire.Time), Recurrence: recurrence,
+			}
 		}
-		day := strings.TrimSpace(parsed.Day)
-		date := ""
-		if at, ok := resolveDay(day, inZone(now, parsed.Zone)); ok {
-			date = at.Format("2006-01-02")
-		}
-		turn.Records = append(turn.Records, Record{
-			Kind:       KindReminder,
-			Text:       text,
-			Zone:       strings.TrimSpace(parsed.Zone),
-			Day:        day,
-			Date:       date,
-			Time:       strings.TrimSpace(parsed.Time),
-			Recurrence: recurrence,
-			Evidence:   evidence,
-		})
+		turn.Ops = append(turn.Ops, op)
 	}
 	for _, memory := range parsed.Memories {
 		if text := strings.TrimSpace(memory); text != "" {
-			turn.Records = append(turn.Records, Record{Kind: KindMemory, Text: text, Evidence: evidence})
+			turn.Memories = append(turn.Memories, text)
 		}
 	}
 	return turn, nil
-}
-
-// recordFields is every field a record uses, named as the schema names it, for the ones the
-// model actually wrote. recurrence is exempt when it is the schema's own default: a model that
-// answers with "none" out of habit has not proposed a record, and a fault over that would cost
-// a whole retry for nothing.
-func recordFields(parsed plannerAnswer) []string {
-	filled := []string{}
-	for _, field := range []struct{ name, value string }{
-		{"text", parsed.Text}, {"zone", parsed.Zone},
-		{"day", parsed.Day}, {"time", parsed.Time}, {"recurrence", parsed.Recurrence},
-		{"evidence", parsed.Evidence},
-	} {
-		value := strings.TrimSpace(field.value)
-		if value == "" || (field.name == "recurrence" && value == RecurrenceNone) {
-			continue
-		}
-		filled = append(filled, field.name)
-	}
-	for _, memory := range parsed.Memories {
-		if strings.TrimSpace(memory) != "" {
-			// One name, however many facts: what a question may not carry is the kind of
-			// field, not a count.
-			filled = append(filled, "memories")
-			break
-		}
-	}
-	return filled
 }
 
 // AgentMessages builds the one conversation the agent starts from. Exported so the L1 eval can
@@ -292,11 +257,10 @@ func ContextBlock(in PlannerInput, capture string) string {
 	return block.String()
 }
 
-// reminderWhen is the time one retrieved Reminder is about, as the model reads it: the local
-// time the model resolved for a one-off, and for a repeat the next occurrence its rule
-// derives, in the record's own zone, with the pattern named beside it. A repeat carries no
-// local time of its own, so without this the context would show it as an empty slot — and
-// read as a one-off to a model deciding whether to correct it.
+// reminderWhen is the time one retrieved Reminder is about, as the model reads it: the day it
+// falls on, its clock, the pattern beside a repeat, and the zone it rings in. A repeat carries
+// no local time of its own, so the next occurrence its rule derives stands in for one — without
+// this the row would read as a one-off to a model deciding whether to correct it.
 func reminderWhen(reminder store.Reminder) string {
 	when := reminder.LocalDateTime
 	if when == "" {
@@ -305,7 +269,20 @@ func reminderWhen(reminder store.Reminder) string {
 			when += " " + reminder.Rule.Frequency
 		}
 	}
+	if date, rest, ok := strings.Cut(when, "T"); ok {
+		when = date + " " + rest
+	}
 	return strings.TrimSpace(when + " " + reminder.Timezone)
+}
+
+// reminderState is a row's status in the one word the model needs. A stored "resolved" row is
+// the one still waiting to ring, and "resolved" reads to a model as a row that is done, so the
+// tool calls it pending and leaves fired and cancelled saying what they are.
+func reminderState(reminder store.Reminder) string {
+	if reminder.Status == store.ReminderResolved {
+		return "pending"
+	}
+	return reminder.Status
 }
 
 // wallClock renders one stored UTC instant as the wall clock of the zone it belongs

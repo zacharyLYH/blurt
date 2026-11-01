@@ -152,10 +152,17 @@ func answerText(answer agent.Answer) string {
 	if answer.Question != "" {
 		fmt.Fprintf(&out, "question: %s\n", answer.Question)
 	}
-	for _, record := range answer.Records {
-		fmt.Fprintf(&out, "record %s: %q | zone %s | date %s | day %s | time %s | recurrence %s | evidence %s\n",
-			record.Kind, record.Text, record.Zone, record.Date, record.Day, record.Time,
-			record.Recurrence, record.Evidence)
+	for _, op := range answer.Ops {
+		record := op.Record
+		fmt.Fprintf(&out, "op %s %d: %q | zone %s | date %s | day %s | time %s | recurrence %s\n",
+			op.Intent, op.ReminderID, record.Text, record.Zone, record.Date, record.Day, record.Time,
+			record.Recurrence)
+	}
+	for _, text := range answer.Memories {
+		fmt.Fprintf(&out, "memory: %q\n", text)
+	}
+	if answer.Evidence != "" {
+		fmt.Fprintf(&out, "evidence: %s\n", answer.Evidence)
 	}
 	return out.String()
 }

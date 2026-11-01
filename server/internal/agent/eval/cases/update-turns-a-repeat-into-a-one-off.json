@@ -1,0 +1,30 @@
+{
+  "name": "update-turns-a-repeat-into-a-one-off",
+  "source": "L1:change — a repeat that becomes a single moment loses its rule and keeps its row",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {
+    "reminders": [
+      { "text": "Take vitamins", "local": "+1d 09:00", "recurrence": "daily" }
+    ]
+  },
+  "history": [],
+  "capture": "the vitamins are just for tomorrow, not every day",
+  "expect": {
+    "kind": "records",
+    "updated": [
+      {
+        "text_contains": ["vitamin"],
+        "datetime": "2026-10-25T09:00",
+        "utc": "2026-10-25T01:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "tools": ["find_reminders", "check_update"],
+    "reply_contains": ["updated"]
+  }
+}

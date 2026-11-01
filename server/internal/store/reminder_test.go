@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -105,6 +106,144 @@ func TestReminderSearchReadsByTextInsideTheOwner(t *testing.T) {
 	}
 	if found, err = reminders.Search(ctx, userID, "", 5); err != nil || found != nil {
 		t.Fatalf("found = %+v (%v), want an empty query to read nothing", found, err)
+	}
+}
+
+// A change rewrites the row it names and nothing else: the id, the CreatedAt, the status and the
+// Job that made it all stay, so nothing pointing at the row goes stale. A row that has left the
+// schedule has nowhere to put the change, and the write says so rather than resurrecting it.
+func TestRewriteReminderKeepsTheRowAndItsHistory(t *testing.T) {
+	jobs, handle, userID := newJobStack(t)
+	ctx := context.Background()
+
+	job, err := jobs.Create(ctx, userID, Message{Role: "user", Text: "buy glue at 6pm tomorrow"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := jobs.CommitAgentStep(ctx, job.JobID, AgentStep{
+		Reminders: []Reminder{{Text: "Buy glue", Timezone: "Asia/Singapore",
+			LocalDateTime: "2026-10-25T18:00", EmitAtUtc: "2026-10-25T10:00:00Z"}},
+		Reply:  Message{Text: "Reminder set."},
+		Status: JobComplete,
+		Detail: map[string]any{"outcome": JobComplete},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+
+	reminders := NewReminderStore(handle.Write, handle.Read)
+	before, ok, err := reminders.ByID(ctx, userID, 1)
+	if err != nil || !ok {
+		t.Fatalf("by id = %+v (%v), want the committed row", before, err)
+	}
+
+	change := before
+	change.Text, change.LocalDateTime, change.EmitAtUtc = "Buy glue sticks", "2026-10-27T20:00", "2026-10-27T12:00:00Z"
+	if _, err := jobs.CommitAgentStep(ctx, job.JobID, AgentStep{
+		Updates: []Reminder{change},
+		Reply:   Message{Text: "Reminder updated."},
+		Status:  JobComplete,
+		Detail:  map[string]any{"outcome": JobComplete},
+	}); err != nil {
+		t.Fatalf("change: %v", err)
+	}
+
+	after, ok, err := reminders.ByID(ctx, userID, before.ReminderID)
+	if err != nil || !ok {
+		t.Fatalf("by id after the change = %+v (%v)", after, err)
+	}
+	if after.ReminderID != before.ReminderID || after.CreatedAt != before.CreatedAt ||
+		after.Status != ReminderResolved || after.SourceJobID != job.JobID {
+		t.Fatalf("row = %+v, want the id, the CreatedAt, the status and the Job kept", after)
+	}
+	if after.Text != "Buy glue sticks" || after.LocalDateTime != "2026-10-27T20:00" {
+		t.Fatalf("row = %+v, want the change written in place", after)
+	}
+
+	if _, err := reminders.Cancel(ctx, userID, before.ReminderID); err != nil {
+		t.Fatalf("cancel: %v", err)
+	}
+	if _, err := jobs.CommitAgentStep(ctx, job.JobID, AgentStep{
+		Updates: []Reminder{change},
+		Reply:   Message{Text: "Reminder updated."},
+		Status:  JobComplete,
+		Detail:  map[string]any{"outcome": JobComplete},
+	}); !errors.Is(err, ErrReminderStale) {
+		t.Fatalf("change of a called-off row = %v, want ErrReminderStale", err)
+	}
+}
+
+// A change can make a one-off repeat, and a repeat a one-off: the rule row follows the row it
+// belongs to, so the store writes it, replaces it and clears it while the reminder itself stays
+// where it is.
+func TestRewriteReminderConvertsBetweenOneOffAndRepeat(t *testing.T) {
+	jobs, handle, userID := newJobStack(t)
+	ctx := context.Background()
+
+	job, err := jobs.Create(ctx, userID, Message{Role: "user", Text: "pay the card at 8pm on the 3rd"})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := jobs.CommitAgentStep(ctx, job.JobID, AgentStep{
+		Reminders: []Reminder{{Text: "Pay the card", Timezone: "Asia/Singapore",
+			LocalDateTime: "2026-11-03T20:00", EmitAtUtc: "2026-11-03T12:00:00Z"}},
+		Reply:  Message{Text: "Reminder set."},
+		Status: JobComplete,
+		Detail: map[string]any{"outcome": JobComplete},
+	}); err != nil {
+		t.Fatalf("commit: %v", err)
+	}
+	reminders := NewReminderStore(handle.Write, handle.Read)
+	once, ok, err := reminders.ByID(ctx, userID, 1)
+	if err != nil || !ok || once.Rule != nil {
+		t.Fatalf("row = %+v (%v), want the one-off it started as", once, err)
+	}
+
+	// One-off to repeat: the row loses its local time and gains a rule.
+	repeating := once
+	repeating.LocalDateTime, repeating.EmitAtUtc = "", ""
+	repeating.Rule, repeating.NextEmitAtUtc = &Rule{Frequency: FrequencyMonthly, Time: "20:00", Day: 3},
+		"2026-11-03T12:00:00Z"
+	if _, err := jobs.CommitAgentStep(ctx, job.JobID, AgentStep{
+		Updates: []Reminder{repeating},
+		Reply:   Message{Text: "Reminder updated."},
+		Status:  JobComplete,
+		Detail:  map[string]any{"outcome": JobComplete},
+	}); err != nil {
+		t.Fatalf("make it repeat: %v", err)
+	}
+	after, ok, err := reminders.ByID(ctx, userID, once.ReminderID)
+	if err != nil || !ok {
+		t.Fatalf("by id = %+v (%v), want the row", after, err)
+	}
+	if after.Rule == nil || after.Rule.Frequency != FrequencyMonthly || after.Rule.Day != 3 ||
+		after.NextEmitAtUtc != "2026-11-03T12:00:00Z" || after.LocalDateTime != "" {
+		t.Fatalf("row = %+v, want the rule in place and the local time gone", after)
+	}
+
+	// And back: the rule row is cleared rather than left pointing at a one-off.
+	justOnce := after
+	justOnce.Rule, justOnce.NextEmitAtUtc = nil, ""
+	justOnce.LocalDateTime, justOnce.EmitAtUtc = "2026-10-28T20:00", "2026-10-28T12:00:00Z"
+	if _, err := jobs.CommitAgentStep(ctx, job.JobID, AgentStep{
+		Updates: []Reminder{justOnce},
+		Reply:   Message{Text: "Reminder updated."},
+		Status:  JobComplete,
+		Detail:  map[string]any{"outcome": JobComplete},
+	}); err != nil {
+		t.Fatalf("make it a one-off: %v", err)
+	}
+	back, ok, err := reminders.ByID(ctx, userID, once.ReminderID)
+	if err != nil || !ok {
+		t.Fatalf("by id = %+v (%v), want the row", back, err)
+	}
+	var rules int
+	if err := handle.Read.QueryRow(`SELECT count(*) FROM RecurringReminder WHERE ReminderId = ?`,
+		once.ReminderID).Scan(&rules); err != nil {
+		t.Fatalf("count rules: %v", err)
+	}
+	if back.Rule != nil || rules != 0 || back.LocalDateTime != "2026-10-28T20:00" ||
+		back.NextEmitAtUtc != "" {
+		t.Fatalf("row = %+v (%d rules), want a one-off with no rule behind it", back, rules)
 	}
 }
 

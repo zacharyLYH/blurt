@@ -78,27 +78,34 @@ func resolveDay(token string, now time.Time) (time.Time, bool) {
 			return time.Time{}, false
 		}
 		at = now.AddDate(0, 0, ahead+7*(count-1))
-	case len(parts) == 2 && parts[0] == "on":
-		monthDay, err := time.Parse("01-02", parts[1])
-		if err != nil {
-			return time.Time{}, false
-		}
-		// Walk forward to the next year that both has the date and has not gone: time.Date
-		// rolls a date the year lacks (02-29 in a common year) into the next month, and
-		// AddDate rolls it the same way, so neither can be trusted to find 02-29 here.
-		ok := false
-		for year := now.Year(); !ok && year-now.Year() <= 8; year++ {
-			at = time.Date(year, monthDay.Month(), monthDay.Day(), 0, 0, 0, 0, now.Location())
-			ok = at.Month() == monthDay.Month() && at.Day() == monthDay.Day() &&
-				!at.Before(startOfDay(now))
-		}
-		if !ok {
-			return time.Time{}, false
-		}
 	default:
-		return time.Time{}, false
+		return resolveDate(token, now)
 	}
 	return startOfDay(at), true
+}
+
+// resolveDate reads a date the model wrote. A full date is the one a row printed, so it is taken
+// as it stands: walking it forward would move a row the user only meant to change the clock of. A
+// month and day alone is a day the user named, and is walked to the next year that has it.
+func resolveDate(token string, now time.Time) (time.Time, bool) {
+	if date, err := time.Parse("2006-01-02", token); err == nil {
+		return startOfDay(date), true
+	}
+	monthDay, err := time.Parse("01-02", token)
+	if err != nil {
+		return time.Time{}, false
+	}
+	// Walk forward to the next year that both has the date and has not gone: time.Date
+	// rolls a date the year lacks (02-29 in a common year) into the next month, and
+	// AddDate rolls it the same way, so neither can be trusted to find 02-29 here.
+	for year := now.Year(); year-now.Year() <= 8; year++ {
+		at := time.Date(year, monthDay.Month(), monthDay.Day(), 0, 0, 0, 0, now.Location())
+		if at.Month() == monthDay.Month() && at.Day() == monthDay.Day() &&
+			!at.Before(startOfDay(now)) {
+			return at, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // weekdayAhead counts the days from now to the named weekday, counting today as the

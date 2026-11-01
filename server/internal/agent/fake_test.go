@@ -26,7 +26,7 @@ func fakeAnswer(t *testing.T, capture string) Answer {
 // the day token and the instant still being ahead.
 func assertCommittable(t *testing.T, record Record) {
 	t.Helper()
-	if faults := lint(answerWith(record), pinned); len(faults) != 0 {
+	if faults := lint(answerWith(record), pinned, nil); len(faults) != 0 {
 		t.Fatalf("lint = %v, want a record the server can commit", faults)
 	}
 }
@@ -68,13 +68,13 @@ func TestFakeProposeReachesEachBranchByItsWords(t *testing.T) {
 	for _, want := range cases {
 		t.Run(want.name, func(t *testing.T) {
 			answer := fakeAnswer(t, want.capture)
-			if len(answer.Records) != want.records {
-				t.Fatalf("records = %+v, want %d", answer.Records, want.records)
+			if len(records(answer)) != want.records {
+				t.Fatalf("records = %+v, want %d", records(answer), want.records)
 			}
 			if want.records == 0 {
 				return
 			}
-			record := answer.Records[0]
+			record := records(answer)[0]
 			if record.Kind != want.kind || record.Text != want.text ||
 				record.Date != want.day || record.Time != want.clock ||
 				record.Recurrence != want.recurrence {
@@ -89,6 +89,19 @@ func TestFakeProposeReachesEachBranchByItsWords(t *testing.T) {
 			}
 		})
 	}
+}
+
+// records is what a fake answer proposes, fact or reminder, in one list: a Memory is a Record
+// with no clock, which is how the fake's own cases read both kinds.
+func records(answer Answer) []Record {
+	found := make([]Record, 0, len(answer.Ops)+len(answer.Memories))
+	for _, op := range answer.Ops {
+		found = append(found, op.Record)
+	}
+	for _, text := range answer.Memories {
+		found = append(found, Record{Kind: KindMemory, Text: text})
+	}
+	return found
 }
 
 // A capture can name the notification clock and the event's own clock separately, and "soon"
@@ -113,10 +126,10 @@ func TestFakeSplitsNotifyAndEventClocks(t *testing.T) {
 	for _, want := range cases {
 		t.Run(want.name, func(t *testing.T) {
 			answer := fakeAnswer(t, want.capture)
-			if len(answer.Records) != 1 {
-				t.Fatalf("records = %+v, want one reminder", answer.Records)
+			if len(records(answer)) != 1 {
+				t.Fatalf("records = %+v, want one reminder", records(answer))
 			}
-			record := answer.Records[0]
+			record := records(answer)[0]
 			if record.Kind != KindReminder || record.Text != want.text ||
 				record.Date != want.date || record.Time != want.clock ||
 				record.Recurrence != RecurrenceNone {

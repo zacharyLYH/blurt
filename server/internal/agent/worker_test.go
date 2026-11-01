@@ -5,7 +5,9 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -51,6 +53,9 @@ type scriptedModel struct {
 	// finalizeErr is what the strict call behind submit_plan fails with, when the turn itself
 	// is fine: a provider that dies after the loop, or an answer that is not the schema.
 	finalizeErr error
+	// lookUp makes the agent turn look something up before it submits, which is what a change
+	// needs: the id it names has to be one this run's own find_reminders printed.
+	lookUp string
 
 	// tagCalls is appended from the tagger's own goroutine, so it is read under the lock.
 	mu       sync.Mutex
@@ -79,7 +84,18 @@ func (p *scriptedModel) Chat(_ context.Context, in PlannerInput, sent []Message,
 	if p.stalls {
 		return Message{Role: "assistant", Content: "let me think about that"}, nil
 	}
+	if p.lookUp != "" && len(sent) == 0 {
+		return lookupCall(p.lookUp), nil
+	}
 	return submitCall(), nil
+}
+
+// lookupCall is find_reminders, as a test double asks for it before it submits.
+func lookupCall(query string) Message {
+	return Message{Role: "assistant", ToolCalls: []ToolCall{{
+		ID: "lookup", Type: functionType,
+		Function: CallFunction{Name: toolFindReminders, Arguments: `{"query":"` + query + `"}`},
+	}}}
 }
 
 // Finalize is the strict call: one scripted turn per run, which is what makes a lint fault
@@ -195,8 +211,21 @@ func mutateRecord(mutate func(*Record)) Record {
 	return record
 }
 
-// answerWith is the one record an answer carries.
-func answerWith(record Record) Answer { return Answer{Kind: AnswerRecords, Records: []Record{record}} }
+// answerWith is the one record an answer carries, as the loop's own answers arrive: a create
+// that proposes it.
+func answerWith(record Record) Answer {
+	return Answer{Kind: AnswerRecords, Ops: []Op{{Intent: IntentCreate, Record: record}}}
+}
+
+// change is one update op: the whole row after the change, filled from the row it names.
+func change(id int64, record Record) Answer {
+	return Answer{Kind: AnswerRecords, Ops: []Op{{Intent: IntentUpdate, ReminderID: id, Record: record}}}
+}
+
+// aboutAFact is an answer that keeps one fact and writes no row.
+func aboutAFact(text string) Answer {
+	return Answer{Kind: AnswerRecords, Memories: []string{text}}
+}
 
 type fixture struct {
 	worker *queue.Worker
@@ -408,9 +437,9 @@ func (f *fixture) reminder(t *testing.T) (text, gotZone string, local, emit sql.
 // Reminder whose UTC instant the server derived, and the Job closes on the server's
 // own sentence.
 func TestWorkerCommitsAOneOffReminder(t *testing.T) {
-	record := oneOff("Buy glue", "2026-10-25", "18:00")
-	record.Evidence = `the user said "at 6pm tomorrow"`
-	f := newFixture(t, answerWith(record))
+	answer := answerWith(oneOff("Buy glue", "2026-10-25", "18:00"))
+	answer.Evidence = `the user said "at 6pm tomorrow"`
+	f := newFixture(t, answer)
 	stored := wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
 
 	if len(stored.Conversation) != 2 || stored.Conversation[1].Role != "assistant" ||
@@ -436,7 +465,7 @@ func TestWorkerCommitsAOneOffReminder(t *testing.T) {
 	}
 	// What the model said it read the time from rides the Trace, so a reader can
 	// check the answer against the user's own words.
-	if detail["evidence"] != record.Evidence {
+	if detail["evidence"] != answer.Evidence {
 		t.Fatalf("trace evidence = %v, want the model's own words", detail["evidence"])
 	}
 	if f.pusher.calls != 0 {
@@ -484,7 +513,6 @@ func TestWorkerLintsEveryRefusedField(t *testing.T) {
 		record Record
 		want   string
 	}{
-		{"no zone", mutateRecord(func(w *Record) { w.Zone = "" }), "zone is empty"},
 		{"a zone that is not one", mutateRecord(func(w *Record) { w.Zone = "Mars/Olympus" }), `zone "Mars/Olympus" is not an IANA zone`},
 		{"no date", mutateRecord(func(w *Record) { w.Date = "" }), "date is empty"},
 		{"a date the calendar does not have", mutateRecord(func(w *Record) { w.Date = "2026-02-30" }), `date "2026-02-30" is not`},
@@ -797,7 +825,7 @@ func TestWorkerRecallIsAdvisory(t *testing.T) {
 // A fact becomes a Memory and closes the Job. It carries no zone, day, clock or pattern, and
 // MissingFields accepts it without any: a Memory is context, not an interruption.
 func TestWorkerCommitsAMemory(t *testing.T) {
-	f := newFixture(t, answerWith(Record{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
+	f := newFixture(t, aboutAFact("Milk is cheaper at store A"))
 	stored := wantStatus(t, f.runText(t, "remember that milk is cheaper at store A"), store.JobComplete)
 	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != memoryReply {
 		t.Fatalf("reply = %q, want %q", got, memoryReply)
@@ -819,7 +847,7 @@ func TestWorkerCommitsAMemory(t *testing.T) {
 // The generated features land on the Memory the run commits, which is what lets a later
 // capture worded nothing like the fact still find it.
 func TestWorkerTagsTheMemoryItCommits(t *testing.T) {
-	f := newFixture(t, answerWith(Record{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
+	f := newFixture(t, aboutAFact("Milk is cheaper at store A"))
 	f.model.tags = []string{"milk", "grocery", "price"}
 	wantStatus(t, f.runText(t, "remember that milk is cheaper at store A"), store.JobComplete)
 	if tags := f.memoryTags(t, "Milk is cheaper at store A"); tags != "milk,grocery,price" {
@@ -835,7 +863,7 @@ func TestWorkerTagsTheMemoryItCommits(t *testing.T) {
 // Tagger is advisory, like recall: a tagger that fails leaves the Memory without
 // features rather than failing a capture the user already made.
 func TestWorkerDropsTagsWhenTheTaggerFails(t *testing.T) {
-	f := newFixture(t, answerWith(Record{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
+	f := newFixture(t, aboutAFact("Milk is cheaper at store A"))
 	f.model.tagErr = errors.New("agent: call model: connection refused")
 	wantStatus(t, f.runText(t, "remember that milk is cheaper at store A"), store.JobComplete)
 	// The call is on the tagger's own goroutine, so waiting for it is what makes an empty
@@ -843,6 +871,308 @@ func TestWorkerDropsTagsWhenTheTaggerFails(t *testing.T) {
 	f.tagCalls(t, 1)
 	if _, tags := f.memoryRow(t); tags != "" {
 		t.Fatalf("tags = %q, want none", tags)
+	}
+}
+
+// A capture that calls a reminder off writes nothing: the app owns that write, so the turn is
+// one fixed sentence and the table is untouched. Nothing is looked up either — there is no row
+// to name, so not even the ambiguity a change can meet is in play.
+func TestWorkerAnswersACallOffWithoutWriting(t *testing.T) {
+	f := newFixture(t, Answer{Kind: AnswerRecords, Ops: []Op{{Intent: IntentCancel}}})
+	stored := wantStatus(t, f.runText(t, "cancel the dentist reminder"), store.JobComplete)
+	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != cancelReply {
+		t.Fatalf("reply = %q, want the call-off's own sentence", got)
+	}
+	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 0 {
+		t.Fatalf("reminders = %d, want nothing written", n)
+	}
+}
+
+// A capture that changes a reminder rewrites the row it named: the id is one this run's own
+// lookup printed, the row keeps it, and the table gains nothing.
+func TestWorkerRewritesTheReminderAChangeNames(t *testing.T) {
+	f := newFixture(t, answerWith(oneOff("Buy glue", "2026-10-25", "18:00")))
+	wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
+
+	id := f.reminderID(t)
+	f.model.turns = []Answer{change(id, oneOff("Buy glue", "2026-10-27", "20:00"))}
+	f.model.lookUp = "glue"
+
+	stored := wantStatus(t, f.runText(t, "make it 8pm on the 27th"), store.JobComplete)
+	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != updateReply {
+		t.Fatalf("reply = %q, want the change's", got)
+	}
+	if got := f.localDateTime(t, id); got != "2026-10-27T20:00" {
+		t.Fatalf("local = %q, want the rewritten clock", got)
+	}
+	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 1 {
+		t.Fatalf("reminders = %d, want the change in place rather than a second row", n)
+	}
+}
+
+// reminderID reads the id of the one Reminder a run committed, which is what a change names.
+func (f *fixture) reminderID(t *testing.T) int64 {
+	t.Helper()
+	var id int64
+	if err := f.handle.Read.QueryRow(`SELECT ReminderId FROM Reminder`).Scan(&id); err != nil {
+		t.Fatalf("read reminder id: %v", err)
+	}
+	return id
+}
+
+// localDateTime reads one Reminder's stored local clock.
+func (f *fixture) localDateTime(t *testing.T, id int64) string {
+	t.Helper()
+	var local string
+	if err := f.handle.Read.QueryRow(
+		`SELECT LocalDateTime FROM Reminder WHERE ReminderId = ?`, id).Scan(&local); err != nil {
+		t.Fatalf("read reminder: %v", err)
+	}
+	return local
+}
+
+// withWire puts the planner on a real ModelClient behind the answers a test scripts, and leaves
+// the prescreen on the dev double: the model's own words travel the wire this way, so the schema,
+// answerFrom and the linter all sit inside the run rather than in a Go value a test handed the
+// loop.
+func (f *fixture) withWire(t *testing.T, answers ...[]byte) {
+	t.Helper()
+	var mu sync.Mutex
+	client := modelServer(t, Settings{Model: "stub"}, func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		var answer []byte
+		if len(answers) > 0 {
+			answer, answers = answers[0], answers[1:]
+		}
+		mu.Unlock()
+		if answer == nil {
+			t.Error("the run asked for an answer the test did not script")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = w.Write(answer)
+	})
+	f.loop.Prescreen = Stage{Model: f.model, Name: "prescreen"}
+	f.loop.Planner = Stage{Model: client, Name: "stub"}
+}
+
+// changeAnswer is one strict answer that rewrites a row, as the model writes it on the wire.
+func changeAnswer(id int64) string {
+	return `{"kind":"records","ops":[{"intent":"update","reminder_id":` + strconv.FormatInt(id, 10) +
+		`,"text":"Buy glue","zone":"Asia/Singapore","day":"2026-10-27","time":"20:00",` +
+		`"recurrence":"none"}],"memories":[],"evidence":"they said 8pm on the 27th","question":""}`
+}
+
+// A change travels the wire the product's answers travel: the model looks the row up, submits, and
+// its intent and reminder_id are read by the same schema the deployment runs. The run then rewrites
+// the row it named instead of adding one.
+func TestWorkerChangesTheRowAWireAnswerNames(t *testing.T) {
+	f := newFixture(t, answerWith(oneOff("Buy glue", "2026-10-25", "18:00")))
+	wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
+
+	id := f.reminderID(t)
+	f.withWire(t,
+		toolCallAnswer(t, toolFindReminders, `{"query":"glue"}`),
+		toolCallAnswer(t, toolSubmitPlan, `{}`),
+		gatewayAnswer(t, "stop", changeAnswer(id)),
+	)
+
+	stored := wantStatus(t, f.runText(t, "make it 8pm on the 27th"), store.JobComplete)
+	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != updateReply {
+		t.Fatalf("reply = %q, want the change's", got)
+	}
+	if got := f.localDateTime(t, id); got != "2026-10-27T20:00" {
+		t.Fatalf("local = %q, want the place the wire answer named", got)
+	}
+	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 1 {
+		t.Fatalf("reminders = %d, want the change in place rather than a second row", n)
+	}
+	detail := f.agentTrace(t, stored.JobID)
+	if detail["intent"] != IntentUpdate || fmt.Sprint(detail["reminderIds"]) != fmt.Sprintf("[%d]", id) {
+		t.Fatalf("trace = %+v, want the verb and the row it named", detail)
+	}
+}
+
+// A row the model names but never looked up is refused, and the retry is the loop's own: the fault
+// is the note the model reads, and the id it then names is one this run's own lookup printed.
+func TestWorkerRefusesARowTheRunNeverLookedUp(t *testing.T) {
+	f := newFixture(t, answerWith(oneOff("Buy glue", "2026-10-25", "18:00")))
+	wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
+
+	id := f.reminderID(t)
+	f.withWire(t,
+		toolCallAnswer(t, toolSubmitPlan, `{}`),
+		gatewayAnswer(t, "stop", changeAnswer(99)),
+		toolCallAnswer(t, toolFindReminders, `{"query":"glue"}`),
+		toolCallAnswer(t, toolSubmitPlan, `{}`),
+		gatewayAnswer(t, "stop", changeAnswer(id)),
+	)
+
+	stored := wantStatus(t, f.runText(t, "make it 8pm on the 27th"), store.JobComplete)
+	faults := strings.Join(f.lintFaults(t, stored.JobID), "\n")
+	if !strings.Contains(faults, "reminder_id 99 was not one of this run's own find_reminders results") {
+		t.Fatalf("lint = %q, want the whitelist's own words", faults)
+	}
+	if got := f.localDateTime(t, id); got != "2026-10-27T20:00" {
+		t.Fatalf("local = %q, want the retry's change written in place", got)
+	}
+	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 1 {
+		t.Fatalf("reminders = %d, want no row for the refused answer", n)
+	}
+}
+
+// A row that is called off between the lookup and the commit has nowhere to put the change: the
+// turn fails, the table keeps the row it had, and the Trace says the rewrite lost its row.
+func TestWorkerFailsAChangeWhoseRowLeftTheSchedule(t *testing.T) {
+	f := newFixture(t, answerWith(oneOff("Buy glue", "2026-10-25", "18:00")))
+	wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
+
+	id := f.reminderID(t)
+	// The provider calls the row off just before it answers the strict call, which is the window
+	// the rewrite's predicate is there for: looked up while resolved, committed after it is not.
+	asked := 0
+	var mu sync.Mutex
+	client := modelServer(t, Settings{Model: "stub"}, func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		asked++
+		answer := toolCallAnswer(t, toolFindReminders, `{"query":"glue"}`)
+		switch asked {
+		case 2:
+			answer = toolCallAnswer(t, toolSubmitPlan, `{}`)
+		case 3:
+			if _, err := store.NewReminderStore(f.handle.Write, f.handle.Read).Cancel(
+				context.Background(), f.userID, id); err != nil {
+				t.Errorf("call the row off: %v", err)
+			}
+			answer = gatewayAnswer(t, "stop", changeAnswer(id))
+		}
+		mu.Unlock()
+		_, _ = w.Write(answer)
+	})
+	f.loop.Prescreen = Stage{Model: f.model, Name: "prescreen"}
+	f.loop.Planner = Stage{Model: client, Name: "stub"}
+
+	stored := f.runText(t, "make it 8pm on the 27th")
+	if stored.Status != store.JobOpen || stored.RetryCount != 1 {
+		t.Fatalf("job = %q retry %d, want the failed turn requeued", stored.Status, stored.RetryCount)
+	}
+	if detail := f.agentTrace(t, stored.JobID); detail["stale"] != true {
+		t.Fatalf("trace = %+v, want the lost row recorded", detail)
+	}
+	if got := f.localDateTime(t, id); got != "2026-10-25T18:00" {
+		t.Fatalf("local = %q, want the row untouched", got)
+	}
+	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 1 {
+		t.Fatalf("reminders = %d, want no row invented for a change that could not land", n)
+	}
+}
+
+// A call-off travels the wire too: the answer every real one is — an intent and nothing else —
+// passes the schema, the linter and the commit with no row to describe. The seeded row keeps its
+// status, because the agent answering "cancel" is not the app cancelling it.
+func TestWorkerAnswersACallOffFromAWireAnswer(t *testing.T) {
+	f := newFixture(t, answerWith(oneOff("Dentist", "2026-10-25", "18:00")))
+	wantStatus(t, f.runText(t, "dentist at 6pm tomorrow"), store.JobComplete)
+	id := f.reminderID(t)
+
+	f.withWire(t,
+		toolCallAnswer(t, toolSubmitPlan, `{}`),
+		gatewayAnswer(t, "stop", `{"kind":"records","ops":[{"intent":"cancel","reminder_id":0,"text":"","zone":"",`+
+			`"day":"","time":"","recurrence":""}],"memories":[],"evidence":"","question":""}`),
+	)
+
+	stored := wantStatus(t, f.runText(t, "cancel the dentist reminder"), store.JobComplete)
+	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != cancelReply {
+		t.Fatalf("reply = %q, want the call-off's own sentence", got)
+	}
+	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 1 {
+		t.Fatalf("reminders = %d, want the seeded row left alone", n)
+	}
+	var status string
+	if err := f.handle.Read.QueryRow(
+		`SELECT Status FROM Reminder WHERE ReminderId = ?`, id).Scan(&status); err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	if status != store.ReminderResolved {
+		t.Fatalf("status = %q, want the row still resolved", status)
+	}
+}
+
+// A change names only the field it changes: the clock arrives on its own, and the row keeps its
+// words, its zone, the day it fell on and its repeat, because the server fills the rest.
+func TestWorkerChangesWithOnlyTheClock(t *testing.T) {
+	f := newFixture(t, answerWith(oneOff("Buy glue", "2026-10-27", "18:00")))
+	wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
+	id := f.reminderID(t)
+
+	f.model.turns = []Answer{change(id, Record{Kind: KindReminder, Time: "20:00"})}
+	f.model.lookUp = "glue"
+
+	wantStatus(t, f.runText(t, "make it 8pm"), store.JobComplete)
+	if got := f.localDateTime(t, id); got != "2026-10-27T20:00" {
+		t.Fatalf("local = %q, want the clock moved and the day kept", got)
+	}
+	var text, timezone string
+	if err := f.handle.Read.QueryRow(
+		`SELECT Text, Timezone FROM Reminder WHERE ReminderId = ?`, id).Scan(&text, &timezone); err != nil {
+		t.Fatalf("read the row: %v", err)
+	}
+	if text != "Buy glue" || timezone != zone {
+		t.Fatalf("row = %q in %q, want the row's own words and zone", text, timezone)
+	}
+	if n := f.count(t, `SELECT count(*) FROM Reminder`); n != 1 {
+		t.Fatalf("reminders = %d, want the change in place", n)
+	}
+}
+
+// A capture that names no place rings in the user's own zone: the model does not have to write
+// back a zone it was handed.
+func TestWorkerCreatesInTheUsersOwnZone(t *testing.T) {
+	f := newFixture(t, answerWith(Record{Kind: KindReminder, Text: "Buy glue",
+		Date: "2026-10-27", Time: "18:00", Recurrence: RecurrenceNone}))
+	wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
+
+	var timezone, local string
+	if err := f.handle.Read.QueryRow(
+		`SELECT Timezone, LocalDateTime FROM Reminder`).Scan(&timezone, &local); err != nil {
+		t.Fatalf("read the row: %v", err)
+	}
+	if timezone != zone || local != "2026-10-27T18:00" {
+		t.Fatalf("row = %q %q, want the user's own zone", timezone, local)
+	}
+}
+
+// A change is a delta, but it is still linted: every field it does name is checked by the same
+// rules, on the record the fill handed lint, so a clock or a zone the server cannot place is
+// refused before anything is written.
+func TestWorkerLintsTheFieldsAChangeNames(t *testing.T) {
+	cases := []struct {
+		name   string
+		record Record
+		want   string
+	}{
+		{"a clock that is not one", Record{Kind: KindReminder, Time: "19:60"}, `time "19:60" is not HH:MM`},
+		{"a clock that has gone", Record{Kind: KindReminder, Day: "today", Time: "09:00"}, `time "09:00" is in the past`},
+		{"a zone that is not one", Record{Kind: KindReminder, Zone: "Mars/Olympus"}, `zone "Mars/Olympus" is not an IANA zone`},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			f := newFixture(t, answerWith(oneOff("Buy glue", "2026-10-27", "18:00")))
+			wantStatus(t, f.runText(t, "buy glue at 6pm tomorrow"), store.JobComplete)
+			id := f.reminderID(t)
+
+			refused := change(id, test.record)
+			f.model.turns = []Answer{refused, refused}
+			f.model.lookUp = "glue"
+
+			job := wantStatus(t, f.runText(t, "make it later"), store.JobFailed)
+			if faults := strings.Join(f.lintFaults(t, job.JobID), "\n"); !strings.Contains(faults, test.want) {
+				t.Fatalf("lint = %q, want it to name %q", faults, test.want)
+			}
+			if got := f.localDateTime(t, id); got != "2026-10-27T18:00" {
+				t.Fatalf("local = %q, want the row untouched by a refused change", got)
+			}
+		})
 	}
 }
 
@@ -862,10 +1192,10 @@ func TestWorkerDoesNotTagOnAnAskExit(t *testing.T) {
 // A capture that carries an event and a fact commits both in one step, and only the fact
 // costs a tag call — the Reminder has no features to generate.
 func TestWorkerCommitsAnEventAndAFact(t *testing.T) {
-	f := newFixture(t, Answer{Kind: AnswerRecords, Records: []Record{
-		oneOff("Lunch at Ikea", "2026-10-30", "13:00"),
-		{Kind: KindMemory, Text: "I have an Ikea voucher"},
-	}})
+	f := newFixture(t, Answer{Kind: AnswerRecords,
+		Ops:      []Op{{Intent: IntentCreate, Record: oneOff("Lunch at Ikea", "2026-10-30", "13:00")}},
+		Memories: []string{"I have an Ikea voucher"},
+	})
 	f.model.tags = []string{"ikea", "voucher", "lunch"}
 	stored := wantStatus(t, f.runText(t, "lunch at Ikea this Friday at 1pm, and I have an Ikea voucher"), store.JobComplete)
 	if got := stored.Conversation[len(stored.Conversation)-1].Text; got != reminderReply {
@@ -885,7 +1215,7 @@ func TestWorkerCommitsAnEventAndAFact(t *testing.T) {
 // Tagger is off the run's path: a tagger that never answers still leaves the Memory committed
 // and the Job closed, because by then the user has already read the reply.
 func TestWorkerCommitsWithoutWaitingForTheTagger(t *testing.T) {
-	f := newFixture(t, answerWith(Record{Kind: KindMemory, Text: "Milk is cheaper at store A"}))
+	f := newFixture(t, aboutAFact("Milk is cheaper at store A"))
 	f.model.tags = []string{"milk", "grocery", "price"}
 	f.model.tagBlock = true
 	f.loop.AttemptTimeout = 50 * time.Millisecond

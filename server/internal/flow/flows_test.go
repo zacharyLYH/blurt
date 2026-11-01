@@ -90,9 +90,9 @@ func TestPipelineVoiceReplyAfterClarificationCommits(t *testing.T) {
 // whole conversation, with the capture last. This is the PRD's litmus test 2.
 func TestPipelinePromptCarriesZoneReferenceAndReply(t *testing.T) {
 	server, script := newGatewayScript(t,
-		`{"kind":"records","text":"fetch kids from school","zone":"Asia/Singapore","day":"tomorrow","time":"17:00","recurrence":"none","evidence":"the user said \"tomorrow at 5pm\""}`,
+		`{"kind":"records","ops":[{"reminder_id":0,"intent":"create","text":"fetch kids from school","zone":"Asia/Singapore","day":"tomorrow","time":"17:00","recurrence":"none"}],"evidence":"the user said \"tomorrow at 5pm\""}`,
 		`{"kind":"question","question":"When should I remind you about buying glue?"}`,
-		`{"kind":"records","text":"buy glue","zone":"Asia/Tokyo","day":"tomorrow","time":"18:00","recurrence":"none","evidence":"the user said \"tomorrow at 6pm\""}`,
+		`{"kind":"records","ops":[{"reminder_id":0,"intent":"create","text":"buy glue","zone":"Asia/Tokyo","day":"tomorrow","time":"18:00","recurrence":"none"}],"evidence":"the user said \"tomorrow at 6pm\""}`,
 	)
 	p := newPump(t)
 	p.loop.Planner.Model = agent.NewModelClient(agent.Settings{URL: server.URL, Model: "local-model"})
@@ -319,7 +319,7 @@ func TestPipelineTagsMakeAMemoryFindableByOtherWording(t *testing.T) {
 // the user reads one sentence rather than two.
 func TestPipelineOneCaptureCommitsBothKinds(t *testing.T) {
 	server, script := newGatewayScript(t,
-		`{"kind":"records","text":"Lunch at Ikea","memories":["I have an Ikea voucher to use by December"],"zone":"Asia/Singapore","day":"this:friday","time":"13:00","recurrence":"none","evidence":"the user said \"this Friday at 1pm\""}`,
+		`{"kind":"records","ops":[{"reminder_id":0,"intent":"create","text":"Lunch at Ikea","zone":"Asia/Singapore","day":"this:friday","time":"13:00","recurrence":"none"}],"memories":["I have an Ikea voucher to use by December"],"evidence":"the user said \"this Friday at 1pm\""}`,
 	)
 	// The tagger's answer as the gateway would give it: normalized on the way to the row.
 	script.tags = "Voucher, ikea, redeem, voucher"
@@ -381,8 +381,8 @@ func TestPipelineOneCaptureCommitsBothKinds(t *testing.T) {
 // first occurrence the model resolved. Two patterns, two ingresses, both record tables.
 func TestPipelineRecurringCaptureCommitsARule(t *testing.T) {
 	server, script := newGatewayScript(t,
-		`{"kind":"records","text":"Take pills","memories":[],"zone":"Asia/Singapore","day":"on:11-05","time":"09:00","recurrence":"monthly","evidence":"the user said \"every month on the 5th at 9am\""}`,
-		`{"kind":"records","text":"Renew passport","memories":[],"zone":"Asia/Singapore","day":"on:03-03","time":"08:00","recurrence":"yearly","evidence":"the user said \"every year on March 3rd at 8am\""}`,
+		`{"kind":"records","ops":[{"reminder_id":0,"intent":"create","text":"Take pills","zone":"Asia/Singapore","day":"11-05","time":"09:00","recurrence":"monthly"}],"memories":[],"evidence":"the user said \"every month on the 5th at 9am\""}`,
+		`{"kind":"records","ops":[{"reminder_id":0,"intent":"create","text":"Renew passport","zone":"Asia/Singapore","day":"03-03","time":"08:00","recurrence":"yearly"}],"memories":[],"evidence":"the user said \"every year on March 3rd at 8am\""}`,
 	)
 	p := newPump(t)
 	p.loop.Planner.Model = agent.NewModelClient(agent.Settings{URL: server.URL, Model: "local-model"})
@@ -451,7 +451,7 @@ func TestPipelineRecurringCaptureCommitsARule(t *testing.T) {
 // linter leaves a question alone, and the user reads the model's own sentence.
 func TestPipelinePlannerTurnCarriesTheQuestion(t *testing.T) {
 	server, script := newGatewayScript(t,
-		`{"kind":"question","text":"","memories":[],"zone":"","day":"","time":"","recurrence":"none","evidence":"","question":"What time should I remind you about buying glue?"}`,
+		`{"kind":"question","question":"What time should I remind you about buying glue?"}`,
 	)
 	p := newPump(t)
 	p.loop.Planner.Model = agent.NewModelClient(agent.Settings{URL: server.URL, Model: "local-model"})
@@ -491,10 +491,10 @@ func TestPipelinePlannerTurnCarriesTheQuestion(t *testing.T) {
 // two written questions the third is the server's own sentence, so the user is asked
 // again rather than shown a sentence the cap no longer stands behind.
 func TestPipelineThirdClarificationFallsBackToTheServersSentence(t *testing.T) {
-	ask := `{"kind":"question","text":"","memories":[],"zone":"","day":"","time":"","recurrence":"none","evidence":"","question":"When should I remind you about buying glue?"}`
+	ask := `{"kind":"question","question":"When should I remind you about buying glue?"}`
 	server, script := newGatewayScript(t,
 		ask, ask, ask,
-		`{"kind":"records","text":"Buy glue","memories":[],"zone":"Asia/Singapore","day":"tomorrow","time":"18:00","recurrence":"none","evidence":"the user said \"tomorrow at 6pm\"","question":""}`,
+		`{"kind":"records","ops":[{"reminder_id":0,"intent":"create","text":"Buy glue","zone":"Asia/Singapore","day":"tomorrow","time":"18:00","recurrence":"none"}],"memories":[],"evidence":"the user said \"tomorrow at 6pm\"","question":""}`,
 	)
 	p := newPump(t)
 	p.loop.Planner.Model = agent.NewModelClient(agent.Settings{URL: server.URL, Model: "local-model"})

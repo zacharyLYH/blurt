@@ -1,0 +1,30 @@
+{
+  "name": "update-move-the-dentist",
+  "source": "L1:change — a row the capture moves has to be looked up before it can be moved",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {
+    "reminders": [
+      { "text": "Dentist", "local": "2026-10-27T10:00" }
+    ]
+  },
+  "history": [],
+  "capture": "move the dentist to 2 december at 4pm",
+  "expect": {
+    "kind": "records",
+    "updated": [
+      {
+        "text_contains": ["dentist"],
+        "datetime": "2026-12-02T16:00",
+        "utc": "2026-12-02T08:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "tools": ["find_reminders", "check_update"],
+    "reply_contains": ["updated"]
+  }
+}

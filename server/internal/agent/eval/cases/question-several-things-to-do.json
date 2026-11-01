@@ -1,6 +1,6 @@
 {
   "name": "question-several-things-to-do",
-  "source": "prd:litmus-5",
+  "source": "prd:litmus-5 — four things in one breath, two with clocks and two without: the ask is about the gaps, and it names each",
   "layer": "L1",
   "size": "medium",
   "now_local": "2026-10-24T18:30",
@@ -12,6 +12,6 @@
     "kind": "question",
     "reminders": [],
     "memories": [],
-    "asks_for": ["one", "which", "first", "each", "separate", "split"]
+    "asks_for": ["when", "day"]
   }
 }

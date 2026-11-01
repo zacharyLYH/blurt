@@ -52,6 +52,15 @@ const (
 	AnswerQuestion = "question"
 )
 
+// The verb one op names. It is what the capture does to one Reminder; a question carries no
+// op at all. cancel names what the user asked for, not something the agent does: the app owns
+// that write, so the op says where it is done and writes nothing.
+const (
+	IntentCreate = "create"
+	IntentUpdate = "update"
+	IntentCancel = "cancel"
+)
+
 // RecurrenceNone is a one-off: the record names one local date and time. Every
 // other value is a store.Rule frequency.
 const RecurrenceNone = "none"
@@ -66,7 +75,6 @@ type Record struct {
 	Date       string // ISO date YYYY-MM-DD, empty when unresolved
 	Time       string // HH:MM 24-hour, empty when unresolved
 	Recurrence string // RecurrenceNone, or a store.Rule frequency
-	Evidence   string // the user's own words for the time and the zone
 }
 
 // Field names the piece of a record the server could not accept, and so the piece
@@ -81,11 +89,28 @@ const (
 	FieldRecurrence Field = "recurrence"
 )
 
-// Answer is one planner answer: either the records it proposes to commit, or the one
-// question it asks instead. Never both — the loop drops record fields on an ask.
+// Op is one thing a turn does to one row: add it, move it, or call it off. A capture that
+// acts on two rows is two ops, and the server checks and commits each one on its own.
+type Op struct {
+	// Intent is the verb: create adds a row, update rewrites ReminderID in place, cancel
+	// names nothing and writes nothing.
+	Intent string
+	// ReminderID is the row an update names, the one this run looked up. Zero otherwise.
+	ReminderID int64
+	// Record is the row as the capture leaves it: whole for a create, a delta for an
+	// update, zero on a call-off.
+	Record Record
+}
+
+// Answer is one planner answer: the ops it proposes to commit and the facts worth keeping,
+// or the one question it asks instead. Never both — a question carries no op and no fact.
 type Answer struct {
 	Kind     string
-	Records  []Record
+	Ops      []Op
+	Memories []string
+	// Evidence is the user's own words the model read the day, clock and zone from. Every
+	// op in one answer shares it.
+	Evidence string
 	Question string
 }
 

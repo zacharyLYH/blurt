@@ -1,0 +1,44 @@
+{
+  "name": "chain-cancel-changes-nothing",
+  "source": "L3:call-off — the app owns the delete, so the run answers and the row it declined to touch is still there",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {
+    "reminders": [
+      { "text": "Dentist", "local": "2026-10-27T10:00" }
+    ]
+  },
+  "steps": [
+    {
+      "capture": "cancel the dentist reminder",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "updated": [],
+        "memories": [],
+        "reply_contains": ["doesn't cancel reminders"]
+      }
+    },
+    {
+      "capture": "move the dentist to 2 december at 4pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "updated": [
+          {
+            "text_contains": ["dentist"],
+            "datetime": "2026-12-02T16:00",
+            "utc": "2026-12-02T08:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": [],
+        "reply_contains": ["updated"]
+      }
+    }
+  ]
+}

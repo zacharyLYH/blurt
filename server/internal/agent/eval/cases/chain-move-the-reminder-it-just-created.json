@@ -1,0 +1,47 @@
+{
+  "name": "chain-move-the-reminder-it-just-created",
+  "source": "L3:change — a row this run created is looked up and moved, and the words it kept are the words it had",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to buy glue tomorrow at 6pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["glue"],
+            "datetime": "2026-10-25T18:00",
+            "utc": "2026-10-25T10:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    },
+    {
+      "capture": "actually make the glue 8pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "updated": [
+          {
+            "text_contains": ["glue"],
+            "datetime": "2026-10-25T20:00",
+            "utc": "2026-10-25T12:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": [],
+        "reply_contains": ["updated"]
+      }
+    }
+  ]
+}

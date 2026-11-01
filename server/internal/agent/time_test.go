@@ -118,18 +118,24 @@ func TestResolveDay(t *testing.T) {
 		{"next weekday", "next:friday", "2026-10-30"},
 		{"a repeated next", "next:2:tuesday", "2026-11-03"},
 		{"three nexts", "next:3:tuesday", "2026-11-10"},
-		{"a month and day still to come", "on:12-01", "2026-12-01"},
-		{"a month and day that has gone", "on:03-15", "2027-03-15"},
+		{"a month and day still to come", "12-01", "2026-12-01"},
+		{"a month and day that has gone", "03-15", "2027-03-15"},
 		{"nothing", "", ""},
 		{"prose", "when I'm home", ""},
-		{"a day the month does not have", "on:02-30", ""},
+		{"a day the month does not have", "02-30", ""},
 		// A leap day is placed in the next year that has one, not rolled forward
 		// into March 1st by time.Date.
-		{"a leap day in a non-leap year", "on:02-29", "2028-02-29"},
+		{"a leap day in a non-leap year", "02-29", "2028-02-29"},
+		// A full date is the one a row printed, so it is taken as it stands: it is how a
+		// change keeps the day the row already has, and walking it forward would move a row
+		// the user only meant to re-clock.
+		{"an exact date", "2026-12-01", "2026-12-01"},
+		{"an exact date that has gone", "2026-01-05", "2026-01-05"},
+		{"an exact date the calendar lacks", "2026-02-30", ""},
 		{"a weekday that is not one", "this:october", ""},
 		{"a count with no number", "in:d", ""},
 		{"a count of no weeks", "next:0:friday", ""},
-		{"a date where a token goes", "2026-10-25", ""},
+		{"a date the calendar lacks, written wrong", "2026-13-01", ""},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

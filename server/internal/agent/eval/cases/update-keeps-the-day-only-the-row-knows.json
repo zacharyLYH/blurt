@@ -1,0 +1,30 @@
+{
+  "name": "update-keeps-the-day-only-the-row-knows",
+  "source": "L1:change — the capture moves the clock and leaves the day to the row it found",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {
+    "reminders": [
+      { "text": "Physio appointment", "local": "2026-11-01T08:15" }
+    ]
+  },
+  "history": [],
+  "capture": "the physio is at 9:30am now",
+  "expect": {
+    "kind": "records",
+    "updated": [
+      {
+        "text_contains": ["physio"],
+        "datetime": "2026-11-01T09:30",
+        "utc": "2026-11-01T01:30:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "tools": ["find_reminders", "check_update"],
+    "reply_contains": ["updated"]
+  }
+}

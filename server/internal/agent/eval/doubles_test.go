@@ -93,9 +93,20 @@ func mutateRecord(mutate func(*agent.Record)) agent.Record {
 	return record
 }
 
-// answerWith is the one record an answer carries.
+// answerWith is the one record an answer carries, as the loop's own answers arrive: a create
+// that proposes it. change is the same for a row the answer names, and facts is the shape a
+// capture that only remembers something commits.
 func answerWith(record agent.Record) agent.Answer {
-	return agent.Answer{Kind: agent.AnswerRecords, Records: []agent.Record{record}}
+	return agent.Answer{Kind: agent.AnswerRecords, Ops: []agent.Op{{Intent: agent.IntentCreate, Record: record}}}
+}
+
+func change(id int64, record agent.Record) agent.Answer {
+	return agent.Answer{Kind: agent.AnswerRecords,
+		Ops: []agent.Op{{Intent: agent.IntentUpdate, ReminderID: id, Record: record}}}
+}
+
+func facts(texts ...string) agent.Answer {
+	return agent.Answer{Kind: agent.AnswerRecords, Memories: texts}
 }
 
 // sideStage stands in for the two stages L1 does not score: the screen passes every capture

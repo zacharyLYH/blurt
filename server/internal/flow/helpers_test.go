@@ -336,17 +336,19 @@ func reminderTurn(text, phrase string) agent.Answer {
 	if err != nil {
 		panic("flow: reminderTurn phrase must end in an evening hour, got " + phrase)
 	}
-	return agent.Answer{Kind: agent.AnswerRecords, Records: []agent.Record{{
-		Kind: agent.KindReminder, Text: text, Zone: "Asia/Singapore",
-		Date: pinned.AddDate(0, 0, 1).Format("2006-01-02"), Time: strconv.Itoa(hour+12) + ":00",
-		Recurrence: agent.RecurrenceNone, Evidence: phrase,
+	return agent.Answer{Kind: agent.AnswerRecords, Evidence: phrase, Ops: []agent.Op{{
+		Intent: agent.IntentCreate, Record: agent.Record{
+			Kind: agent.KindReminder, Text: text, Zone: "Asia/Singapore",
+			Date: pinned.AddDate(0, 0, 1).Format("2006-01-02"), Time: strconv.Itoa(hour+12) + ":00",
+			Recurrence: agent.RecurrenceNone,
+		},
 	}}}
 }
 
 // memoryTurn is the shape a fact commits: text and nothing else, because a Memory is
 // context for a later Reminder rather than an interruption of its own.
 func memoryTurn(text string) agent.Answer {
-	return agent.Answer{Kind: agent.AnswerRecords, Records: []agent.Record{{Kind: agent.KindMemory, Text: text}}}
+	return agent.Answer{Kind: agent.AnswerRecords, Memories: []string{text}}
 }
 
 // httpOrigin must be in the API's allowed origins: the CSRF guard rejects unsafe
