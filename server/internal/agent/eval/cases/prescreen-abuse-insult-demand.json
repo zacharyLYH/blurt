@@ -1,0 +1,11 @@
+{
+  "name": "prescreen-abuse-insult-demand",
+  "source": "branch:abuse:demand",
+  "layer": "L2",
+  "size": "small",
+  "stage": "prescreen",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "capture": "you are useless, answer me now",
+  "expect": {"helper": {"verdict": "abuse"}}
+}

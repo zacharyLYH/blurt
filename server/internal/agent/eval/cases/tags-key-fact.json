@@ -1,0 +1,18 @@
+{
+  "layer": "L2",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "size": "small",
+  "stage": "tags",
+  "name": "tags-key-fact",
+  "source": "branch:tags:distinct-from-examples",
+  "fact": "The spare key is under the flowerpot",
+  "expect": {
+    "helper": {
+      "tags_has": [
+        "key"
+      ],
+      "tags_min": 3
+    }
+  }
+}

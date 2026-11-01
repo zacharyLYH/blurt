@@ -1,0 +1,18 @@
+{
+  "layer": "L2",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "size": "small",
+  "stage": "tags",
+  "name": "tags-licence-fact",
+  "source": "branch:tags:distinct-from-examples",
+  "fact": "My driving licence expires in March",
+  "expect": {
+    "helper": {
+      "tags_has": [
+        "march"
+      ],
+      "tags_min": 3
+    }
+  }
+}

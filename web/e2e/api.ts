@@ -72,11 +72,20 @@ export async function waitForReminder(
   timeoutMs: number,
 ): Promise<ReminderPayload> {
   let found: ReminderPayload | undefined
-  await expect
-    .poll(async () => {
-      found = (await reminders(request))[side].find((reminder) => reminder.text === text)
-      return Boolean(found)
-    }, { timeout: timeoutMs })
-    .toBe(true)
+  let latest: ReminderLists | null = null
+  try {
+    await expect
+      .poll(async () => {
+        latest = await reminders(request)
+        found = latest[side].find((reminder) => reminder.text === text)
+        return Boolean(found)
+      }, { timeout: timeoutMs })
+      .toBe(true)
+  } catch (error) {
+    // A timeout with the rows in it is diagnosable; one without is a guess.
+    throw new Error(`reminder ${JSON.stringify(text)} missing from ${side}: ${JSON.stringify(latest)}`, {
+      cause: error,
+    })
+  }
   return found as ReminderPayload
 }

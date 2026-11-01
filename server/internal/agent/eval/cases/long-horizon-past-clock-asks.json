@@ -1,0 +1,17 @@
+{
+  "name": "long-horizon-past-clock-asks",
+  "source": "branch:lint-retry:time-in-the-past",
+  "layer": "L1",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me to take the roast out at 9am today",
+  "expect": {
+    "kind": "question",
+    "reminders": [],
+    "memories": [],
+    "asks_for": ["when", "time", "passed"]
+  }
+}

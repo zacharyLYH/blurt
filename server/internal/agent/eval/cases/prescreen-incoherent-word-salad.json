@@ -1,0 +1,11 @@
+{
+  "name": "prescreen-incoherent-word-salad",
+  "source": "branch:incoherent:no-meaning",
+  "layer": "L2",
+  "size": "small",
+  "stage": "prescreen",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "capture": "yoohoo whoop shoop",
+  "expect": {"helper": {"verdict": "incoherent"}}
+}

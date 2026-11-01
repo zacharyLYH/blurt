@@ -34,8 +34,7 @@ const (
 // for voice. It returns as soon as the Job is durable; transcription is the
 // worker's problem.
 func (s *Server) createJob(w http.ResponseWriter, r *http.Request, user store.User) {
-	if s.Jobs == nil || s.Audio == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "Capture is not configured.")
+	if unavailable(w, s.Jobs == nil || s.Audio == nil, "Capture is not configured.") {
 		return
 	}
 
@@ -182,8 +181,7 @@ func (s *Server) readTurn(w http.ResponseWriter, r *http.Request) (turn store.Me
 		}
 		return store.Message{Role: "user", Text: text, TZ: zone}, capture.Format{}, true
 	case "audio/wav":
-		if s.Audio == nil {
-			writeError(w, http.StatusNotImplemented, "not_implemented", "Capture is not configured.")
+		if unavailable(w, s.Audio == nil, "Capture is not configured.") {
 			return store.Message{}, capture.Format{}, false
 		}
 		recorded, read := s.readAudio(w, r)
@@ -204,8 +202,7 @@ func (s *Server) readTurn(w http.ResponseWriter, r *http.Request) (turn store.Me
 // The turn may be typed or spoken. Blurt is voice first, so the ingress takes the
 // same two shapes a capture does: answering should never cost the user a keyboard.
 func (s *Server) replyToJob(w http.ResponseWriter, r *http.Request, user store.User) {
-	if s.Jobs == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "Capture is not configured.")
+	if unavailable(w, s.Jobs == nil, "Capture is not configured.") {
 		return
 	}
 	jobID, err := strconv.ParseInt(r.PathValue("jobId"), 10, 64)
@@ -270,8 +267,7 @@ func parseTimezone(raw string) (string, error) {
 // listJobs backs the open-conversation sidebar: every Job that is not closed
 // yet, newest first, scoped to the caller.
 func (s *Server) listJobs(w http.ResponseWriter, r *http.Request, user store.User) {
-	if s.Jobs == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "Capture is not configured.")
+	if unavailable(w, s.Jobs == nil, "Capture is not configured.") {
 		return
 	}
 	jobs, err := s.Jobs.OpenJobs(r.Context(), user.UserID)
@@ -283,8 +279,7 @@ func (s *Server) listJobs(w http.ResponseWriter, r *http.Request, user store.Use
 }
 
 func (s *Server) getJob(w http.ResponseWriter, r *http.Request, user store.User) {
-	if s.Jobs == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "Capture is not configured.")
+	if unavailable(w, s.Jobs == nil, "Capture is not configured.") {
 		return
 	}
 	jobID, err := strconv.ParseInt(r.PathValue("jobId"), 10, 64)

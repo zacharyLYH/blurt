@@ -30,6 +30,9 @@ func TestRedisFlowBootsGroupThenServesACapture(t *testing.T) {
 	p := newRedisPump(t, reminderTurn("buy glue", "tomorrow at 6pm")).start()
 	job := p.text(t, "buy glue tomorrow at 6pm", "Asia/Singapore")
 	p.settle(t, job.JobID, status(store.JobComplete), "the capture over real Redis")
+	// A broker-level re-delivery must not add a run: one message, one capture's worth
+	// of asks.
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // A capture worker that dies mid-transcription must have its message reclaimed
@@ -62,6 +65,7 @@ func TestRedisFlowClaimerRecoversAfterCaptureWorkerDies(t *testing.T) {
 	p.startCapture()
 	p.settle(t, job.JobID, status(store.JobComplete), "the recovered Job")
 	p.stopClaimers()
+	p.wantAsks(t, 1, 2, 0)
 }
 
 // A model call that hangs past the attempt deadline retries, and at the poison
@@ -71,7 +75,7 @@ func TestRedisFlowSlowModelRetriesThenFails(t *testing.T) {
 	// start, because the worker reads them without a lock.
 	p := newRedisPump(t)
 	p.model.blocks = true
-	p.agentWorker.Loop.Timeout = 20 * time.Millisecond
+	p.loop.Timeout = 20 * time.Millisecond
 	p.start()
 	job := p.text(t, "buy glue tomorrow at 6pm", "Asia/Singapore")
 
@@ -79,5 +83,6 @@ func TestRedisFlowSlowModelRetriesThenFails(t *testing.T) {
 	if failed.RetryCount != store.MaxAttempts {
 		t.Fatalf("retry count = %d, want %d", failed.RetryCount, store.MaxAttempts)
 	}
+	p.wantAsks(t, 3, 3, 0)
 	p.drain(t, p.agent, "agent queue")
 }

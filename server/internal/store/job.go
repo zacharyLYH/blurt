@@ -58,6 +58,10 @@ type Job struct {
 	CreatedAt    string    `json:"createdAt"`
 }
 
+// jobColumns is the Job row every read shares, so a new column cannot land in one query
+// and not the others.
+const jobColumns = "JobId, UserId, Status, RetryCount, Conversation, CreatedAt"
+
 // JobStore owns Job, Conversation, and the transcription Trace rows.
 type JobStore struct {
 	write *sql.DB
@@ -82,12 +86,6 @@ type AgentStep struct {
 	Detail    map[string]any
 }
 
-// pendingAudio reports whether one turn is a clip the transcriber still owes a
-// transcript for.
-func pendingAudio(message Message) bool {
-	return message.Role == "user" && message.Audio != "" && message.Text == ""
-}
-
 // PendingAudio returns the first user clip that has not been transcribed.
 func (j Job) PendingAudio() (string, bool) {
 	for _, message := range j.Conversation {
@@ -98,6 +96,7 @@ func (j Job) PendingAudio() (string, bool) {
 	return "", false
 }
 
+// NewJobStore takes the writer and the read pool beside it.
 func NewJobStore(write, read *sql.DB) *JobStore {
 	return &JobStore{write: write, read: read}
 }
@@ -135,14 +134,14 @@ func (s *JobStore) Create(ctx context.Context, userID int64, messages ...Message
 // ByID scopes the read to the caller so one user can never poll another's Job.
 func (s *JobStore) ByID(ctx context.Context, userID, jobID int64) (Job, error) {
 	return scanJob(s.read.QueryRowContext(ctx, `
-		SELECT JobId, UserId, Status, RetryCount, Conversation, CreatedAt
+		SELECT `+jobColumns+`
 		FROM Job WHERE JobId = ? AND UserId = ?`, jobID, userID))
 }
 
 // Get loads a Job without an owner filter, for queue consumers.
 func (s *JobStore) Get(ctx context.Context, jobID int64) (Job, error) {
 	return scanJob(s.read.QueryRowContext(ctx, `
-		SELECT JobId, UserId, Status, RetryCount, Conversation, CreatedAt
+		SELECT `+jobColumns+`
 		FROM Job WHERE JobId = ?`, jobID))
 }
 
@@ -184,7 +183,7 @@ func (s *JobStore) OpenJobs(ctx context.Context, userID int64) ([]OpenJob, error
 // Redis, for the queue sweeper.
 func (s *JobStore) StaleOpenJobs(ctx context.Context, before string) ([]Job, error) {
 	rows, err := s.read.QueryContext(ctx, `
-		SELECT JobId, UserId, Status, RetryCount, Conversation, CreatedAt
+		SELECT `+jobColumns+`
 		FROM Job WHERE Status = ? AND queued_at < ?`, JobOpen, before)
 	if err != nil {
 		return nil, fmt.Errorf("list stale jobs: %w", err)
@@ -250,7 +249,7 @@ func (s *JobStore) mutate(ctx context.Context, stage string, jobID int64, detail
 	defer tx.Rollback()
 
 	job, err := scanJob(tx.QueryRowContext(ctx, `
-		SELECT JobId, UserId, Status, RetryCount, Conversation, CreatedAt
+		SELECT `+jobColumns+`
 		FROM Job WHERE JobId = ?`, jobID))
 	if err != nil {
 		return Job{}, err
@@ -279,20 +278,26 @@ func (s *JobStore) mutate(ctx context.Context, stage string, jobID int64, detail
 // recordTrace writes a Trace row and returns its id, inside the caller's
 // transaction when there is one. ReminderId is set on a notification attempt, which
 // is what ties an interruption back to the Reminder it was about; every other stage
-// leaves it null. The id is returned because a notification's TraceId is the
-// notification id the push payload carries.
+// leaves it null. The id is diagnostic only: a notification's identity is its own
+// Notification row, never a TraceId.
 func recordTrace(ctx context.Context, q execer, stage string, jobID, reminderID int64, detail map[string]any) (int64, error) {
 	raw, err := json.Marshal(detail)
 	if err != nil {
 		return 0, fmt.Errorf("encode trace: %w", err)
 	}
-	var traceID int64
+	var id int64
 	if err := q.QueryRowContext(ctx,
 		`INSERT INTO Trace (JobId, ReminderId, Timestamp, Stage, Detail) VALUES (?, ?, ?, ?, ?) RETURNING TraceId`,
-		jobID, nullID(reminderID), now(), stage, string(raw)).Scan(&traceID); err != nil {
+		jobID, nullID(reminderID), now(), stage, string(raw)).Scan(&id); err != nil {
 		return 0, fmt.Errorf("record %s trace: %w", stage, err)
 	}
-	return traceID, nil
+	return id, nil
+}
+
+// pendingAudio reports whether one turn is a clip the transcriber still owes a
+// transcript for.
+func pendingAudio(message Message) bool {
+	return message.Role == "user" && message.Audio != "" && message.Text == ""
 }
 
 func scanJob(row scanner) (Job, error) {
@@ -366,7 +371,11 @@ func (s *JobStore) CommitAgentStep(ctx context.Context, jobID int64, step AgentS
 		if step.Reply.Text != "" || step.Reply.Audio != "" {
 			reply := step.Reply
 			reply.Role, reply.At = "assistant", now()
-			job.Conversation = append(job.Conversation, reply)
+			last := len(job.Conversation) - 1
+			if last < 0 || job.Conversation[last].Role != reply.Role ||
+				job.Conversation[last].Text != reply.Text || job.Conversation[last].Audio != reply.Audio {
+				job.Conversation = append(job.Conversation, reply)
+			}
 		}
 		job.Status = step.Status
 		return nil

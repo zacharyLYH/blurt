@@ -142,7 +142,7 @@ func consume(t *testing.T, stream queue.Stream) (int64, int) {
 
 // newTestStack boots the API on a throwaway database. A nil mailer is the
 // BLURT_FAKE_PIN path: PINs are fixed and nothing is sent.
-func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, pusher httpapi.Pusher) (*http.Client, string, *db.DB, *queue.Queues) {
+func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, pusher push.Notifier) (*http.Client, string, *db.DB, *queue.Queues) {
 	t.Helper()
 	handle, err := db.Open(t.TempDir())
 	if err != nil {
@@ -165,6 +165,8 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 		Jobs:           store.NewJobStore(handle.Write, handle.Read),
 		Audio:          audio,
 		Queues:         queues,
+		Reminders:      store.NewReminderStore(handle.Write, handle.Read),
+		Notifications:  store.NewNotificationStore(handle.Write, handle.Read),
 		VAPIDPublicKey: testVAPIDPublicKey,
 		AllowedOrigins: []string{testOrigin},
 	}))
@@ -756,9 +758,9 @@ func TestPushSendFansOutToCallerDevices(t *testing.T) {
 	if err != nil || target.Path != "/home" || target.Host == "" {
 		t.Fatalf("navigate = %q, want a same-origin /home", pusher.message.Navigate)
 	}
-	// A Trace row is backend-owned, so a client cannot point at one.
-	if pusher.message.TraceID != 0 {
-		t.Fatalf("TraceID = %d, want the backend to own it", pusher.message.TraceID)
+	// The reminder the push is about is backend-owned, so a client cannot point at one.
+	if pusher.message.ReminderID != 0 {
+		t.Fatalf("reminderId = %d, want the backend to own it", pusher.message.ReminderID)
 	}
 
 	// An explicit same-origin target is passed through unchanged.

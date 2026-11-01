@@ -29,6 +29,7 @@ type UserStore struct {
 	read  *sql.DB
 }
 
+// NewUserStore takes the writer and the read pool beside it.
 func NewUserStore(write, read *sql.DB) *UserStore {
 	return &UserStore{write: write, read: read}
 }

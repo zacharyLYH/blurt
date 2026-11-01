@@ -1,0 +1,27 @@
+{
+  "name": "big-calendar-finds-one-row",
+  "source": "branch:retrieval:busy-calendar",
+  "layer": "L1",
+  "size": "large",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "use": "busy-calendar",
+  "seed": {},
+  "history": [],
+  "capture": "move the dentist to 20 december",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["dentist"],
+        "datetime": "2026-12-20T10:00",
+        "utc": "2026-12-20T02:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": [],
+    "tools": ["find_reminders"]
+  }
+}

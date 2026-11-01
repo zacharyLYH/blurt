@@ -1,0 +1,28 @@
+{
+  "name": "repeat-daily-notify-clock",
+  "source": "prompt:example-3",
+  "layer": "L1",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me at 6pm every day for dinner at 8pm",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["dinner"],
+        "utc": "2026-10-25T10:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "daily",
+        "status": "resolved",
+        "rule": {
+          "frequency": "daily",
+          "time": "18:00"
+        }
+      }
+    ],
+    "memories": []
+  }
+}

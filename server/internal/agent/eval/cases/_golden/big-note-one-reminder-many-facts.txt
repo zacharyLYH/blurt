@@ -1,0 +1,3 @@
+current_tz: Asia/Singapore
+now_local: 2026-10-24T18:30
+capture: remind me to pack at 7pm on 20 december, and remember that my suitcase is in the loft, the charger is in the drawer, and my passport expires in july

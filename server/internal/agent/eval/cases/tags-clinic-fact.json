@@ -1,0 +1,18 @@
+{
+  "layer": "L2",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "size": "small",
+  "stage": "tags",
+  "name": "tags-clinic-fact",
+  "source": "branch:tags:distinct-from-examples",
+  "fact": "Dr Lim's clinic only takes cash on Sundays",
+  "expect": {
+    "helper": {
+      "tags_has": [
+        "clinic"
+      ],
+      "tags_min": 3
+    }
+  }
+}

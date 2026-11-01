@@ -7,10 +7,6 @@ CREATE TABLE IF NOT EXISTS User (
     UserId          INTEGER PRIMARY KEY,
     Name            TEXT    NOT NULL,
     Email           TEXT    NOT NULL UNIQUE COLLATE NOCASE,
-    ModelProvider   TEXT,
-    ModelName       TEXT,
-    ModelEndpoint   TEXT,
-    ModelApiKey     TEXT,   -- encrypted at rest
     -- Last questionnaire version this user finished; 0 means not started.
     LastQuestionnaireVersion INTEGER NOT NULL DEFAULT 0,
     CreatedAt       TEXT    NOT NULL
@@ -114,8 +110,8 @@ CREATE TRIGGER IF NOT EXISTS memory_au AFTER UPDATE ON Memory BEGIN
     INSERT INTO fts_memory(rowid, text, tags) VALUES (new.MemoryId, new.Text, new.Tags);
 END;
 
--- Append-only diagnostics, always tied to a Job. Notification attempts carry
--- their ReminderId; that TraceId is the notification id in the push link.
+-- Append-only diagnostics, always tied to a Job. Debug-only: nothing the product
+-- shows or writes depends on a Trace row, so the table can be dropped whole.
 CREATE TABLE IF NOT EXISTS Trace (
     TraceId    INTEGER PRIMARY KEY,
     JobId      INTEGER NOT NULL REFERENCES Job(JobId) ON DELETE CASCADE,
@@ -126,10 +122,17 @@ CREATE TABLE IF NOT EXISTS Trace (
 );
 CREATE INDEX IF NOT EXISTS idx_trace_job ON Trace(JobId, Timestamp);
 
--- One report per notification. The linked Trace identifies Reminder and user.
+-- One report per submission, keyed by its own id. A recurring Reminder can have
+-- many rows with the same ReminderId: the feedback row is the instance, which is
+-- what lets a repeat collect feedback firing after firing. Deliberately no Trace
+-- reference: Trace is droppable, and a user's own feedback path must not be.
 CREATE TABLE IF NOT EXISTS NotificationFeedback (
-    NotificationTraceId INTEGER PRIMARY KEY REFERENCES Trace(TraceId) ON DELETE CASCADE,
-    FailureMode         TEXT    NOT NULL,
-    Comment             TEXT,
-    CreatedAt           TEXT    NOT NULL
+    NotificationFeedbackId INTEGER PRIMARY KEY,
+    ReminderId             INTEGER NOT NULL REFERENCES Reminder(ReminderId) ON DELETE CASCADE,
+    FailureMode            TEXT    NOT NULL CHECK (FailureMode IN (
+        'wrong_reminder', 'wrong_date_time_zone', 'wrong_or_irrelevant_context',
+        'duplicate_too_many', 'other')),
+    Comment                TEXT,
+    CreatedAt              TEXT    NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_feedback_reminder ON NotificationFeedback(ReminderId);

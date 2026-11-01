@@ -1,0 +1,7 @@
+current_tz: Asia/Singapore
+now_local: 2026-10-24T18:30
+memories:
+- I have AirAsia points to use by December [travel,flight,airline,points,loyalty,voucher,december]
+- Milk is cheaper at store A than store B [grocery,dairy,price,supermarket]
+- I like this noodle shop in Chongqing [food,chongqing,noodle,restaurant,travel]
+capture: book a flight to Chongqing tonight at 8pm

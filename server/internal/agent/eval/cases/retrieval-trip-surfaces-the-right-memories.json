@@ -1,0 +1,26 @@
+{
+  "name": "retrieval-trip-surfaces-the-right-memories",
+  "source": "prd:litmus-3+4",
+  "layer": "L1",
+  "size": "large",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "use": "trip-chongqing",
+  "seed": {},
+  "history": [],
+  "capture": "book a flight to Chongqing tonight at 8pm",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["flight", "chongqing"],
+        "datetime": "2026-10-24T20:00",
+        "utc": "2026-10-24T12:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": []
+  }
+}

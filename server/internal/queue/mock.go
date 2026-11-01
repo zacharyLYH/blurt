@@ -16,6 +16,7 @@ type Mock struct {
 	next      int
 }
 
+// NewMock returns an empty in-memory stream.
 func NewMock() *Mock {
 	return &Mock{acked: map[string]bool{}}
 }

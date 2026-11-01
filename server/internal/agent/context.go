@@ -9,64 +9,67 @@ import (
 	"blurt/internal/store"
 )
 
-// Reads is Blurt's two read stores behind Recall, so the loop asks one thing for
-// context and a test can replace both reads in one move.
-type Reads struct {
+// Retrieval is Blurt's two read stores behind Recall, so a lookup and the context block
+// read the same indexes a test can replace in one move.
+type Retrieval struct {
 	Reminders *store.ReminderStore
 	Memories  *store.MemoryStore
 }
 
-func (r Reads) Nearby(ctx context.Context, userID int64, from, to time.Time) ([]store.Reminder, error) {
-	return r.Reminders.Window(ctx, userID, from, to)
+func (r Retrieval) FindReminders(ctx context.Context, userID int64, query string, limit int) ([]store.Reminder, error) {
+	return r.Reminders.Search(ctx, userID, query, limit)
 }
-func (r Reads) Remembered(ctx context.Context, userID int64, query string) ([]store.Memory, error) {
-	return r.Memories.Search(ctx, userID, query, 0)
+func (r Retrieval) FindMemories(ctx context.Context, userID int64, query string, limit int) ([]store.Memory, error) {
+	return r.Memories.Search(ctx, userID, query, limit)
 }
 
-// propose is one bounded model call.
-func (l *AgentLoop) propose(ctx context.Context, in Input) (Turn, error) {
-	callCtx, cancel := context.WithTimeout(ctx, l.proposeTimeout())
+// prescreenModel is one bounded call to the prescreen stage: its own stage model
+// when a stack has split the stages, the loop's Model otherwise (every test double).
+func (l *AgentLoop) prescreenModel(ctx context.Context, capture string) (Verdict, error) {
+	callCtx, cancel := context.WithTimeout(ctx, l.modelTimeout())
 	defer cancel()
-	return l.Model.Propose(callCtx, in)
+	return l.model(l.Prescreen).Prescreen(callCtx, capture)
 }
 
-// questionModel is one bounded call to the question writer.
-func (l *AgentLoop) questionModel(ctx context.Context, in Input, missing []Field) (string, error) {
-	callCtx, cancel := context.WithTimeout(ctx, l.proposeTimeout())
+// agentModel is one bounded free-form turn of the agent loop, on the Job's own model: the
+// turn that may look something up.
+func (l *AgentLoop) agentModel(ctx context.Context, model Model, in PlannerInput, sent []Message) (Message, error) {
+	callCtx, cancel := context.WithTimeout(ctx, l.modelTimeout())
 	defer cancel()
-	return l.Model.Question(callCtx, in, missing)
+	return model.Chat(callCtx, in, sent, agentTools)
 }
 
-// input assembles one turn's context. A retrieval failure is logged and dropped
-// rather than failing the Job: context is advisory, so a working capture never
-// depends on a working index.
-func (r *run) input(ctx context.Context) Input {
-	in := r.askInput()
-	nearby, err := r.loop.Recall.Nearby(ctx, r.job.UserID,
-		r.started.Add(-windowBefore), r.started.Add(windowAfter))
+// finalizeModel is one bounded strict call: the one that writes the answer the linter then
+// reads, on the Job's own model.
+func (l *AgentLoop) finalizeModel(ctx context.Context, model Model, in PlannerInput, sent []Message) (Answer, error) {
+	callCtx, cancel := context.WithTimeout(ctx, l.modelTimeout())
+	defer cancel()
+	return model.Finalize(callCtx, in, sent)
+}
+
+// Input assembles the context one turn is built from: the Job's conversation, the anchor zone
+// and clock, and the memories worth having to hand. It is built once per request, because a
+// lint retry reads the same context. A retrieval failure is logged and dropped rather than
+// failing the Job: context is advisory, so a working capture never depends on a working index.
+// Exported because the L1 layer pins this as a golden, rather than a hand-built stand-in.
+func (l *AgentLoop) Input(ctx context.Context, job store.Job, now time.Time) PlannerInput {
+	in := PlannerInput{Conversation: job.Conversation, CurrentTZ: deviceZone(job), Now: now}
+	remembered, err := l.Recall.FindMemories(ctx, job.UserID, userText(job), 0)
 	if err != nil {
-		slog.Warn("agent reminder window", "job_id", r.job.JobID, "err", err)
-	}
-	in.Nearby = nearby
-	remembered, err := r.loop.Recall.Remembered(ctx, r.job.UserID, captureText(r.job))
-	if err != nil {
-		slog.Warn("agent memory search", "job_id", r.job.JobID, "err", err)
+		slog.Warn("agent memory search", "job_id", job.JobID, "err", err)
 	}
 	in.Remembered = remembered
 	return in
 }
 
-// askInput is the part of a turn that needs no retrieval: what the user said, the
-// zone anchor and the clock, and what is still missing. The records turn starts
-// from it and adds what recall found; the question writer reads it as it is.
-func (r *run) askInput() Input {
-	return Input{Conversation: r.job.Conversation, CurrentTZ: currentTZ(r.job),
-		Now: r.started, Missing: r.missing}
+// input is the running Job's own view of it.
+func (r *jobRun) input(ctx context.Context) PlannerInput {
+	return r.loop.Input(ctx, r.job, r.started)
 }
 
-// captureText is everything the user has said in this Job, which is what Memory
+// userText is everything the user has said in this Job, which is what Memory
 // retrieval is searched with.
-func captureText(job store.Job) string {
+func userText(job store.Job) string {
 	var said strings.Builder
 	for _, turn := range job.Conversation {
 		if turn.Role == "user" && turn.Text != "" {
@@ -77,9 +80,9 @@ func captureText(job store.Job) string {
 	return said.String()
 }
 
-// currentTZ is the newest user turn's device zone: the anchor a relative time
+// deviceZone is the newest user turn's device zone: the anchor a relative time
 // resolves against, and the zone the model is told to copy.
-func currentTZ(job store.Job) string {
+func deviceZone(job store.Job) string {
 	for i := len(job.Conversation) - 1; i >= 0; i-- {
 		if turn := job.Conversation[i]; turn.Role == "user" && turn.TZ != "" {
 			return turn.TZ

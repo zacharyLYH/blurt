@@ -100,7 +100,8 @@ func TestSendEncryptsAndSigns(t *testing.T) {
 	}
 	want := Message{Title: "Buy glue", Body: "6:00 PM SGT", Tag: "reminder-42", Navigate: "http://blurt.test/home"}
 	if err := sender.Send(context.Background(), raw, Message{
-		Title: want.Title, Body: want.Body, Tag: want.Tag, Navigate: want.Navigate, TraceID: 42,
+		Title: want.Title, Body: want.Body, Tag: want.Tag, Navigate: want.Navigate,
+		ReminderID: 42,
 	}); err != nil {
 		t.Fatalf("Send: %v", err)
 	}
@@ -128,13 +129,13 @@ func TestSendEncryptsAndSigns(t *testing.T) {
 	if got.Notification != want {
 		t.Fatalf("notification = %+v, want %+v", got.Notification, want)
 	}
-	if got.TraceID != 42 {
-		t.Fatalf("notificationTraceId = %d, want 42", got.TraceID)
+	if got.ReminderID != 42 {
+		t.Fatalf("reminderId = %d, want 42", got.ReminderID)
 	}
 }
 
-// A trace id of zero is left out, matching the worker's null default.
-func TestSendOmitsEmptyTraceID(t *testing.T) {
+// A zero reminder id is left out, matching the worker's null default.
+func TestSendOmitsEmptyFiring(t *testing.T) {
 	device, keys := deviceKeys(t)
 	sender := NewSender(testVAPID(t))
 
@@ -157,8 +158,8 @@ func TestSendOmitsEmptyTraceID(t *testing.T) {
 	if err := json.Unmarshal(decrypt(t, device, keys, body), &decoded); err != nil {
 		t.Fatalf("decode payload: %v", err)
 	}
-	if _, present := decoded["notificationTraceId"]; present {
-		t.Fatalf("payload carried a zero notificationTraceId: %s", decoded)
+	if _, present := decoded["reminderId"]; present {
+		t.Fatalf("payload carried a zero reminderId: %s", decoded)
 	}
 }
 

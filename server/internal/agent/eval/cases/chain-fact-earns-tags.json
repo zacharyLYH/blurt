@@ -1,0 +1,24 @@
+{
+  "name": "chain-fact-earns-tags",
+  "source": "L3:tagger — a fact alone becomes a Memory, and a later capture can reach it",
+  "layer": "L3",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "Kenny only fixes aircons on weekends",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "memories": [
+          {
+            "contains": ["aircon"],
+            "tags_min": 3
+          }
+        ]
+      }
+    }
+  ]
+}

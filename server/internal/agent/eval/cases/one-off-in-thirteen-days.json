@@ -1,0 +1,25 @@
+{
+  "name": "one-off-in-thirteen-days",
+  "source": "prompt:example-4",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me to renew the pass at 9am in 13 days",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["pass"],
+        "datetime": "2026-11-06T09:00",
+        "utc": "2026-11-06T01:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": []
+  }
+}

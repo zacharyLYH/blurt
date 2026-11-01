@@ -15,10 +15,10 @@ import (
 
 	"blurt/internal/agent"
 	"blurt/internal/auth"
+	"blurt/internal/backend"
 	"blurt/internal/capture"
 	"blurt/internal/config"
 	"blurt/internal/db"
-	"blurt/internal/decision"
 	"blurt/internal/emitter"
 	"blurt/internal/httpapi"
 	"blurt/internal/mail"
@@ -57,9 +57,6 @@ func main() {
 		"stt_configured", cfg.STT.URL != "",
 		"stt_model", cfg.STT.Model,
 		"fake_stt", cfg.FakeSTT,
-		"decision_model", cfg.Decision.Model,
-		"gate_on", cfg.Decision.URL != "",
-		"agent_model", cfg.Agent.Model,
 		"fake_agent", cfg.FakeAgent,
 	)
 
@@ -79,15 +76,17 @@ func main() {
 	}
 
 	sessions := store.NewSessionStore(handle.Write, handle.Read)
-	notifier := &push.Notifier{Sessions: sessions, Sender: push.NewSender(cfg.VAPID)}
+	notifier := &push.Fanout{Sessions: sessions, Sender: push.NewSender(cfg.VAPID)}
 	audio, err := capture.NewStore(cfg.DataDir)
 	if err != nil {
 		panic(err)
 	}
+	users := store.NewUserStore(handle.Write, handle.Read)
 	jobs := store.NewJobStore(handle.Write, handle.Read)
 	// The emitter reads the same Reminders the AgentLoop plans against, and the
 	// firing transition is the one write that is its own.
 	reminders := store.NewReminderStore(handle.Write, handle.Read)
+	notifications := store.NewNotificationStore(handle.Write, handle.Read)
 
 	// Both consumer groups must exist before the first producer publishes.
 	boot := context.Background()
@@ -114,54 +113,65 @@ func main() {
 	} else {
 		transcriber = stt.NewHTTP(cfg.STT)
 	}
-	// The gate is advisory, so it stays a nil interface when no decision gateway
-	// is configured and the worker skips it.
-	var gate decision.Decider
-	if cfg.Decision.URL != "" {
-		gate = decision.NewHTTP(cfg.Decision)
-	}
-	transcriptionWorker := &capture.TranscriptionWorker{
-		Jobs: jobs, Audio: audio, STT: transcriber, Pusher: notifier, Model: cfg.STT.Model,
-		Gate: gate, GateModel: cfg.Decision.Model,
-		TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue,
-	}
 
-	// The model rides the same gateway as phonon and laya, so the fake is the
-	// local/e2e escape hatch that keeps the AgentLoop exercisable without one.
-	var model agent.Model
-	if cfg.FakeAgent {
-		slog.Warn("BLURT_FAKE_AGENT is on: the model is scripted — never do this on a public host")
-		model = agent.Fake{}
-	} else {
-		model = agent.NewGateway(cfg.Agent)
-	}
+	// Every user plans on the deployment's one model. The fake is the local/e2e
+	// escape hatch that keeps the AgentLoop exercisable without a provider.
 	loop := &agent.AgentLoop{
 		Store:      jobs,
-		Recall:     agent.Reads{Reminders: reminders, Memories: store.NewMemoryStore(handle.Read)},
-		Model:      model,
+		Recall:     agent.Retrieval{Reminders: reminders, Memories: store.NewMemoryStore(handle.Read)},
 		Pusher:     notifier,
 		AgentQueue: agentQueue,
-		ModelName:  cfg.Agent.Model,
-		MaxTurns:   cfg.Agent.MaxTurns,
 	}
-	agentWorker := &agent.AgentWorker{Jobs: jobs, Loop: loop, AgentQueue: agentQueue}
+	if cfg.FakeAgent {
+		slog.Warn("BLURT_FAKE_AGENT is on: the model is scripted — never do this on a public host")
+		fake := agent.Stage{Model: agent.Fake{}, Name: "fake"}
+		loop.Planner, loop.Prescreen, loop.Tags = fake, fake, fake
+	} else {
+		// The core turn and the cheap stages all ride the configured model ids;
+		// only the core stage lands on the hosted OpenAI-compatible route.
+		loop.Planner = agent.Stage{Name: cfg.Agent.Model, Model: agent.NewModelClient(agent.Settings{
+			Provider: agent.ProviderOpenRouter, URL: cfg.Agent.URL,
+			APIKey: cfg.Agent.APIKey, Model: cfg.Agent.Model,
+		})}
+		helper := func(name string, temperature float64) agent.Stage {
+			return agent.Stage{Name: name, Model: agent.NewModelClient(agent.Settings{
+				Provider: agent.ProviderGateway, URL: cfg.Helper.URL, APIKey: cfg.Helper.APIKey,
+				Model: name, Temperature: temperature,
+			})}
+		}
+		// A screen is a decision, so it runs greedy. The tagger's answer is a guess at
+		// words nobody in the capture said, and heat is what finds them.
+		loop.Prescreen, loop.Tags = helper(cfg.Helper.Prescreen, 0), helper(cfg.Helper.Tags, 1)
+	}
+
+	// The emitter is the only worker that runs on a clock rather than on the user's
+	// last capture: it sweeps for Reminders whose instant has arrived.
+	emit := &emitter.Emitter{Reminders: reminders, Pusher: notifier, Sessions: sessions}
+	if cfg.FakeClockFastForward > 0 {
+		slog.Warn("BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT is on: the emitter's clock is shifted forward — never do this on a public host",
+			"offset", cfg.FakeClockFastForward)
+		emit.Now = func() time.Time { return time.Now().Add(cfg.FakeClockFastForward) }
+	}
+
+	// One assembly owns the surface and the workers, so a test boots what this boots.
+	app := backend.New(backend.Deps{
+		DB: handle, Users: users, Jobs: jobs, Sessions: sessions, Reminders: reminders,
+		Notifications: notifications,
+		Audio:         audio,
+		Queues: &queue.Queues{
+			TranscriptionQueue: transcriptionQueue,
+			AgentQueue:         agentQueue,
+		},
+		Loop: loop, STT: transcriber, STTModel: cfg.STT.Model,
+		Pins:   auth.NewPinStore(5*time.Minute, fixedPIN),
+		Mailer: mailer, Pusher: notifier, Emitter: emit,
+		VAPIDPublicKey: cfg.VAPID.PublicKey,
+		AllowedOrigins: cfg.PublicOrigins,
+	})
 
 	srv := &http.Server{
-		Addr: cfg.Bind,
-		Handler: httpapi.New(httpapi.Deps{
-			DB:             handle.Write,
-			Users:          store.NewUserStore(handle.Write, handle.Read),
-			Sessions:       sessions,
-			Pins:           auth.NewPinStore(5*time.Minute, fixedPIN),
-			Mailer:         mailer,
-			Pusher:         notifier,
-			Jobs:           jobs,
-			Reminders:      reminders,
-			Audio:          audio,
-			Queues:         &queue.Queues{TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue},
-			VAPIDPublicKey: cfg.VAPID.PublicKey,
-			AllowedOrigins: cfg.PublicOrigins,
-		}),
+		Addr:              cfg.Bind,
+		Handler:           app.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
@@ -171,27 +181,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	go transcriptionWorker.Run(ctx)
-	go agentWorker.Run(ctx)
-	go (&queue.Claimer{
-		Stream: transcriptionQueue, Jobs: jobs, Stage: store.TranscriptionStage,
-		Fallback: capture.FallbackMessage, MinIdle: 360 * time.Second,
-	}).Run(ctx)
-	go (&queue.Claimer{
-		Stream: agentQueue, Jobs: jobs, Stage: store.AgentStage,
-		Fallback: agent.FallbackMessage, MinIdle: 1080 * time.Second,
-	}).Run(ctx)
-	go (&queue.Sweeper{Jobs: jobs, TranscriptionQueue: transcriptionQueue, AgentQueue: agentQueue}).Run(ctx)
-
-	// The emitter is the only worker that runs on a clock rather than on the user's
-	// last capture: it sweeps for Reminders whose instant has arrived.
-	emit := &emitter.Emitter{Reminders: reminders, Pusher: notifier}
-	if cfg.FakeClock > 0 {
-		slog.Warn("BLURT_FAKE_CLOCK is on: the emitter's clock is shifted forward — never do this on a public host",
-			"offset", cfg.FakeClock)
-		emit.Now = func() time.Time { return time.Now().Add(cfg.FakeClock) }
-	}
-	go emit.Run(ctx)
+	go app.Run(ctx)
 
 	go func() {
 		slog.Info("listening", "addr", cfg.Bind)

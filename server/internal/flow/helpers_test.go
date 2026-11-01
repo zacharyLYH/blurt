@@ -121,7 +121,7 @@ func status(want string) func(store.Job) bool {
 }
 
 // recalled reports whether a planned turn was handed one Memory, by its text.
-func recalled(in agent.Input, text string) bool {
+func recalled(in agent.PlannerInput, text string) bool {
 	for _, memory := range in.Remembered {
 		if memory.Text == text {
 			return true
@@ -256,15 +256,15 @@ func (p *pump) tagged(t *testing.T, text string) string {
 
 // plannedFor returns the turn the loop planned for one capture, so a retrieval
 // assertion reads as one line instead of a scan over every run.
-func (p *pump) plannedFor(t *testing.T, capture string) agent.Input {
+func (p *pump) plannedFor(t *testing.T, capture string) agent.PlannerInput {
 	t.Helper()
 	for _, in := range p.model.planned() {
-		if captureOf(in) == capture {
+		if latestCapture(in) == capture {
 			return in
 		}
 	}
 	t.Fatalf("no run was planned for capture %q", capture)
-	return agent.Input{}
+	return agent.PlannerInput{}
 }
 
 // pending reads the messages a stream has delivered but not acknowledged — the
@@ -312,25 +312,31 @@ func (p *pump) user(t *testing.T, name, email string) int64 {
 
 // answer keys a turn to the capture's own words, so two Jobs in flight each get
 // the turn they were meant to get.
-func (p *pump) answer(capture string, turn agent.Turn) *pump {
+func (p *pump) answer(capture string, turn agent.Answer) *pump {
 	p.model.mu.Lock()
 	defer p.model.mu.Unlock()
 	if p.model.byText == nil {
-		p.model.byText = map[string]agent.Turn{}
+		p.model.byText = map[string]agent.Answer{}
 	}
 	p.model.byText[capture] = turn
 	return p
 }
 
+// askTurn is the answer that asks rather than commits: the one the linter leaves alone, so
+// a clarification flow scripts it where the model cannot place the capture.
+func askTurn(question string) agent.Answer {
+	return agent.Answer{Kind: agent.AnswerQuestion, Question: question}
+}
+
 // reminderTurn is the shape a clear capture commits. Its "tomorrow at Npm" phrase
-// resolves against the pinned clock, so the write carries the zone, date and time
-// MissingFields needs before it will commit.
-func reminderTurn(text, phrase string) agent.Turn {
+// resolves against the pinned clock, so the record carries the zone, date and time the
+// linter needs before it will commit.
+func reminderTurn(text, phrase string) agent.Answer {
 	hour, err := strconv.Atoi(strings.TrimSuffix(phrase[strings.LastIndexByte(phrase, ' ')+1:], "pm"))
 	if err != nil {
 		panic("flow: reminderTurn phrase must end in an evening hour, got " + phrase)
 	}
-	return agent.Turn{Writes: []agent.Write{{
+	return agent.Answer{Kind: agent.AnswerRecords, Records: []agent.Record{{
 		Kind: agent.KindReminder, Text: text, Zone: "Asia/Singapore",
 		Date: pinned.AddDate(0, 0, 1).Format("2006-01-02"), Time: strconv.Itoa(hour+12) + ":00",
 		Recurrence: agent.RecurrenceNone, Evidence: phrase,
@@ -339,8 +345,8 @@ func reminderTurn(text, phrase string) agent.Turn {
 
 // memoryTurn is the shape a fact commits: text and nothing else, because a Memory is
 // context for a later Reminder rather than an interruption of its own.
-func memoryTurn(text string) agent.Turn {
-	return agent.Turn{Writes: []agent.Write{{Kind: agent.KindMemory, Text: text}}}
+func memoryTurn(text string) agent.Answer {
+	return agent.Answer{Kind: agent.AnswerRecords, Records: []agent.Record{{Kind: agent.KindMemory, Text: text}}}
 }
 
 // httpOrigin must be in the API's allowed origins: the CSRF guard rejects unsafe
@@ -361,6 +367,8 @@ func (p *pump) api(t *testing.T, email string) (*http.Client, string) {
 		Jobs:           p.jobs,
 		Audio:          p.audio,
 		Queues:         &queue.Queues{TranscriptionQueue: p.transcription, AgentQueue: p.agent},
+		Reminders:      store.NewReminderStore(p.handle.Write, p.handle.Read),
+		Notifications:  store.NewNotificationStore(p.handle.Write, p.handle.Read),
 		AllowedOrigins: []string{httpOrigin},
 	}))
 	t.Cleanup(server.Close)

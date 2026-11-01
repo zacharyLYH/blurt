@@ -1,8 +1,8 @@
 // The clock is the one thing an emitter cannot be exercised without: a reminder a day out
 // only fires when a day passes. Rather than wait, this restarts the server with the emitter's
-// clock (BLURT_FAKE_CLOCK) set past that horizon — which is also the only way to prove the
-// wiring, because a fresh process has to pick up what the last one left due and must not ring
-// what it already rang.
+// clock (BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT) set past that horizon — which is also the only
+// way to prove the wiring, because a fresh process has to pick up what the last one left due
+// and must not ring what it already rang.
 //
 // It runs against the same stack as every other spec and puts the clock back before it ends,
 // so the run's own file order does not matter.
@@ -31,7 +31,11 @@ const COMPOSE = ['-f', '../docker-compose.yml', '-f', '../docker-compose.e2e.yml
 function recreate(clock: string): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile('docker', ['compose', ...COMPOSE, 'up', '-d', '--force-recreate', 'server', 'web'], {
-      env: { ...process.env, BLURT_FAKE_CLOCK: clock, BLURT_WEB_PORT: String(WEB_PORT) },
+      env: {
+        ...process.env,
+        BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT: clock,
+        BLURT_WEB_PORT: String(WEB_PORT),
+      },
     }, (err, _stdout, stderr) => {
       if (err) reject(new Error(`${err.message}\n${stderr}`))
       else resolve()

@@ -49,8 +49,9 @@ self.addEventListener('push', (event) => {
       navigate: typeof notification.navigate === 'string'
         ? notification.navigate
         : self.location.origin + '/home',
-      // The Trace row id of this firing attempt, for notification feedback.
-      notificationTraceId: payload?.notificationTraceId ?? null,
+      // The Reminder this push is about. The page and its feedback use it, never a
+      // Trace row.
+      reminderId: typeof payload?.reminderId === 'number' ? payload.reminderId : null,
     },
   }))
 })

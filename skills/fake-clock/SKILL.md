@@ -22,10 +22,10 @@ exercised by waiting, so the clock has to move. Two of the obvious moves do not 
    downtime catch-up, restart, spacing, bad rows.
 2. **A dev-only offset from the environment**, applied where the clock is read, mirroring the
    other escape hatches (`BLURT_FAKE_PIN`, `BLURT_FAKE_STT`, `BLURT_FAKE_AGENT`):
-   `config.FakeClock` → `main.go` wraps `time.Now` for the emitter only, and logs a warning
-   because it is fatal to leave on in production. Interpolate it in the compose file
-   (`BLURT_FAKE_CLOCK: "${BLURT_FAKE_CLOCK:-90s}"`) so one spec can override it for its own run
-   while every other run keeps the default.
+   `config.FakeClockFastForward` → `main.go` wraps `time.Now` for the emitter only, and logs
+   a warning because it is fatal to leave on in production. Interpolate it in the compose file
+   (`BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT: "${BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT:-90s}"`) so
+   one spec can override it for its own run while every other run keeps the default.
 3. **Restart the container with the offset raised.** This is also the only way to test the
    wiring rather than the logic: a fresh process must pick up what the last one left due, and
    must not re-fire what it already fired. Two traps:

@@ -23,16 +23,12 @@ const (
 	// minSessionSecretLen keeps opaque session tokens unguessable even if the
 	// signing material is reused for hashing.
 	minSessionSecretLen = 32
-	// encryptionKeyLen is the AES-256 key size for model API keys at rest.
-	encryptionKeyLen = 32
 	// vapidPublicKeyLen is an uncompressed P-256 point (0x04 + X + Y).
 	vapidPublicKeyLen = 65
 	// vapidPrivateKeyLen is a P-256 scalar.
 	vapidPrivateKeyLen = 32
-	// DefaultMaxTurns is the AgentLoop's starting budget from the PRD, tuned
-	// from Trace data later. It is exported so a loop built without one still
-	// shares this single source.
-	DefaultMaxTurns = 5
+	// defaultAgentURL is the OpenAI-compatible route the core planner speaks.
+	defaultAgentURL = "https://openrouter.ai/api/v1/chat/completions"
 )
 
 // SMTP describes the outbound mailbox that sends login PINs.
@@ -60,29 +56,24 @@ type STT struct {
 	Model  string
 }
 
-// Decision is the laya model Blurt asks for typed decisions; today that is the
-// transcript-quality gate. It shares the STT gateway, so the URL and key fall
-// back to the STT ones and only the model differs.
-type Decision struct {
+// Helper is the home gateway the two cheap stages ask: prescreening and the memory tagger.
+// They share the gateway that serves phonon, so the URL and key fall back to the STT ones and
+// only the model differs per stage. The core turn is the one that rides the deployment's
+// hosted provider.
+type Helper struct {
+	URL       string
+	APIKey    string
+	Prescreen string // prescreening
+	Tags      string // memory tags
+}
+
+// Agent is the one core planner every user plans on. It is deployment
+// configuration, not user data.
+type Agent struct {
 	URL    string
 	APIKey string
 	Model  string
 }
-
-// Agent is the model Blurt asks to turn a capture into records. The gateway's
-// /v1/infer serves many chat models, so unlike phonon and laya the model id has
-// no default and must be named. MaxTurns is the AgentLoop's per-Job budget from
-// the PRD.
-type Agent struct {
-	URL      string
-	APIKey   string
-	Model    string
-	MaxTurns int
-}
-
-// fakeSTTModes are the dev failure-injection modes. They mirror BLURT_FAKE_PIN:
-// useful locally and in e2e, fatal on a public host.
-var fakeSTTModes = map[string]bool{"ok": true, "error": true, "illegible": true, "flaky": true}
 
 // Config is the fully resolved runtime configuration.
 type Config struct {
@@ -91,7 +82,6 @@ type Config struct {
 	Bind          string   // listen address, e.g. :8080
 	PublicOrigins []string // allowed browser origins: public host plus localhost
 	SessionSecret string
-	EncryptionKey []byte
 	// FakePIN is dev only: login accepts a fixed PIN and no mail is sent, so a
 	// local stack needs no mailbox. Never set it on a public host.
 	FakePIN bool
@@ -103,20 +93,18 @@ type Config struct {
 	SMTP    SMTP
 	VAPID   VAPID
 	STT     STT
-	// Decision is the typed-decision gateway. An empty URL turns the gate off
-	// rather than failing boot: it is an advisory filter, not a hard dependency.
-	Decision Decision
 	// FakeAgent is dev only: a scripted model stands in so the AgentLoop can be
-	// exercised without the gateway. Never set it on a public host.
+	// exercised without a provider. Never set it on a public host.
 	FakeAgent bool
-	// FakeClock is dev only: the emitter's clock starts this far ahead, so a spec can
-	// watch a long-horizon Reminder come due without waiting for the horizon. Never
-	// set it on a public host.
-	FakeClock time.Duration
-	// Agent is the model. Unlike the gate it is not advisory — a capture with no
-	// model never becomes a record — so a URL and a model are required unless the
-	// fake is on.
+	// Agent is the core planner every user plans on.
 	Agent Agent
+	// Helper is the local gateway for the two cheap stages. It is required unless
+	// the fake is on, which is how the local/e2e stack runs.
+	Helper Helper
+	// FakeClockFastForward is dev only: the emitter's clock starts this far ahead, so a
+	// spec can watch a long-horizon Reminder come due without waiting for the horizon.
+	// Never set it on a public host.
+	FakeClockFastForward time.Duration
 }
 
 // Load reads the environment and returns every problem it finds at once.
@@ -141,15 +129,6 @@ func Load() (*Config, error) {
 
 	if len(cfg.SessionSecret) > 0 && len(cfg.SessionSecret) < minSessionSecretLen {
 		problems = append(problems, fmt.Sprintf("BLURT_SESSION_SECRET must be at least %d characters", minSessionSecretLen))
-	}
-
-	if raw := req("BLURT_ENCRYPTION_KEY"); raw != "" {
-		key, err := base64.StdEncoding.DecodeString(raw)
-		if err != nil || len(key) != encryptionKeyLen {
-			problems = append(problems, fmt.Sprintf("BLURT_ENCRYPTION_KEY must be base64 of exactly %d bytes", encryptionKeyLen))
-		} else {
-			cfg.EncryptionKey = key
-		}
 	}
 
 	// SMTP is optional here: the server boots without mail so tests and tools
@@ -193,61 +172,60 @@ func Load() (*Config, error) {
 		problems = append(problems, "BLURT_STT_URL "+err.Error())
 	}
 
-	// laya shares the STT gateway, so only the model is required to differ. With
-	// no URL the gate is simply skipped, which is how a fake-STT stack runs.
-	cfg.Decision = Decision{
-		URL:    opt("BLURT_DECISION_URL"),
-		APIKey: opt("BLURT_DECISION_API_KEY"),
-		Model:  opt("BLURT_DECISION_MODEL"),
-	}
-	if cfg.Decision.Model == "" {
-		cfg.Decision.Model = "laya"
-	}
-	if cfg.Decision.URL == "" {
-		cfg.Decision.URL = cfg.STT.URL
-	}
-	if cfg.Decision.APIKey == "" {
-		cfg.Decision.APIKey = cfg.STT.APIKey
-	}
-	if cfg.Decision.URL != "" {
-		if err := checkHTTPURL(cfg.Decision.URL); err != nil {
-			problems = append(problems, "BLURT_DECISION_URL "+err.Error())
-		}
-	}
-
-	// The model rides the same gateway. It is not advisory: with no URL the
-	// capture path would accept Jobs it can never resolve, so this one is
-	// required unless the fake is on.
+	// The core planner is deployment configuration: every user plans on the same
+	// model and key, and a capture with no model could never become a record.
 	cfg.FakeAgent = envBool(&problems, "BLURT_FAKE_AGENT")
-	cfg.FakeClock = envDuration(&problems, "BLURT_FAKE_CLOCK")
 	cfg.Agent = Agent{
-		URL:      opt("BLURT_AGENT_URL"),
-		APIKey:   opt("BLURT_AGENT_API_KEY"),
-		Model:    opt("BLURT_AGENT_MODEL"),
-		MaxTurns: DefaultMaxTurns,
+		URL:    opt("BLURT_AGENT_URL"),
+		APIKey: opt("BLURT_AGENT_API_KEY"),
+		Model:  opt("BLURT_AGENT_MODEL"),
 	}
 	if cfg.Agent.URL == "" {
-		cfg.Agent.URL = cfg.STT.URL
+		cfg.Agent.URL = defaultAgentURL
 	}
-	if cfg.Agent.APIKey == "" {
-		cfg.Agent.APIKey = cfg.STT.APIKey
-	}
-	if cfg.Agent.URL == "" {
-		if !cfg.FakeAgent {
-			problems = append(problems, "BLURT_AGENT_URL is required unless BLURT_FAKE_AGENT is true")
-		}
-	} else if err := checkHTTPURL(cfg.Agent.URL); err != nil {
+	if err := checkHTTPURL(cfg.Agent.URL); err != nil {
 		problems = append(problems, "BLURT_AGENT_URL "+err.Error())
 	}
-	if cfg.Agent.Model == "" && !cfg.FakeAgent {
-		problems = append(problems, "BLURT_AGENT_MODEL is required unless BLURT_FAKE_AGENT is true")
+	if !cfg.FakeAgent {
+		if cfg.Agent.APIKey == "" {
+			problems = append(problems, "BLURT_AGENT_API_KEY is required unless BLURT_FAKE_AGENT is true")
+		}
+		if cfg.Agent.Model == "" {
+			problems = append(problems, "BLURT_AGENT_MODEL is required unless BLURT_FAKE_AGENT is true")
+		}
 	}
-	if raw := opt("BLURT_AGENT_MAX_TURNS"); raw != "" {
-		turns, err := strconv.Atoi(raw)
-		if err != nil || turns < 1 {
-			problems = append(problems, "BLURT_AGENT_MAX_TURNS must be a positive integer")
-		} else {
-			cfg.Agent.MaxTurns = turns
+	cfg.FakeClockFastForward = envDuration(&problems, "BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT")
+
+	// The cheap stages ride the home gateway. They are not advisory: a capture that
+	// cannot be screened or checked could never be trusted, so the gateway and its
+	// three models are required unless the fake is on.
+	cfg.Helper = Helper{
+		URL:       opt("BLURT_AUX_URL"),
+		APIKey:    opt("BLURT_AUX_API_KEY"),
+		Prescreen: opt("BLURT_PRESCREEN_MODEL"),
+		Tags:      opt("BLURT_TAGS_MODEL"),
+	}
+	if cfg.Helper.URL == "" {
+		cfg.Helper.URL = cfg.STT.URL
+	}
+	if cfg.Helper.APIKey == "" {
+		cfg.Helper.APIKey = cfg.STT.APIKey
+	}
+	if cfg.Helper.URL == "" {
+		if !cfg.FakeAgent {
+			problems = append(problems, "BLURT_AUX_URL is required unless BLURT_FAKE_AGENT is true")
+		}
+	} else if err := checkHTTPURL(cfg.Helper.URL); err != nil {
+		problems = append(problems, "BLURT_AUX_URL "+err.Error())
+	}
+	if !cfg.FakeAgent {
+		for _, key := range []struct{ name, value string }{
+			{"BLURT_PRESCREEN_MODEL", cfg.Helper.Prescreen},
+			{"BLURT_TAGS_MODEL", cfg.Helper.Tags},
+		} {
+			if key.value == "" {
+				problems = append(problems, key.name+" is required unless BLURT_FAKE_AGENT is true")
+			}
 		}
 	}
 

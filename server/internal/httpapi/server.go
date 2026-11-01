@@ -3,7 +3,6 @@
 package httpapi
 
 import (
-	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -29,13 +28,6 @@ type PINMailer interface {
 	SendPIN(to, pin string) error
 }
 
-// Pusher delivers one notification to every device a user is signed in on. An
-// interface so the HTTP layer can be tested without a relay. Nil is valid: the
-// send endpoint then reports that sending is not configured.
-type Pusher interface {
-	NotifyUser(ctx context.Context, userID int64, msg push.Message) (push.Result, error)
-}
-
 // Deps is everything the handlers need.
 type Deps struct {
 	DB       *sql.DB
@@ -43,8 +35,9 @@ type Deps struct {
 	Sessions *store.SessionStore
 	Pins     *auth.PinStore
 	Mailer   PINMailer
-	// Pusher sends notifications to the user's devices.
-	Pusher Pusher
+	// Pusher sends notifications to the user's devices. Nil is valid: the send
+	// endpoint then reports that sending is not configured.
+	Pusher push.Notifier
 	// Jobs and Audio make up the capture path. Nil is valid for tests that do
 	// not exercise it; the handlers answer 501 instead of panicking.
 	Jobs   *store.JobStore
@@ -52,6 +45,9 @@ type Deps struct {
 	Queues *queue.Queues
 	// Reminders backs the Reminders page. Nil is valid for the same reason.
 	Reminders *store.ReminderStore
+	// Notifications backs the page a push opens and the calendar. Nil is valid for
+	// the same reason.
+	Notifications *store.NotificationStore
 	// VAPIDPublicKey is handed to browsers when they create a push
 	// subscription. The private half stays inside the sender.
 	VAPIDPublicKey string
@@ -60,6 +56,7 @@ type Deps struct {
 	AllowedOrigins []string
 }
 
+// Server carries the handler's dependencies.
 type Server struct {
 	Deps
 }
@@ -86,6 +83,13 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/reminders", s.requireUser(s.listReminders))
 	mux.HandleFunc("POST /api/reminders/{reminderId}/cancel", s.requireUser(s.cancelReminder))
 	mux.HandleFunc("/api/reminders/{reminderId}/cancel", methodNotAllowed(http.MethodPost))
+	// A notification is a Reminder the poll found due: the page opens it by id and
+	// feedback is a new row per submission.
+	mux.HandleFunc("GET /api/notifications", s.requireUser(s.listNotificationsForMonth))
+	mux.HandleFunc("GET /api/notifications/{reminderId}", s.requireUser(s.getNotification))
+	mux.HandleFunc("POST /api/notifications/{reminderId}/feedback", s.requireUser(s.submitNotificationFeedback))
+	mux.HandleFunc("/api/notifications/{reminderId}", methodNotAllowed(http.MethodGet))
+	mux.HandleFunc("/api/notifications/{reminderId}/feedback", methodNotAllowed(http.MethodPost))
 	// The clarification reply is one more turn in the same Conversation, so it
 	// rides the Job rather than opening a workflow of its own.
 	mux.HandleFunc("POST /api/jobs/{jobId}/messages", s.requireUser(s.replyToJob))
@@ -111,6 +115,7 @@ var knownRoutes = map[string]string{
 	"/api/push":             http.MethodPost,
 	"/api/jobs":             http.MethodGet + ", " + http.MethodPost,
 	"/api/reminders":        http.MethodGet,
+	"/api/notifications":    http.MethodGet,
 }
 
 // csrf requires an allowed Origin (or Referer) on unsafe methods. Cookies
@@ -210,6 +215,18 @@ func methodNotAllowed(allowed string) http.HandlerFunc {
 		w.Header().Set("Allow", allowed)
 		writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "Method not allowed.")
 	}
+}
+
+// unavailable answers a handler whose dependency is missing — the test servers, and a
+// stack running with capture or push off — instead of panicking. It reports whether it
+// answered, so a caller is one line: if unavailable(w, s.Jobs == nil, "Capture is not
+// configured.") { return }.
+func unavailable(w http.ResponseWriter, missing bool, message string) bool {
+	if !missing {
+		return false
+	}
+	writeError(w, http.StatusNotImplemented, "not_implemented", message)
+	return true
 }
 
 func writeError(w http.ResponseWriter, code int, slug, message string) {

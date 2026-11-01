@@ -4,51 +4,9 @@ import (
 	"context"
 	"strings"
 	"testing"
-	"time"
 
 	"blurt/internal/db"
 )
-
-// The PRD's retrieval window is built on this query: bounded on both sides and
-// ordered by the derived instant, never by the human time.
-func TestReminderWindowBoundsAndOrders(t *testing.T) {
-	_, handle, userID := newJobStack(t)
-	ctx := context.Background()
-
-	seed := []struct {
-		text string
-		emit string
-	}{
-		{"twenty four days before", "2026-10-01T09:00:00Z"},
-		{"just before the window opens", "2026-10-23T11:00:00Z"},
-		{"yesterday", "2026-10-24T10:00:00Z"},
-		{"almost a fortnight out", "2026-11-08T09:00:00Z"},
-		{"fifteen days after", "2026-11-09T09:00:00Z"},
-	}
-	for _, row := range seed {
-		if err := insertReminder(ctx, handle.Write, Reminder{
-			UserID: userID, Text: row.text, Timezone: "Asia/Singapore",
-			LocalDateTime: "2026-10-25T09:00", EmitAtUtc: row.emit,
-		}); err != nil {
-			t.Fatalf("seed %s: %v", row.text, err)
-		}
-	}
-
-	now := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
-	found, err := NewReminderStore(handle.Write, handle.Read).Window(ctx, userID, now.Add(-48*time.Hour), now.Add(14*24*time.Hour))
-	if err != nil {
-		t.Fatalf("window: %v", err)
-	}
-	if len(found) != 2 {
-		t.Fatalf("window returned %d reminders, want the 2 inside it", len(found))
-	}
-	if found[0].Text != "yesterday" || found[1].Text != "almost a fortnight out" {
-		t.Fatalf("window order = %q, %q", found[0].Text, found[1].Text)
-	}
-	if found[1].Timezone != "Asia/Singapore" || found[1].LocalDateTime != "2026-10-25T09:00" {
-		t.Fatalf("stored human time = %+v, want it read back verbatim", found[1])
-	}
-}
 
 // Questionnaire answers are already Memory rows, so they must be retrievable before
 // the agent ever writes one of its own. This is the test that proves the FTS index

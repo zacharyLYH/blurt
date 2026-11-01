@@ -1,0 +1,35 @@
+{
+  "name": "chain-seeded-trip-then-something-in-it",
+  "source": "prd:travel — the same rule with the trip already in the database, so no first turn to blame",
+  "layer": "L3",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {
+    "memories": [
+      {
+        "text": "I'm in Tokyo from Nov 2 to Nov 6",
+        "tags": "travel,tokyo,japan,trip,november"
+      }
+    ]
+  },
+  "steps": [
+    {
+      "capture": "remind me to buy snacks on Nov 4 at 6pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["snack"],
+            "datetime": "2026-11-04T18:00",
+            "utc": "2026-11-04T09:00:00Z",
+            "zone": "Asia/Tokyo",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    }
+  ]
+}

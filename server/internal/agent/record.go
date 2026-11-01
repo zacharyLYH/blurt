@@ -10,54 +10,6 @@ import (
 // no offset. UTC is derived from this plus the zone, never the other way round.
 const localLayout = "2006-01-02T15:04"
 
-// reminderFor turns a write MissingFields accepted into the row Blurt stores: a
-// one-off keeps its local time and derived instant, a repeat keeps the rule its
-// next instant is derived from. now must already be in loc.
-func reminderFor(write Write, now time.Time, loc *time.Location) (store.Reminder, bool) {
-	reminder := store.Reminder{Text: write.Text, Timezone: write.Zone}
-	hour, minute, _ := parseTime(write.Time)
-	if write.Recurrence == RecurrenceNone {
-		date, _ := parseDate(write.Date)
-		at := localTime(date.Year(), date.Month(), date.Day(), hour, minute, loc)
-		reminder.LocalDateTime = at.Format(localLayout)
-		reminder.EmitAtUtc = at.UTC().Format(time.RFC3339)
-		return reminder, true
-	}
-	rule, at, ok := ruleFor(write, now, loc)
-	if !ok {
-		return store.Reminder{}, false
-	}
-	reminder.Rule, reminder.NextEmitAtUtc = &rule, at.UTC().Format(time.RFC3339)
-	return reminder, true
-}
-
-// ruleFor is the pattern a recurring write repeats on, with the calendar parts
-// taken from the first occurrence the model resolved: the weekday a weekly rule
-// lands on, the day a monthly one does, the month and day a yearly one does.
-// now must already be in loc.
-func ruleFor(write Write, now time.Time, loc *time.Location) (store.Rule, time.Time, bool) {
-	hour, minute, ok := parseTime(write.Time)
-	if !ok {
-		return store.Rule{}, time.Time{}, false
-	}
-	rule := store.Rule{Frequency: write.Recurrence, Time: write.Time}
-	if date, ok := parseDate(write.Date); ok {
-		switch rule.Frequency {
-		case store.FrequencyWeekly:
-			rule.Weekday = int(date.Weekday())
-		case store.FrequencyMonthly:
-			rule.Day = date.Day()
-		case store.FrequencyYearly:
-			rule.Month, rule.Day = int(date.Month()), date.Day()
-		}
-	}
-	at := nextEmit(rule, write.Date, now, hour, minute, loc)
-	if at.IsZero() {
-		return store.Rule{}, time.Time{}, false
-	}
-	return rule, at, true
-}
-
 // NextEmit is the first instant at or after now that a rule fires, in the zone the
 // Reminder stores. It is exported for the one caller outside this package: the
 // emitter, which advances a repeat with the same derivation the creation path used.
@@ -70,6 +22,55 @@ func NextEmit(rule store.Rule, now time.Time, loc *time.Location) (time.Time, bo
 	}
 	at := nextEmit(rule, "", now, hour, minute, loc)
 	return at, !at.IsZero()
+}
+
+// ReminderFor turns a record MissingFields accepted into the row Blurt stores. Exported because
+// the L1 eval seeds rows with the product’s own derivation, not a second one. a
+// one-off keeps its local notification time and derived instant, a repeat keeps the
+// rule its next instant is derived from. now must already be in loc.
+func ReminderFor(record Record, now time.Time, loc *time.Location) (store.Reminder, bool) {
+	reminder := store.Reminder{Text: record.Text, Timezone: record.Zone}
+	hour, minute, _ := parseTime(record.Time)
+	if record.Recurrence == RecurrenceNone {
+		date, _ := parseDate(record.Date)
+		at := localTime(date.Year(), date.Month(), date.Day(), hour, minute, loc)
+		reminder.LocalDateTime = at.Format(localLayout)
+		reminder.EmitAtUtc = at.UTC().Format(time.RFC3339)
+		return reminder, true
+	}
+	rule, at, ok := ruleFor(record, now, loc)
+	if !ok {
+		return store.Reminder{}, false
+	}
+	reminder.Rule, reminder.NextEmitAtUtc = &rule, at.UTC().Format(time.RFC3339)
+	return reminder, true
+}
+
+// ruleFor is the pattern a recurring record repeats on, with the calendar parts
+// taken from the first occurrence the model resolved: the weekday a weekly rule
+// lands on, the day a monthly one does, the month and day a yearly one does.
+// now must already be in loc.
+func ruleFor(record Record, now time.Time, loc *time.Location) (store.Rule, time.Time, bool) {
+	hour, minute, ok := parseTime(record.Time)
+	if !ok {
+		return store.Rule{}, time.Time{}, false
+	}
+	rule := store.Rule{Frequency: record.Recurrence, Time: record.Time}
+	if date, ok := parseDate(record.Date); ok {
+		switch rule.Frequency {
+		case store.FrequencyWeekly:
+			rule.Weekday = int(date.Weekday())
+		case store.FrequencyMonthly:
+			rule.Day = date.Day()
+		case store.FrequencyYearly:
+			rule.Month, rule.Day = int(date.Month()), date.Day()
+		}
+	}
+	at := nextEmit(rule, record.Date, now, hour, minute, loc)
+	if at.IsZero() {
+		return store.Rule{}, time.Time{}, false
+	}
+	return rule, at, true
 }
 
 // nextEmit is the first instant at or after now that the rule fires. The first

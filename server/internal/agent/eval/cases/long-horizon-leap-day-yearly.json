@@ -1,0 +1,30 @@
+{
+  "name": "long-horizon-leap-day-yearly",
+  "source": "branch:recurrence:leap-day",
+  "layer": "L1",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me every year on 29 february at 8am to check the savings plan",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["savings"],
+        "utc": "2028-02-29T00:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "yearly",
+        "status": "resolved",
+        "rule": {
+          "frequency": "yearly",
+          "time": "08:00",
+          "month": 2,
+          "day": 29
+        }
+      }
+    ],
+    "memories": []
+  }
+}

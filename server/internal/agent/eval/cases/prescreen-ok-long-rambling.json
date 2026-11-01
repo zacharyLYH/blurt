@@ -1,0 +1,11 @@
+{
+  "name": "prescreen-ok-long-rambling",
+  "source": "branch:false-refusal:run-on",
+  "layer": "L2",
+  "size": "medium",
+  "stage": "prescreen",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "capture": "so anyway I was thinking about the trip and the thing is I still have not booked anything and the flight prices keep going up so remind me to check flights tonight at 9 before I forget again and also I need to renew my passport but that is a separate thing",
+  "expect": {"helper": {"verdict": "ok"}}
+}

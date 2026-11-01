@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -19,9 +20,13 @@ const (
 	ReminderCancelled = "cancelled"
 )
 
-// windowLimit caps the retrieval window so a busy user's fortnight of reminders
-// cannot make one model prompt unbounded.
-const windowLimit = 20
+// rowLimit caps one text lookup, so a busy user's rows cannot make one model prompt
+// unbounded.
+const rowLimit = 20
+
+// maxQueryWords caps one lookup's ORs: a sentence of a query is a handful of words worth
+// searching, not a page of them.
+const maxQueryWords = 5
 
 // Rule frequencies. A rule keeps only the calendar parts its frequency needs.
 const (
@@ -45,9 +50,10 @@ type Rule struct {
 }
 
 // Reminder is one thing to interrupt the user about. Timezone and LocalDateTime
-// are the human truth the model supplied; EmitAtUtc is derived from them by
-// the server and is rebuildable, which is why the UTC column is never the
-// source. A recurring Reminder's LocalDateTime is empty and its Rule lives in
+// are the local notification time the model supplied; EmitAtUtc is the same
+// instant in UTC, derived by the server and rebuildable, which is why the UTC
+// column is never the source. The event's own clock, when it differs, lives in
+// Text. A recurring Reminder's LocalDateTime is empty and its Rule lives in
 // RecurringReminder; the stab has neither.
 type Reminder struct {
 	ReminderID    int64  `json:"reminderId"`
@@ -72,6 +78,155 @@ type Reminder struct {
 type ReminderStore struct {
 	write *sql.DB
 	read  *sql.DB
+}
+
+// NewReminderStore takes the writer and the read pool beside it.
+func NewReminderStore(write, read *sql.DB) *ReminderStore {
+	return &ReminderStore{write: write, read: read}
+}
+
+// reminderColumns is the row shape every Reminder read shares: the Reminder's own
+// columns, the repeat's rule and next occurrence beside them, and the Job the
+// Reminder came from. A repeat leaves its own instant columns null, so the instant
+// it is about is the rule's next occurrence and the COALESCE is what reads it —
+// without that a repeat would look like it never comes due.
+const reminderColumns = `r.ReminderId, r.UserId, r.Text, r.Timezone, COALESCE(r.LocalDateTime, ''),
+		COALESCE(r.EmitAtUtc, ''), r.Status, r.CreatedAt, COALESCE(c.NextEmitAtUtc, ''), COALESCE(c.Rule, ''),
+		COALESCE(r.SourceJobId, 0)`
+
+// scanReminders reads the columns above. A repeat comes back with its rule decoded,
+// so a caller can tell a rule from a one-off without reading the extension table
+// itself.
+func scanReminders(rows *sql.Rows) ([]Reminder, error) {
+	reminders := []Reminder{}
+	for rows.Next() {
+		var reminder Reminder
+		var rule string
+		if err := rows.Scan(&reminder.ReminderID, &reminder.UserID, &reminder.Text, &reminder.Timezone,
+			&reminder.LocalDateTime, &reminder.EmitAtUtc, &reminder.Status, &reminder.CreatedAt,
+			&reminder.NextEmitAtUtc, &rule, &reminder.SourceJobID); err != nil {
+			return nil, fmt.Errorf("scan reminder: %w", err)
+		}
+		if rule != "" {
+			if err := json.Unmarshal([]byte(rule), &reminder.Rule); err != nil {
+				return nil, fmt.Errorf("decode rule: %w", err)
+			}
+		}
+		reminders = append(reminders, reminder)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read reminders: %w", err)
+	}
+	return reminders, nil
+}
+
+// Search is the reminder lookup the agent's find_reminders tool runs: the user's own rows
+// whose text carries any word of the query, soonest first. It is LIKE rather than BM25 because a
+// Reminder is not indexed, and a leading-wildcard LIKE cannot use an index either way: the owner
+// is what bounds the read, and idx_reminder_window's leading column is what serves that
+// (`SEARCH r USING INDEX idx_reminder_window (UserId=?)`), so a scan is over one user's own rows.
+// The model reads the five rows and decides which one a capture means, so recall matters more
+// than ranking.
+func (s *ReminderStore) Search(ctx context.Context, userID int64, query string, limit int) ([]Reminder, error) {
+	words := queryWords(query, maxQueryWords)
+	if len(words) == 0 {
+		return nil, nil
+	}
+	if limit < 1 || limit > rowLimit {
+		limit = rowLimit
+	}
+	clauses := make([]string, 0, len(words))
+	args := []any{userID}
+	for _, word := range words {
+		clauses = append(clauses, `r.Text LIKE ?`)
+		args = append(args, "%"+word+"%")
+	}
+	args = append(args, limit)
+	rows, err := s.read.QueryContext(ctx, `
+		SELECT `+reminderColumns+`
+		FROM Reminder r LEFT JOIN RecurringReminder c ON c.ReminderId = r.ReminderId
+		WHERE r.UserId = ? AND (`+strings.Join(clauses, " OR ")+`)
+		ORDER BY COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) LIMIT ?`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("reminder search: %w", err)
+	}
+	defer rows.Close()
+	return scanReminders(rows)
+}
+
+// Due returns the Reminders whose instant has arrived, oldest first: every resolved
+// one-off whose EmitAtUtc and every resolved repeat whose next occurrence is at or
+// before now. This is the emitter's query, so it is the one read that filters on
+// Status — a fired or cancelled Reminder is still context the model should see, but
+// it is never due a second time.
+func (s *ReminderStore) Due(ctx context.Context, now time.Time, limit int) ([]Reminder, error) {
+	rows, err := s.read.QueryContext(ctx, `
+		SELECT `+reminderColumns+`
+		FROM Reminder r LEFT JOIN RecurringReminder c ON c.ReminderId = r.ReminderId
+		WHERE r.Status = ? AND COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) <= ?
+		ORDER BY COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) LIMIT ?`,
+		ReminderResolved, timestamp(now), limit)
+	if err != nil {
+		return nil, fmt.Errorf("due reminders: %w", err)
+	}
+	defer rows.Close()
+	return scanReminders(rows)
+}
+
+// Fire is the emitter's claim on one Reminder plus the Trace row for the attempt, in
+// one transaction, and reports whether this caller is the one that got it. The claim
+// is a compare-and-swap on the single thing that makes the Reminder due: a one-off
+// moves resolved to fired, and a repeat moves to the instant it fires next. Only the
+// caller that reads the old value goes on to send, so a second sweep, a restart, or a
+// cancel that landed first cannot put the same firing on the wire twice.
+func (s *ReminderStore) Fire(ctx context.Context, reminder Reminder, next time.Time, detail map[string]any) (bool, error) {
+	if reminder.Rule != nil && next.IsZero() {
+		// A repeat cannot advance without the instant it moves to. Refusing here is
+		// what stops a pattern the calendar cannot place from firing every sweep.
+		return false, nil
+	}
+	tx, err := s.write.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("begin reminder fire: %w", err)
+	}
+	defer tx.Rollback()
+
+	var claimed bool
+	if reminder.Rule == nil {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE Reminder SET Status = ? WHERE ReminderId = ? AND Status = ?`,
+			ReminderFired, reminder.ReminderID, ReminderResolved)
+		if err != nil {
+			return false, fmt.Errorf("claim reminder: %w", err)
+		}
+		if claimed, err = claimedRow(res); err != nil {
+			return false, err
+		}
+	} else {
+		res, err := tx.ExecContext(ctx, `
+			UPDATE RecurringReminder SET NextEmitAtUtc = ?
+			WHERE ReminderId = ? AND NextEmitAtUtc = ?
+			  AND EXISTS (SELECT 1 FROM Reminder WHERE ReminderId = ? AND Status = ?)`,
+			timestamp(next), reminder.ReminderID, reminder.NextEmitAtUtc,
+			reminder.ReminderID, ReminderResolved)
+		if err != nil {
+			return false, fmt.Errorf("claim recurring reminder: %w", err)
+		}
+		if claimed, err = claimedRow(res); err != nil {
+			return false, err
+		}
+	}
+	if !claimed {
+		return false, nil
+	}
+
+	if _, err := recordTrace(ctx, tx, NotificationStage, reminder.SourceJobID, reminder.ReminderID, detail); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("commit reminder fire: %w", err)
+	}
+	return true, nil
 }
 
 // insertReminder runs inside the Job's own transaction, and records the row only
@@ -119,147 +274,6 @@ func insertRecurring(ctx context.Context, tx execer, reminder Reminder) error {
 		return fmt.Errorf("insert recurring reminder: %w", err)
 	}
 	return nil
-}
-
-func NewReminderStore(write, read *sql.DB) *ReminderStore {
-	return &ReminderStore{write: write, read: read}
-}
-
-// reminderColumns is the row shape every Reminder read shares: the Reminder's own
-// columns, the repeat's rule and next occurrence beside them, and the Job the
-// Reminder came from. A repeat leaves its own instant columns null, so the instant
-// it is about is the rule's next occurrence and the COALESCE is what reads it —
-// without that a repeat would look like it never comes due.
-const reminderColumns = `r.ReminderId, r.UserId, r.Text, r.Timezone, COALESCE(r.LocalDateTime, ''),
-		COALESCE(r.EmitAtUtc, ''), r.Status, r.CreatedAt, COALESCE(c.NextEmitAtUtc, ''), COALESCE(c.Rule, ''),
-		COALESCE(r.SourceJobId, 0)`
-
-// scanReminders reads the columns above. A repeat comes back with its rule decoded,
-// so a caller can tell a rule from a one-off without reading the extension table
-// itself.
-func scanReminders(rows *sql.Rows) ([]Reminder, error) {
-	reminders := []Reminder{}
-	for rows.Next() {
-		var reminder Reminder
-		var rule string
-		if err := rows.Scan(&reminder.ReminderID, &reminder.UserID, &reminder.Text, &reminder.Timezone,
-			&reminder.LocalDateTime, &reminder.EmitAtUtc, &reminder.Status, &reminder.CreatedAt,
-			&reminder.NextEmitAtUtc, &rule, &reminder.SourceJobID); err != nil {
-			return nil, fmt.Errorf("scan reminder: %w", err)
-		}
-		if rule != "" {
-			if err := json.Unmarshal([]byte(rule), &reminder.Rule); err != nil {
-				return nil, fmt.Errorf("decode rule: %w", err)
-			}
-		}
-		reminders = append(reminders, reminder)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read reminders: %w", err)
-	}
-	return reminders, nil
-}
-
-// Window returns the user's Reminders whose next instant falls inside [from, to).
-// The PRD builds retrieval on this, from two days before the target so a correction can
-// still find its Reminder, to fourteen days after so a relative one lands inside it.
-// Status is deliberately not filtered: a fired or cancelled Reminder is still context the
-// model should see.
-//
-// A repeat has no one-off instant: its own EmitAtUtc is null, and the instant it is about
-// is the rule's next occurrence, so the filter and the order both read the effective
-// instant. Without that a recurring Reminder would be invisible to retrieval.
-func (s *ReminderStore) Window(ctx context.Context, userID int64, from, to time.Time) ([]Reminder, error) {
-	rows, err := s.read.QueryContext(ctx, `
-		SELECT `+reminderColumns+`
-		FROM Reminder r LEFT JOIN RecurringReminder c ON c.ReminderId = r.ReminderId
-		WHERE r.UserId = ? AND COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) >= ?
-		  AND COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) < ?
-		ORDER BY COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) LIMIT ?`,
-		userID, timestamp(from), timestamp(to), windowLimit)
-	if err != nil {
-		return nil, fmt.Errorf("reminder window: %w", err)
-	}
-	defer rows.Close()
-	return scanReminders(rows)
-}
-
-// Due returns the Reminders whose instant has arrived, oldest first: every resolved
-// one-off whose EmitAtUtc and every resolved repeat whose next occurrence is at or
-// before now. This is the emitter's query, so it is the one read that filters on
-// Status — a fired or cancelled Reminder is still context the model should see, but
-// it is never due a second time.
-func (s *ReminderStore) Due(ctx context.Context, now time.Time, limit int) ([]Reminder, error) {
-	rows, err := s.read.QueryContext(ctx, `
-		SELECT `+reminderColumns+`
-		FROM Reminder r LEFT JOIN RecurringReminder c ON c.ReminderId = r.ReminderId
-		WHERE r.Status = ? AND COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) <= ?
-		ORDER BY COALESCE(c.NextEmitAtUtc, r.EmitAtUtc) LIMIT ?`,
-		ReminderResolved, timestamp(now), limit)
-	if err != nil {
-		return nil, fmt.Errorf("due reminders: %w", err)
-	}
-	defer rows.Close()
-	return scanReminders(rows)
-}
-
-// Fire is the emitter's claim on one Reminder plus the Trace row for the attempt,
-// in one transaction, and reports whether this caller is the one that got it. The
-// claim is a compare-and-swap on the single thing that makes the Reminder due: a
-// one-off moves resolved to fired, and a repeat moves to the instant it fires next.
-// Only the caller that reads the old value goes on to send, so a second sweep, a
-// restart, or a cancel that landed first cannot put the same firing on the wire
-// twice. The returned TraceId is the notification id the push carries, and the row
-// the delivery outcome then points back at.
-func (s *ReminderStore) Fire(ctx context.Context, reminder Reminder, next time.Time, detail map[string]any) (int64, bool, error) {
-	if reminder.Rule != nil && next.IsZero() {
-		// A repeat cannot advance without the instant it moves to. Refusing here is
-		// what stops a pattern the calendar cannot place from firing every sweep.
-		return 0, false, nil
-	}
-	tx, err := s.write.BeginTx(ctx, nil)
-	if err != nil {
-		return 0, false, fmt.Errorf("begin reminder fire: %w", err)
-	}
-	defer tx.Rollback()
-
-	var claimed bool
-	if reminder.Rule == nil {
-		res, err := tx.ExecContext(ctx,
-			`UPDATE Reminder SET Status = ? WHERE ReminderId = ? AND Status = ?`,
-			ReminderFired, reminder.ReminderID, ReminderResolved)
-		if err != nil {
-			return 0, false, fmt.Errorf("claim reminder: %w", err)
-		}
-		if claimed, err = claimedRow(res); err != nil {
-			return 0, false, err
-		}
-	} else {
-		res, err := tx.ExecContext(ctx, `
-			UPDATE RecurringReminder SET NextEmitAtUtc = ?
-			WHERE ReminderId = ? AND NextEmitAtUtc = ?
-			  AND EXISTS (SELECT 1 FROM Reminder WHERE ReminderId = ? AND Status = ?)`,
-			timestamp(next), reminder.ReminderID, reminder.NextEmitAtUtc,
-			reminder.ReminderID, ReminderResolved)
-		if err != nil {
-			return 0, false, fmt.Errorf("claim recurring reminder: %w", err)
-		}
-		if claimed, err = claimedRow(res); err != nil {
-			return 0, false, err
-		}
-	}
-	if !claimed {
-		return 0, false, nil
-	}
-
-	traceID, err := recordTrace(ctx, tx, NotificationStage, reminder.SourceJobID, reminder.ReminderID, detail)
-	if err != nil {
-		return 0, false, err
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, false, fmt.Errorf("commit reminder fire: %w", err)
-	}
-	return traceID, true, nil
 }
 
 // claimedRow reports whether a claim's UPDATE matched a row, which is how a claim

@@ -1,30 +1,36 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
+import { PullUpMic } from '@/components/PullUpMic'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 import { Textarea } from '@/components/ui/textarea'
 
 interface ComposerProps {
-  disabled: boolean
+  disabled?: boolean
   // focus moves the caret here, which is where cancelling a capture lands.
   focus: boolean
   onSend: (text: string) => Promise<boolean>
-  // Home renders the capture composer and a reply composer in the same view, so
-  // both the test handles and the placeholder have to be the caller's.
+  // The voice door is optional: a screen with its own recorder (the calendar's
+  // halo) hides this one instead of offering two ways into the same clip.
+  onVoice?: () => void
+  voiceDisabled?: boolean
+  // A capture and a reply read differently, so the test handles and the
+  // placeholder have to be the caller's.
   textTestId?: string
   sendTestId?: string
   placeholder?: string
 }
 
-// TextComposer is the typed half of the one ingress, and the fallback whenever
-// the microphone is unusable.
+// TextComposer is the one ingress: type here, or pull the mic up to talk. It is
+// the chat's bottom bar, so it stays a single row until the text wraps.
 export function TextComposer({
-  disabled,
+  disabled = false,
   focus,
   onSend,
+  onVoice,
+  voiceDisabled = false,
   textTestId = 'capture-text',
   sendTestId = 'send-text',
-  placeholder = 'Or type it…',
+  placeholder = 'Message Blurt…',
 }: ComposerProps) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -45,23 +51,33 @@ export function TextComposer({
   }
 
   return (
-    <Card className="gap-3 bg-card/80 p-3">
-      <form onSubmit={(event) => void submit(event)} className="flex flex-col gap-3">
-        <Textarea
-          ref={ref}
-          data-testid={textTestId}
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          placeholder={disabled ? 'Finish the clip first…' : placeholder}
-          rows={2}
-          aria-label="Blurt text input"
-        />
-        <div className="flex justify-end">
-          <Button type="submit" data-testid={sendTestId} disabled={disabled || busy || !text.trim()}>
-            {busy ? 'Sending…' : 'Send'}
-          </Button>
-        </div>
-      </form>
-    </Card>
+    <form
+      onSubmit={(event) => void submit(event)}
+      className="flex items-end gap-1.5 rounded-3xl border border-border bg-card/80 p-1.5 pl-4 shadow-lg"
+    >
+      <Textarea
+        ref={ref}
+        data-testid={textTestId}
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        placeholder={disabled ? 'Wait for Blurt…' : placeholder}
+        rows={1}
+        aria-label="Blurt text input"
+        className="field-sizing-content max-h-40 min-h-10 resize-none border-0 bg-transparent px-0 py-2 text-base shadow-none focus-visible:border-0 focus-visible:ring-0 md:text-base"
+      />
+      {onVoice && <PullUpMic onConfirm={onVoice} disabled={voiceDisabled} />}
+      <Button
+        type="submit"
+        size="icon"
+        data-testid={sendTestId}
+        disabled={disabled || busy || !text.trim()}
+        aria-label="Send"
+        className="size-10 shrink-0"
+      >
+        <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M12 19V5M5 12l7-7 7 7" />
+        </svg>
+      </Button>
+    </form>
   )
 }

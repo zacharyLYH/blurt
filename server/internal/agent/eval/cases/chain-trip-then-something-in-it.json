@@ -1,0 +1,41 @@
+{
+  "name": "chain-trip-then-something-in-it",
+  "source": "prd:travel — a trip as Memory, then a Reminder inside the trip's dates",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "I'm in Tokyo from Nov 2 to Nov 6",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "memories": [
+          {
+            "contains": ["tokyo"],
+            "tags_min": 3
+          }
+        ]
+      }
+    },
+    {
+      "capture": "remind me to buy snacks on Nov 4 at 6pm",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["snack"],
+            "datetime": "2026-11-04T18:00",
+            "utc": "2026-11-04T09:00:00Z",
+            "zone": "Asia/Tokyo",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    }
+  ]
+}

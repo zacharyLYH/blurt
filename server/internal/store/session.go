@@ -16,6 +16,7 @@ type SessionStore struct {
 	read  *sql.DB
 }
 
+// NewSessionStore takes the writer and the read pool beside it.
 func NewSessionStore(write, read *sql.DB) *SessionStore {
 	return &SessionStore{write: write, read: read}
 }
@@ -83,6 +84,24 @@ func (s *SessionStore) SetPushSubscription(ctx context.Context, tokenHash, subsc
 		return fmt.Errorf("set push subscription: %w", err)
 	}
 	return nil
+}
+
+// HasLiveSession reports whether the user still has at least one unexpired session.
+// The push path checks it before fanning out: a signed-out user has no device to
+// reach, and a notification must not be attempted on the strength of a stale
+// subscription row.
+func (s *SessionStore) HasLiveSession(ctx context.Context, userID int64, at time.Time) (bool, error) {
+	var live int
+	err := s.read.QueryRowContext(ctx,
+		`SELECT 1 FROM Session WHERE UserId = ? AND ExpiresAt > ? LIMIT 1`,
+		userID, timestamp(at)).Scan(&live)
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check live session: %w", err)
+	}
+	return true, nil
 }
 
 // PushDevice is one device's stored subscription. Only the session id and the

@@ -6,6 +6,8 @@ server/data/
 server/blurt.db
 server/blurt.db-wal
 server/blurt.db-shm
+# Eval reports: the cases and their goldens are inputs, a report is an artifact.
+server/eval-out/
 
 # Frontend
 node_modules/

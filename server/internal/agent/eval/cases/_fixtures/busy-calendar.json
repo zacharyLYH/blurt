@@ -1,0 +1,30 @@
+{
+  "reminders": [
+    {"text": "Standup with the team", "local": "+1d 09:30", "recurrence": "weekly"},
+    {"text": "Gym session", "local": "+1d 07:00", "recurrence": "weekly"},
+    {"text": "Call the landlord about the tap", "local": "+2d 11:00"},
+    {"text": "Take out the recycling", "local": "+2d 06:30", "recurrence": "weekly"},
+    {"text": "Dentist", "local": "+3d 10:00"},
+    {"text": "Team retro", "local": "+4d 15:00"},
+    {"text": "Pay the credit card bill", "local": "+6d 20:00"},
+    {"text": "Physio appointment", "local": "+8d 08:15"},
+    {"text": "Book club", "local": "+9d 19:30"},
+    {"text": "Call mum for her birthday", "local": "+12d 19:00"},
+    {"text": "Quarterly review prep", "local": "+20d 16:00"},
+    {"text": "Renew the car insurance", "local": "+25d 09:00"}
+  ],
+  "memories": [
+    {"text": "The spare key is with the neighbour", "tags": "key,neighbour,home"},
+    {"text": "Milk is cheaper at store A than store B", "tags": "grocery,dairy,price"},
+    {"text": "I have AirAsia points to use by December", "tags": "travel,flight,points,december"},
+    {"text": "The gym is closed for renovation until November", "tags": "gym,fitness,renovation"},
+    {"text": "My passport expires in July", "tags": "passport,travel,expiry,july"},
+    {"text": "The plumber is Raj and he only works mornings", "tags": "plumber,home,repair"},
+    {"text": "The office wifi password is on the fridge", "tags": "wifi,office,password"},
+    {"text": "I like this noodle shop in Chongqing", "tags": "food,chongqing,noodle"},
+    {"text": "The car insurance renews with Singlife", "tags": "car,insurance,singlife"},
+    {"text": "Book club meets at the library", "tags": "book,club,library"},
+    {"text": "I owe Dan forty dollars for the concert ticket", "tags": "money,dan,concert"},
+    {"text": "The recycling goes out on Tuesday nights", "tags": "recycling,tuesday,bin"}
+  ]
+}

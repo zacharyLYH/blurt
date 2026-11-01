@@ -1,13 +1,13 @@
 // Package emitter fires due Reminders. It is the one part of Blurt that runs on a
 // clock rather than on something the user just did: a sweep turns a scheduled
-// instant into a notification, and the record of the attempt is durable before the
-// push goes out.
+// instant into a push that opens the Reminder.
 package emitter
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync"
 	"time"
 
 	"blurt/internal/agent"
@@ -19,31 +19,23 @@ import (
 const (
 	// defaultPoll is the PRD's once-a-second sweep of due Reminders.
 	defaultPoll = time.Second
-	// defaultSpacing is the PRD's two seconds between notifications from one sweep: a
-	// user with several arrived at once reads them in order rather than as one burst.
-	defaultSpacing = 2 * time.Second
 	// dueLimit bounds one sweep, so a backlog cannot make a single tick unbounded.
 	dueLimit = 50
 	// clockLayout is how a notification renders the instant it is about.
 	clockLayout = "3:04 PM MST"
 )
 
-// Notifier is the push fan-out the emitter fires through. An interface so a test can
-// watch a firing without a relay.
-type Notifier interface {
-	NotifyUser(ctx context.Context, userID int64, msg push.Message) (push.Result, error)
-}
-
 // Emitter fires due Reminders until its context ends. Reminders and Pusher are the
 // wiring; the rest has a default, so a caller sets only what it wants to change.
 type Emitter struct {
 	Reminders *store.ReminderStore
-	Pusher    Notifier
+	Pusher    push.Notifier
+	// Sessions gates the push: firing is the Reminder's lifecycle, but a user with
+	// no live session has no device worth waking. Nil skips the check (tests that
+	// exercise firing alone).
+	Sessions *store.SessionStore
 	// Poll is how often due Reminders are looked for; zero means defaultPoll.
 	Poll time.Duration
-	// Spacing is the pause between two notifications from one sweep; zero means
-	// defaultSpacing.
-	Spacing time.Duration
 	// Now is the clock the sweep reads. Nil means time.Now.
 	Now func() time.Time
 }
@@ -53,31 +45,38 @@ func (e *Emitter) Run(ctx context.Context) {
 	queue.Every(ctx, e.poll(), func(ctx context.Context) { e.sweep(ctx) })
 }
 
-// sweep fires everything that has arrived, oldest first, spaced so one batch is still
-// delivered in order.
+// sweep fires everything that has arrived. Each due Reminder gets its own pipe: one
+// slow relay cannot hold up the rest of the batch, and a firing claims its Reminder
+// with a compare-and-swap, so concurrent sweeps cannot send the same occurrence
+// twice. The sweep waits for its pipes before returning, which keeps one tick from
+// overlapping the next.
 func (e *Emitter) sweep(ctx context.Context) {
 	due, err := e.Reminders.Due(ctx, e.now(), dueLimit)
 	if err != nil {
 		slog.Error("emitter due query", "err", err)
 		return
 	}
-	for i, reminder := range due {
-		if i > 0 && !sleep(ctx, e.spacing()) {
-			return
-		}
-		e.fire(ctx, reminder)
+	var pipes sync.WaitGroup
+	for _, reminder := range due {
+		pipes.Add(1)
+		go func(reminder store.Reminder) {
+			defer pipes.Done()
+			e.fire(ctx, reminder)
+		}(reminder)
 	}
+	pipes.Wait()
 }
 
-// fire claims one Reminder and pushes it. Claiming before sending is what makes the
-// attempt durable: a crash in between costs this one firing rather than leaving a
-// Reminder that rings again on every restart. A Reminder that already fired, was
-// called off, or has no Job to write its Trace row against is left alone.
+// fire claims one Reminder, records the attempt, and sends the push that opens it.
+// Claiming and the attempt commit together: a crash after that costs this one firing
+// rather than leaving a Reminder that rings again on every restart. A Reminder that
+// already fired, was called off, or has no Job to write its Trace row against is left
+// alone.
 func (e *Emitter) fire(ctx context.Context, reminder store.Reminder) {
 	if reminder.SourceJobID == 0 {
-		// Every notification attempt carries a Trace row, and a Trace row hangs off the
-		// Job that committed the Reminder. With no Job there is nothing to record the
-		// attempt against, so this is left alone rather than fired unrecorded.
+		// A Trace row hangs off the Job that committed the Reminder. With no Job there
+		// is nothing to record the attempt against, so this is left alone rather than
+		// fired unrecorded.
 		slog.Warn("emitter reminder has no job", "reminder_id", reminder.ReminderID)
 		return
 	}
@@ -87,7 +86,7 @@ func (e *Emitter) fire(ctx context.Context, reminder store.Reminder) {
 			"timezone", reminder.Timezone)
 		return
 	}
-	traceID, claimed, err := e.Reminders.Fire(ctx, reminder, next, attemptDetail(reminder))
+	claimed, err := e.Reminders.Fire(ctx, reminder, next, attemptDetail(reminder))
 	if err != nil {
 		slog.Error("emitter fire", "reminder_id", reminder.ReminderID, "err", err)
 		return
@@ -96,10 +95,33 @@ func (e *Emitter) fire(ctx context.Context, reminder store.Reminder) {
 		return
 	}
 
-	result, err := e.Pusher.NotifyUser(ctx, reminder.UserID, message(reminder, traceID))
+	sentAt := e.now().UTC().Format(time.RFC3339)
+
+	// A user who is signed out has no device to notify. Check the session before the
+	// fan-out rather than trusting whatever subscription row was left behind; the
+	// Reminder still fires, so its lifecycle does not depend on being signed in.
+	if e.Sessions != nil {
+		live, err := e.Sessions.HasLiveSession(ctx, reminder.UserID, e.now())
+		switch {
+		case err != nil:
+			slog.Error("emitter session check", "reminder_id", reminder.ReminderID, "err", err)
+		case !live:
+			if err := e.Reminders.RecordDelivery(ctx, reminder, map[string]any{
+				"outcome": "skipped_no_session", "sentAt": sentAt,
+				"sent": 0, "failed": 0, "pruned": 0,
+			}); err != nil {
+				slog.Error("emitter delivery trace", "reminder_id", reminder.ReminderID, "err", err)
+			}
+			slog.Info("emitter skipped push: no live session", "reminder_id", reminder.ReminderID,
+				"user_id", reminder.UserID)
+			return
+		}
+	}
+
+	result, err := e.Pusher.NotifyUser(ctx, reminder.UserID, message(reminder))
 	detail := map[string]any{
-		"outcome": "sent", "sent": result.Sent, "failed": result.Failed,
-		"pruned": result.Pruned, "attemptTraceId": traceID,
+		"outcome": "sent", "sentAt": sentAt,
+		"sent": result.Sent, "failed": result.Failed, "pruned": result.Pruned,
 	}
 	if err != nil {
 		// Best effort by design: a relay that refused leaves the Reminder fired, which
@@ -110,7 +132,7 @@ func (e *Emitter) fire(ctx context.Context, reminder store.Reminder) {
 		slog.Error("emitter delivery trace", "reminder_id", reminder.ReminderID, "err", err)
 	}
 	slog.Info("emitter fired", "reminder_id", reminder.ReminderID, "user_id", reminder.UserID,
-		"trace_id", traceID, "sent", result.Sent, "failed", result.Failed, "pruned", result.Pruned)
+		"sent", result.Sent, "failed", result.Failed, "pruned", result.Pruned)
 }
 
 // next is the instant a repeat moves to, derived from its rule and the zone the user
@@ -132,15 +154,15 @@ func (e *Emitter) next(reminder store.Reminder) (time.Time, bool) {
 // message is what the device shows: the Reminder's own words as the title, and the
 // instant it is about rendered in the zone the user meant. The tag is per Reminder
 // rather than per firing, so a repeat replaces its previous notification instead of
-// stacking one per occurrence, and the TraceId rides along as the notification id.
-func message(reminder store.Reminder, traceID int64) push.Message {
+// stacking one per occurrence. The page it opens is the Reminder itself, because a
+// notification is just a Reminder the poll found due.
+func message(reminder store.Reminder) push.Message {
 	return push.Message{
-		Title: reminder.Text,
-		Body:  localTime(reminder),
-		Tag:   fmt.Sprintf("reminder-%d", reminder.ReminderID),
-		// The page a notification opens, which is the web app's own route.
-		Navigate: "/reminders",
-		TraceID:  traceID,
+		Title:      reminder.Text,
+		Body:       localTime(reminder),
+		Tag:        fmt.Sprintf("reminder-%d", reminder.ReminderID),
+		Navigate:   fmt.Sprintf("/notifications/%d", reminder.ReminderID),
+		ReminderID: reminder.ReminderID,
 	}
 }
 
@@ -179,34 +201,11 @@ func attemptDetail(reminder store.Reminder) map[string]any {
 	}
 }
 
-// sleep waits out the spacing between two notifications, and reports false when the
-// context ended first so a shutdown does not hold the loop open.
-func sleep(ctx context.Context, d time.Duration) bool {
-	if d <= 0 {
-		return true
-	}
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return true
-	case <-ctx.Done():
-		return false
-	}
-}
-
 func (e *Emitter) poll() time.Duration {
 	if e.Poll > 0 {
 		return e.Poll
 	}
 	return defaultPoll
-}
-
-func (e *Emitter) spacing() time.Duration {
-	if e.Spacing > 0 {
-		return e.Spacing
-	}
-	return defaultSpacing
 }
 
 func (e *Emitter) now() time.Time {

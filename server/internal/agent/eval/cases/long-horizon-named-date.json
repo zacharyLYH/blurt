@@ -1,0 +1,25 @@
+{
+  "name": "long-horizon-named-date",
+  "source": "branch:day-token:on-MM-DD",
+  "layer": "L1",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me about the christmas dinner on 25 december at 7pm",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["christmas"],
+        "datetime": "2026-12-25T19:00",
+        "utc": "2026-12-25T11:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "none",
+        "status": "resolved"
+      }
+    ],
+    "memories": []
+  }
+}

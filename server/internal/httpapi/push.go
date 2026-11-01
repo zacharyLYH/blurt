@@ -64,8 +64,7 @@ func (s *Server) subscribePush(w http.ResponseWriter, r *http.Request, _ store.U
 // send would be a way to notify somebody else's phone. The TraceId is not
 // accepted here either, since it points at a row the backend must own.
 func (s *Server) sendPush(w http.ResponseWriter, r *http.Request, user store.User) {
-	if s.Pusher == nil {
-		writeError(w, http.StatusNotImplemented, "not_implemented", "Push sending is not configured.")
+	if unavailable(w, s.Pusher == nil, "Push sending is not configured.") {
 		return
 	}
 	var msg push.Message

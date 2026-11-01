@@ -83,13 +83,12 @@ Prerequisite: an admin creates the initial User row.
 
 1. User enters their name and receives a login email with a PIN.
 2. Before the questionnaire, Blurt asks for microphone and notification permission, and re-checks both on every app entry so a revoked permission is surfaced rather than silently assumed.
-3. User provides model settings and API key on the setup page.
-4. User completes a questionnaire; answers become Memory.
-5. With a microphone, user records and sends. Wide screens open the conversation/Home view.
-6. If the microphone is unavailable or off, show a conversation thread with text input; do not leave the user stuck.
-7. If clarification is needed, send a push notification. Clicking it opens that Job in a familiar chat-style conversation page.
-8. The sidebar lists Jobs awaiting clarification. Remove completed Jobs from that list. The conversation transcript remains available through history.
-9. Users can answer by text or audio, cancel recording, and correct Blurt through the same interface.
+3. User completes a questionnaire; answers become Memory.
+4. With a microphone, user records and sends. Wide screens open the conversation/Home view.
+5. If the microphone is unavailable or off, show a conversation thread with text input; do not leave the user stuck.
+6. If clarification is needed, send a push notification. Clicking it opens that Job in a familiar chat-style conversation page.
+7. The sidebar lists Jobs awaiting clarification. Remove completed Jobs from that list. The conversation transcript remains available through history.
+8. Users can answer by text or audio, cancel recording, and correct Blurt through the same interface.
 
 ### Conversation UI
 
@@ -118,7 +117,6 @@ Use integer IDs because FTS5 and vec0 need rowids. The vec table is partitioned 
 ### User
 
 - `UserId`, `Name`, `Email`
-- `ModelProvider`, `ModelName`, `ModelEndpoint`, `ModelApiKey` (entered on setup page; encrypted at rest)
 
 ### Session
 
@@ -211,16 +209,17 @@ Append-only diagnostic events, always linked to a Job.
 
 Trace transcription, model turns, PostAgentCheck results, clarification transitions, and notification attempts. Store model, duration, outcome, the model's evidence for the time and zone, the fields still missing, and useful diagnostics in `Detail`; never log secrets. Order by `Timestamp`, then `TraceId` for ties.
 
-Each notification attempt has a Trace row with its `ReminderId`. Its `TraceId` is the notification ID in the push link, identifying one firing even for recurring reminders.
+Each notification attempt has a Trace row with its `ReminderId`. Trace is debug-only: no notification link or feedback row depends on it.
 
 ### NotificationFeedback
 
-One report per notification. The linked Trace identifies the Reminder and owning user.
+One report per submission, keyed by its own id. A notification is the Reminder a poll found due, so there is no instance table: a recurring Reminder legitimately has many feedback rows with the same `ReminderId`, one per firing the user reported.
 
-- `NotificationTraceId` (primary key and foreign key to Trace)
+- `NotificationFeedbackId` (primary key)
+- `ReminderId` (attribute, not unique)
 - `FailureMode`
 - `Comment` (optional)
-- `CreatedAt`
+- `CreatedAt` (when the report was made)
 
 ## Pipeline
 
@@ -326,7 +325,7 @@ Query resolved one-off `EmitAtUtc` and recurring `NextEmitAtUtc` once a second. 
 2. The frontier LLM picks relevant context and writes the notification.
 3. Render intended local time with a short zone label.
 4. Before sending, persist Reminder state and a notification-attempt Trace with `ReminderId`. One-off becomes `fired`; recurring Reminder computes its next UTC firing value from its Rule and zone.
-5. Send push with the attempt TraceId as `notificationTraceId`; log delivery outcome in Trace. PWA delivery is best effort.
+5. Send push with the `ReminderId` and open `/notifications/:reminderId`; log the send time and delivery outcome in Trace. PWA delivery is best effort.
 
 Do not embed Reminders; fetch by time window.
 
@@ -335,10 +334,11 @@ Do not embed Reminders; fetch by time window.
 When a user opens a notification, offer a short “What went wrong?” form. Submit one selected failure mode and an optional comment:
 
 ```http
-POST /api/notifications/{notificationTraceId}/feedback
+GET  /api/notifications/{reminderId}
+POST /api/notifications/{reminderId}/feedback
 ```
 
-Failure modes: wrong Reminder, wrong date/time/zone, wrong or irrelevant context, duplicate/too many notifications, other. Verify the signed-in user owns the linked Reminder. Store one response per notification in `NotificationFeedback`.
+Failure modes: wrong Reminder, wrong date/time/zone, wrong or irrelevant context, duplicate/too many notifications, other. Verify the signed-in user owns the Reminder. Each submission writes a new `NotificationFeedback` row, so a repeat collects feedback firing after firing. Neither path reads Trace.
 
 ## Retrieval
 
@@ -366,7 +366,7 @@ Request PIN only without a valid session. SameSite and origin check cover CSRF. 
 
 Permissions are asked on every entry because a browser never reports a revocation on its own. Once a user denies one, no page can prompt again, so the gate surfaces it with what to do about it instead of asking: the user is never trapped, and the text composer remains the fallback.
 
-User enters model provider, model, endpoint if needed, and API key on setup page. Store API key encrypted at rest; no `.env` model configuration.
+Every user plans on the deployment's model, named by `BLURT_AGENT_MODEL` and `BLURT_AGENT_API_KEY`. There is no per-user model setup and no model configuration in the UI.
 
 ## DX
 
@@ -374,9 +374,10 @@ User enters model provider, model, endpoint if needed, and API key on setup page
 - Mock LLM at HTTP level for specific responses.
 - Real free LLM: Qwen 2.5 3B on MLX-LM, local or remote via `ngrok` with static secret.
 - Random walker generates schedules; use an injectable clock. The emitter takes its clock as a
-  field, and `BLURT_FAKE_CLOCK` shifts it in dev, so a test can cross a long horizon without
-  waiting for it (`web/e2e/emitter-clock.spec.ts`). Go cannot be clock-faked from outside the
-  process: `time.Now` reads the vDSO, so `LD_PRELOAD`/libfaketime never reaches it.
+  field, and `BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT` shifts it in dev, so a test can cross a
+  long horizon without waiting for it (`web/e2e/emitter-clock.spec.ts`). Go cannot be clock-faked
+  from outside the process: `time.Now` reads the vDSO, so `LD_PRELOAD`/libfaketime never reaches
+  it.
 
 ## Known gaps
 

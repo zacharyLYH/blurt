@@ -1,0 +1,30 @@
+{
+  "name": "repeat-yearly-on-a-named-date",
+  "source": "flow:flows_test.go:395",
+  "layer": "L1",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "history": [],
+  "capture": "remind me to renew my passport every year on March 3rd at 8am",
+  "expect": {
+    "kind": "records",
+    "reminders": [
+      {
+        "text_contains": ["passport"],
+        "utc": "2027-03-03T00:00:00Z",
+        "zone": "Asia/Singapore",
+        "recurrence": "yearly",
+        "status": "resolved",
+        "rule": {
+          "frequency": "yearly",
+          "time": "08:00",
+          "month": 3,
+          "day": 3
+        }
+      }
+    ],
+    "memories": []
+  }
+}

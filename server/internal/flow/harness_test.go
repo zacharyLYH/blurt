@@ -40,7 +40,8 @@ type pump struct {
 	transcription queue.Stream
 	agent         queue.Stream
 	captureWorker *capture.TranscriptionWorker
-	agentWorker   *agent.AgentWorker
+	agentWorker   *queue.Worker
+	loop          *agent.AgentLoop
 	model         *scripted
 	pusher        *recordingPusher
 	userID        int64
@@ -56,20 +57,27 @@ type pump struct {
 	captureWG     sync.WaitGroup
 	agentWG       sync.WaitGroup
 	claimerWG     sync.WaitGroup
+
+	// declared is the model-call budget the test itself asserted, at the port or
+	// at the wire. The cleanup fails a flow that declared neither: proving which
+	// AI ran, and how often, is the point of these tests.
+	declared bool
+	expect   asks
+	expectAt *asks
 }
 
 // scripted is the model port answering a fixed list of turns. It keeps every
-// Input it was handed, which is how a prompt assertion reaches the loop.
+// PlannerInput it was handed, which is how a prompt assertion reaches the loop.
 // newPump builds the stack over in-memory streams, without starting it, so a
-// test can swap the transcriber, gate or timeouts before either worker runs.
-func newPump(t *testing.T, turns ...agent.Turn) *pump {
+// test can swap the transcriber or timeouts before either worker runs.
+func newPump(t *testing.T, turns ...agent.Answer) *pump {
 	return newPumpOn(t, queue.NewMock(), queue.NewMock(), turns...)
 }
 
 // newRedisPump is newPump over real Redis streams, which is the only pump that
 // exercises the broker — group creation included. It skips unless
 // BLURT_TEST_REDIS_URL is set.
-func newRedisPump(t *testing.T, turns ...agent.Turn) *pump {
+func newRedisPump(t *testing.T, turns ...agent.Answer) *pump {
 	t.Helper()
 	key := "blurt:" + strings.ReplaceAll(t.Name(), "/", "-")
 	return newPumpOn(t, redisStream(t, key+":tx", "capture"), redisStream(t, key+":agent", "agent"), turns...)
@@ -91,7 +99,7 @@ func redisStream(t *testing.T, stream, group string) *queue.Redis {
 	return booted
 }
 
-func newPumpOn(t *testing.T, transcription, agentStream queue.Stream, turns ...agent.Turn) *pump {
+func newPumpOn(t *testing.T, transcription, agentStream queue.Stream, turns ...agent.Answer) *pump {
 	t.Helper()
 	handle, err := db.Open(t.TempDir())
 	if err != nil {
@@ -112,32 +120,44 @@ func newPumpOn(t *testing.T, transcription, agentStream queue.Stream, turns ...a
 	model, pusher := &scripted{turns: turns}, &recordingPusher{}
 	loop := &agent.AgentLoop{
 		Store: jobs,
-		Recall: agent.Reads{
+		Recall: agent.Retrieval{
 			Reminders: store.NewReminderStore(handle.Write, handle.Read),
 			Memories:  store.NewMemoryStore(handle.Read),
 		},
-		Model: model, Pusher: pusher, AgentQueue: agentStream,
-		ModelName: "scripted", MaxTurns: 3,
+		Planner: agent.Stage{Model: model, Name: "scripted"},
+		Pusher:  pusher, AgentQueue: agentStream,
 		Now: func() time.Time { return pinned },
 	}
 	captureWorker := &capture.TranscriptionWorker{
 		Jobs: jobs, Audio: audio, STT: scriptedTranscriber{text: stt.FakeTranscript},
-		Pusher: pusher, Model: "phonon", GateModel: "laya",
+		Pusher: pusher, Model: "phonon",
 		TranscriptionQueue: transcription, AgentQueue: agentStream, Poll: pollEvery,
 	}
-	return &pump{
+	p := &pump{
 		t: t, handle: handle, jobs: jobs, audio: audio,
 		transcription: transcription, agent: agentStream,
 		captureWorker: captureWorker,
-		agentWorker:   &agent.AgentWorker{Jobs: jobs, Loop: loop, AgentQueue: agentStream, Poll: pollEvery},
+		agentWorker:   &queue.Worker{Stream: agentStream, Jobs: jobs, Step: loop.Step, Poll: pollEvery},
+		loop:          loop,
 		model:         model, pusher: pusher, userID: user.UserID,
 	}
+	// Workers run in their own goroutines, so a stage can still be asking when a
+	// test's last assertion passes. The loop is stopped before the counts are read,
+	// and the declaration is required, so a flow cannot pass without proving its
+	// wiring.
+	t.Cleanup(func() {
+		p.stopClaimers()
+		p.stopAgent()
+		p.stopCapture()
+		p.checkAsks()
+	})
+	return p
 }
 
 // start runs both stages until the test ends.
 //
 // Configure the workers **before** calling this: the loops read their worker's
-// fields — STT, the gate, the model's script, the timeouts — without a lock, so
+// fields — STT, the model's script, the timeouts — without a lock, so
 // a write after start races the goroutine that is about to read it. The
 // per-stage stop/start pair is the way to swap them mid-flow.
 func (p *pump) start() *pump {
