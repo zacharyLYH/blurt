@@ -367,6 +367,8 @@ func (p *pump) api(t *testing.T, email string) (*http.Client, string) {
 		Jobs:           p.jobs,
 		Audio:          p.audio,
 		Queues:         &queue.Queues{TranscriptionQueue: p.transcription, AgentQueue: p.agent},
+		Reminders:      store.NewReminderStore(p.handle.Write, p.handle.Read),
+		Notifications:  store.NewNotificationStore(p.handle.Write, p.handle.Read),
 		AllowedOrigins: []string{httpOrigin},
 	}))
 	t.Cleanup(server.Close)

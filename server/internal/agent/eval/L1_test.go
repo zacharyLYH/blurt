@@ -138,8 +138,8 @@ func envValue(key string) string {
 	return envValues()[key]
 }
 
-// evalSettings is what one hosted run needs: a provider, an endpoint, a key and a model,
-// exactly the four the setup page stores on a User row. There is no default model on
+// evalSettings is what one hosted run needs: a provider, an endpoint, a key and a model.
+// The deployment names the endpoint, key and model in .env. There is no default model on
 // purpose — the id belongs to the deployment, and a wrong one would score every case as
 // a model failure.
 func evalSettings() (agent.Settings, string) {

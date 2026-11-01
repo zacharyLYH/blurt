@@ -35,6 +35,9 @@ test.describe('service worker', () => {
 
     await expect(page.getByTestId('home-heading')).toContainText('Hi E2E')
     await expect(page.getByTestId('push-status')).toBeVisible()
+    // No model configuration step: the first recording starts right after setup.
+    await expect(page.getByTestId('mic-status')).toHaveText('Mic ready')
+    await expect(page.getByTestId('boom-countdown')).toBeVisible()
 
     await expect
       .poll(() => page.evaluate(() => navigator.serviceWorker.getRegistration().then((reg) => reg?.active?.state ?? null)))
@@ -61,15 +64,16 @@ test.describe('service worker', () => {
         title: 'Buy glue',
         body: 'On the way home from work. 6:00 PM SGT',
         tag: 'reminder-42',
-        navigate: '/home',
+        navigate: '/notifications/42',
       },
-      notificationTraceId: 42,
+      reminderId: 42,
     })
 
     expect(shown).toHaveLength(1)
     expect(shown[0].title).toBe('Buy glue')
     expect(shown[0].body).toContain('6:00 PM')
     expect(shown[0].tag).toBe('reminder-42')
-    expect(shown[0].navigate).toBe('/home')
+    expect(shown[0].navigate).toBe('/notifications/42')
+    expect(shown[0].reminderId).toBe(42)
   })
 })

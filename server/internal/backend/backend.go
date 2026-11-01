@@ -25,13 +25,14 @@ import (
 // Deps is the whole runtime, one field per collaborator. Every store is passed rather than
 // rebuilt here, because the caller already opened the one database they share.
 type Deps struct {
-	DB        *db.DB
-	Users     *store.UserStore
-	Jobs      *store.JobStore
-	Sessions  *store.SessionStore
-	Reminders *store.ReminderStore
-	Audio     *capture.Store
-	Queues    *queue.Queues
+	DB            *db.DB
+	Users         *store.UserStore
+	Jobs          *store.JobStore
+	Sessions      *store.SessionStore
+	Reminders     *store.ReminderStore
+	Notifications *store.NotificationStore
+	Audio         *capture.Store
+	Queues        *queue.Queues
 	// Loop is the agent's own, built by the caller: main resolves the user's model there,
 	// and a test hands it a pinned clock.
 	Loop *agent.AgentLoop
@@ -46,7 +47,6 @@ type Deps struct {
 	Emitter *emitter.Emitter
 	// Poll is how often both stage workers look for work; zero means the worker default.
 	Poll           time.Duration
-	EncryptionKey  []byte
 	VAPIDPublicKey string
 	AllowedOrigins []string
 }
@@ -92,9 +92,9 @@ func (b *Backend) Handler() http.Handler {
 		Audio:          b.Audio,
 		Queues:         b.Queues,
 		Reminders:      b.Reminders,
+		Notifications:  b.Notifications,
 		VAPIDPublicKey: b.VAPIDPublicKey,
 		AllowedOrigins: b.AllowedOrigins,
-		EncryptionKey:  b.EncryptionKey,
 	})
 }
 

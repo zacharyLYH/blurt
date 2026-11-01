@@ -278,20 +278,20 @@ func (s *JobStore) mutate(ctx context.Context, stage string, jobID int64, detail
 // recordTrace writes a Trace row and returns its id, inside the caller's
 // transaction when there is one. ReminderId is set on a notification attempt, which
 // is what ties an interruption back to the Reminder it was about; every other stage
-// leaves it null. The id is returned because a notification's TraceId is the
-// notification id the push payload carries.
+// leaves it null. The id is diagnostic only: a notification's identity is its own
+// Notification row, never a TraceId.
 func recordTrace(ctx context.Context, q execer, stage string, jobID, reminderID int64, detail map[string]any) (int64, error) {
 	raw, err := json.Marshal(detail)
 	if err != nil {
 		return 0, fmt.Errorf("encode trace: %w", err)
 	}
-	var traceID int64
+	var id int64
 	if err := q.QueryRowContext(ctx,
 		`INSERT INTO Trace (JobId, ReminderId, Timestamp, Stage, Detail) VALUES (?, ?, ?, ?, ?) RETURNING TraceId`,
-		jobID, nullID(reminderID), now(), stage, string(raw)).Scan(&traceID); err != nil {
+		jobID, nullID(reminderID), now(), stage, string(raw)).Scan(&id); err != nil {
 		return 0, fmt.Errorf("record %s trace: %w", stage, err)
 	}
-	return traceID, nil
+	return id, nil
 }
 
 // pendingAudio reports whether one turn is a clip the transcriber still owes a

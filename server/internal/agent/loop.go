@@ -77,13 +77,6 @@ type Recall interface {
 	FindMemories(ctx context.Context, userID int64, query string, limit int) ([]store.Memory, error)
 }
 
-// Resolver resolves the model one Job's owner configured. A user brings one provider,
-// endpoint, key and model (the User row), so the core transport is built per Job; the
-// name it returns is what the Trace records.
-type ModelResolver interface {
-	ModelFor(ctx context.Context, userID int64) (Model, string, error)
-}
-
 // Stage is one model stage: the model it asks, and the name the Trace reports it under. A
 // stage with no model of its own rides the planner's, so a single-provider deployment — and
 // every test double — wires one model and nothing else.
@@ -98,9 +91,6 @@ type Stage struct {
 type AgentLoop struct {
 	Store  Store
 	Recall Recall
-	// Resolver builds the Job owner's own model. When set it wins; Planner.Model is the
-	// fixed double a test (or the fake stack) supplies instead.
-	Resolver ModelResolver
 	// Planner is the core turn, and the fallback for the two cheap stages below, which ask
 	// the home gateway each under its own model id.
 	Planner   Stage
@@ -173,16 +163,6 @@ func (l *AgentLoop) Run(ctx context.Context, job store.Job, attempt int) {
 	r := &jobRun{
 		loop: l, job: job, attempt: attempt, started: l.now(),
 		model: l.Planner.Model, modelName: l.Planner.Name,
-	}
-	if l.Resolver != nil {
-		model, name, err := l.Resolver.ModelFor(ctx, job.UserID)
-		if err != nil {
-			// A user with no usable model cannot be retried into one: the setup is
-			// the missing thing, not the answer.
-			r.failed(ctx, err)
-			return
-		}
-		r.model, r.modelName = model, name
 	}
 	for next := (*jobRun).prescreen; next != nil; {
 		step, err := next(r, ctx)

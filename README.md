@@ -8,8 +8,9 @@ Specs: [docs/PRD.MD](docs/PRD.MD) · [docs/specs/AGENT-LOOP.MD](docs/specs/AGENT
 Prereqs: Docker (compose v2), Go 1.26+ (`env-init`), Node 24+ (frontend only). Redis runs in the stack.
 
 ```sh
-make env-init          # .env.example -> .env, plus generated session secret, encryption key, VAPID pair
-# fill BLURT_SMTP_PASSWORD, BLURT_STT_{URL,API_KEY}, BLURT_{PRESCREEN,CHECK,TAGS}_MODEL
+make env-init          # .env.example -> .env, plus generated session secret and VAPID pair
+# fill BLURT_SMTP_PASSWORD, BLURT_STT_{URL,API_KEY}, BLURT_AGENT_{MODEL,API_KEY},
+# BLURT_{PRESCREEN,TAGS}_MODEL
 make start-reset-full  # or: start-no-reset | stop | logs
 ```
 
@@ -23,6 +24,7 @@ Boot panics on any gap. Every `BLURT_FAKE_*` switch is local/e2e only: never set
 | --- | --- |
 | `BLURT_STT_URL` `_API_KEY` `_MODEL` | phonon transcription route. Not OpenAI-shaped: base64 WAV data URI in, `{"output":{"text":"…"}}` out. `_MODEL` must be `phonon`; a wrong key gets a 401 that Blurt treats as permanent. |
 | `BLURT_PRESCREEN_MODEL` `BLURT_TAGS_MODEL` | the two cheap stages: prescreen and memory tagger. Same gateway as STT, so URL and key default to `BLURT_STT_*`; `BLURT_AUX_URL` / `BLURT_AUX_API_KEY` override. |
+| `BLURT_AGENT_MODEL` `BLURT_AGENT_API_KEY` | the one core planner every user plans on. `BLURT_AGENT_URL` overrides the OpenRouter default. Required unless the fake is on. |
 | `BLURT_SMTP_*` | login-PIN mail. Gmail App Password (2FA required); nothing else to configure. |
 | `BLURT_PUBLIC_ORIGINS` | comma-separated CSRF allowlist. Empty = localhost:9998 + :5173 (dev only). Set it and localhost is no longer trusted unless listed. |
 | `BLURT_REDIS_URL` | queue transport. Default `redis://redis:6379/0`. |
@@ -31,7 +33,7 @@ Boot panics on any gap. Every `BLURT_FAKE_*` switch is local/e2e only: never set
 | `BLURT_FAKE_AGENT` | scripted model, no provider (how e2e runs). |
 | `BLURT_FAKE_CLOCK` | emitter clock offset, e.g. `90s` (e2e clock spec). |
 
-The core planner is per user, not `.env`: the setup page stores provider, endpoint, key (encrypted at rest) and model on the User row. Gateway contract and traps: [skills/gateway-records](skills/gateway-records/SKILL.md). Hosted provider (`strict` + `require_parameters`): [skills/openrouter-model](skills/openrouter-model/SKILL.md).
+The core planner is deployment configuration, not user data: every user plans on `BLURT_AGENT_MODEL` / `BLURT_AGENT_API_KEY`, so login → questionnaire → recording needs no model setup. Gateway contract and traps: [skills/gateway-records](skills/gateway-records/SKILL.md). Hosted provider (`strict` + `require_parameters`): [skills/openrouter-model](skills/openrouter-model/SKILL.md).
 
 ## Test
 
@@ -50,7 +52,7 @@ SQLite holds the durable Job record; Redis Streams owns routing and crash recove
 
 Scores the shipped prompts against real models. One case per file, in `server/internal/agent/eval/cases/`; the case's `layer` picks which test runs it. Settings come from `.env` (the process environment wins).
 
-**L1** is the agent loop, on the user's own hosted model — a key and a model id are the only things to supply:
+**L1** is the agent loop, on the hosted core model — a key and a model id are the only things to supply:
 
 ```sh
 BLURT_EVAL_KEY=...                                              # required

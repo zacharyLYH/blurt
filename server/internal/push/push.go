@@ -62,18 +62,18 @@ type Message struct {
 	Body     string `json:"body"`
 	Tag      string `json:"tag,omitempty"`
 	Navigate string `json:"navigate,omitempty"`
-	// TraceID is the firing attempt's Trace row, which the service worker
-	// keeps for notification feedback. Never read from a request: it points
-	// at a row the backend must own.
-	TraceID int64 `json:"-"`
+	// ReminderID names the notification: there is no instance table, so the
+	// Reminder is what the page and its feedback point at. Never read from a
+	// request.
+	ReminderID int64 `json:"-"`
 }
 
-// payload is what actually crosses the wire. A zero TraceID is omitted,
-// matching the worker's null default.
+// payload is what actually crosses the wire. A zero ReminderID is omitted, matching
+// the worker's null default.
 type payload struct {
 	WebPush      int     `json:"web_push"`
 	Notification Message `json:"notification"`
-	TraceID      int64   `json:"notificationTraceId,omitempty"`
+	ReminderID   int64   `json:"reminderId,omitempty"`
 }
 
 // Result counts one fan-out.
@@ -115,7 +115,9 @@ func (s *Sender) Send(ctx context.Context, subscription []byte, msg Message) err
 	if err := json.Unmarshal(subscription, &sub); err != nil {
 		return fmt.Errorf("decode stored push subscription: %w", err)
 	}
-	body, err := json.Marshal(payload{WebPush: webPushVersion, Notification: msg, TraceID: msg.TraceID})
+	body, err := json.Marshal(payload{
+		WebPush: webPushVersion, Notification: msg, ReminderID: msg.ReminderID,
+	})
 	if err != nil {
 		return err
 	}

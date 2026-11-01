@@ -33,6 +33,11 @@ const (
 // letters — "buy glue soonest" — is not read as one.
 var fakeSoonRe = regexp.MustCompile(`(?i)\bsoon\b`)
 
+// fakeDateRe is a pinned calendar date: a capture can name "2030-03-05" and the
+// fake resolves that day rather than a relative one. It is what lets an e2e spec
+// place a Reminder on a fixed day without waiting for the calendar to reach it.
+var fakeDateRe = regexp.MustCompile(`\b(\d{4}-\d{2}-\d{2})\b`)
+
 // fakeNotifyRe is the clause that names when to be notified: "remind me at 6pm"
 // or "remind me soon". It is what tells a capture that names two clocks which one is
 // the notification time; the other clock belongs to the event and rides in text.
@@ -118,11 +123,14 @@ func (Fake) Finalize(_ context.Context, in PlannerInput, _ []Message) (Answer, e
 		// same ask an unreadable clock earns.
 		return asked(defaultQuestion), nil
 	}
-	day := in.Now
-	if loc, err := time.LoadLocation(in.CurrentTZ); err == nil {
-		day = day.In(loc)
+	loc := time.UTC
+	if loaded, err := time.LoadLocation(in.CurrentTZ); err == nil {
+		loc = loaded
 	}
-	if strings.Contains(capture, "tomorrow") {
+	day := in.Now.In(loc)
+	if pinned, ok := fakeDate(capture, loc); ok {
+		day = pinned
+	} else if strings.Contains(capture, "tomorrow") {
 		day = day.AddDate(0, 0, 1)
 	}
 	record := fakeRecord(in, text, day.Format("2006-01-02"), clock, recurrence, capture)
@@ -229,6 +237,20 @@ func fakeRecord(in PlannerInput, text, day, clock, recurrence, capture string) R
 }
 
 // fakeClock reads the notification clock the fake's own regex found as HH:MM.
+// fakeDate is the one pinned date a capture names, read in the zone the device gave
+// so the day is the user's own.
+func fakeDate(capture string, loc *time.Location) (time.Time, bool) {
+	match := fakeDateRe.FindStringSubmatch(capture)
+	if match == nil {
+		return time.Time{}, false
+	}
+	at, err := time.ParseInLocation("2006-01-02", match[1], loc)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return at, true
+}
+
 func fakeClock(raw string) (int, int, bool) {
 	raw = strings.ToLower(strings.TrimSpace(raw))
 	if m := clock24Re.FindStringSubmatch(raw); m != nil {
@@ -341,7 +363,7 @@ func clocksIn(text string) int {
 // timeWordRe is the date vocabulary the fake strips from an event so the row it
 // commits matches the prompt's no-time-words contract.
 var timeWordRe = regexp.MustCompile(`(?i)\b(soon|day after tomorrow|today|tonight|tomorrow|` +
-	`every day|every week|every month|every year|every|daily|weekly|monthly|yearly|next|this|` +
+	`\d{4}-\d{2}-\d{2}|every day|every week|every month|every year|every|daily|weekly|monthly|yearly|next|this|` +
 	`monday|tuesday|wednesday|thursday|friday|saturday|sunday|` +
 	`january|february|march|april|may|june|july|august|september|october|november|december)\b`)
 

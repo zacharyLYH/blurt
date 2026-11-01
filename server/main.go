@@ -86,6 +86,7 @@ func main() {
 	// The emitter reads the same Reminders the AgentLoop plans against, and the
 	// firing transition is the one write that is its own.
 	reminders := store.NewReminderStore(handle.Write, handle.Read)
+	notifications := store.NewNotificationStore(handle.Write, handle.Read)
 
 	// Both consumer groups must exist before the first producer publishes.
 	boot := context.Background()
@@ -113,9 +114,8 @@ func main() {
 		transcriber = stt.NewHTTP(cfg.STT)
 	}
 
-	// The model is the user's: the loop resolves it from the User row and builds
-	// the transport per Job. The fake is the local/e2e escape hatch that keeps the
-	// AgentLoop exercisable without a provider.
+	// Every user plans on the deployment's one model. The fake is the local/e2e
+	// escape hatch that keeps the AgentLoop exercisable without a provider.
 	loop := &agent.AgentLoop{
 		Store:      jobs,
 		Recall:     agent.Retrieval{Reminders: reminders, Memories: store.NewMemoryStore(handle.Read)},
@@ -127,9 +127,12 @@ func main() {
 		fake := agent.Stage{Model: agent.Fake{}, Name: "fake"}
 		loop.Planner, loop.Prescreen, loop.Tags = fake, fake, fake
 	} else {
-		loop.Resolver = agent.UserModels{Users: users, Key: cfg.EncryptionKey}
-		// The cheap stages are the home gateway's, each with its own model. The
-		// core turn builds a transport per Job from the user's own settings.
+		// The core turn and the cheap stages all ride the configured model ids;
+		// only the core stage lands on the hosted OpenAI-compatible route.
+		loop.Planner = agent.Stage{Name: cfg.Agent.Model, Model: agent.NewModelClient(agent.Settings{
+			Provider: agent.ProviderOpenRouter, URL: cfg.Agent.URL,
+			APIKey: cfg.Agent.APIKey, Model: cfg.Agent.Model,
+		})}
 		helper := func(name string, temperature float64) agent.Stage {
 			return agent.Stage{Name: name, Model: agent.NewModelClient(agent.Settings{
 				Provider: agent.ProviderGateway, URL: cfg.Helper.URL, APIKey: cfg.Helper.APIKey,
@@ -143,7 +146,7 @@ func main() {
 
 	// The emitter is the only worker that runs on a clock rather than on the user's
 	// last capture: it sweeps for Reminders whose instant has arrived.
-	emit := &emitter.Emitter{Reminders: reminders, Pusher: notifier}
+	emit := &emitter.Emitter{Reminders: reminders, Pusher: notifier, Sessions: sessions}
 	if cfg.FakeClockFastForward > 0 {
 		slog.Warn("BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT is on: the emitter's clock is shifted forward — never do this on a public host",
 			"offset", cfg.FakeClockFastForward)
@@ -153,7 +156,8 @@ func main() {
 	// One assembly owns the surface and the workers, so a test boots what this boots.
 	app := backend.New(backend.Deps{
 		DB: handle, Users: users, Jobs: jobs, Sessions: sessions, Reminders: reminders,
-		Audio: audio,
+		Notifications: notifications,
+		Audio:         audio,
 		Queues: &queue.Queues{
 			TranscriptionQueue: transcriptionQueue,
 			AgentQueue:         agentQueue,
@@ -161,7 +165,6 @@ func main() {
 		Loop: loop, STT: transcriber, STTModel: cfg.STT.Model,
 		Pins:   auth.NewPinStore(5*time.Minute, fixedPIN),
 		Mailer: mailer, Pusher: notifier, Emitter: emit,
-		EncryptionKey:  cfg.EncryptionKey,
 		VAPIDPublicKey: cfg.VAPID.PublicKey,
 		AllowedOrigins: cfg.PublicOrigins,
 	})

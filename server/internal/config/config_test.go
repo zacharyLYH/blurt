@@ -29,7 +29,8 @@ func setValid(t *testing.T) {
 		"BLURT_BIND":              ":8080",
 		"BLURT_PUBLIC_ORIGINS":    "https://blurt.bytesbylyh.dev",
 		"BLURT_SESSION_SECRET":    strings.Repeat("s", 32),
-		"BLURT_ENCRYPTION_KEY":    base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		"BLURT_AGENT_API_KEY":     "sk-or-test",
+		"BLURT_AGENT_MODEL":       "liquid/lfm-2.5-24b-a2b",
 		"BLURT_SMTP_HOST":         "smtp.gmail.com",
 		"BLURT_SMTP_PORT":         "587",
 		"BLURT_SMTP_USERNAME":     "sender@example.com",
@@ -56,15 +57,16 @@ func TestLoadValid(t *testing.T) {
 	if cfg.SMTP.From != "sender@example.com" || cfg.SMTP.Port != 587 {
 		t.Fatalf("unexpected SMTP config: %+v", cfg.SMTP)
 	}
-	if len(cfg.EncryptionKey) != 32 {
-		t.Fatalf("encryption key length = %d, want 32", len(cfg.EncryptionKey))
+	if cfg.Agent.Model != "liquid/lfm-2.5-24b-a2b" || cfg.Agent.APIKey != "sk-or-test" {
+		t.Fatalf("agent = %+v, want the deployment model", cfg.Agent)
 	}
 }
 
 func TestLoadReportsEveryMissingValue(t *testing.T) {
 	// t.Setenv with an empty value is indistinguishable from unset here.
 	for _, name := range []string{
-		"BLURT_DATA_DIR", "BLURT_REDIS_URL", "BLURT_BIND", "BLURT_SESSION_SECRET", "BLURT_ENCRYPTION_KEY",
+		"BLURT_DATA_DIR", "BLURT_REDIS_URL", "BLURT_BIND", "BLURT_SESSION_SECRET",
+		"BLURT_AGENT_API_KEY", "BLURT_AGENT_MODEL",
 		"BLURT_VAPID_PUBLIC_KEY", "BLURT_VAPID_PRIVATE_KEY", "BLURT_VAPID_SUBJECT",
 	} {
 		t.Setenv(name, "")
@@ -229,7 +231,8 @@ func TestSTTRequiresURLUnlessFake(t *testing.T) {
 	}
 }
 
-// The model is per user now, so `.env` carries only the dev fake switch.
+// The planner is deployment configuration: a real boot needs the key and model,
+// while the fake waives both.
 func TestAgentFakeSwitch(t *testing.T) {
 	setValid(t)
 	cfg, err := Load()
@@ -238,6 +241,11 @@ func TestAgentFakeSwitch(t *testing.T) {
 	}
 	if cfg.FakeAgent {
 		t.Fatal("FakeAgent defaulted on")
+	}
+
+	t.Setenv("BLURT_AGENT_MODEL", "")
+	if _, err := Load(); err == nil || !strings.Contains(err.Error(), "BLURT_AGENT_MODEL is required") {
+		t.Fatalf("Load without an agent model: %v", err)
 	}
 
 	t.Setenv("BLURT_FAKE_AGENT", "true")

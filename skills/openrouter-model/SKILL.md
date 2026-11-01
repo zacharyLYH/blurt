@@ -6,11 +6,11 @@ description: Call the hosted core planner over an OpenAI-compatible chat route (
 # The hosted core model
 
 The core planner — the bounded agent loop that places a capture as records or asks the
-question — rides a user's own provider, not the home gateway. Its settings
-(`ModelProvider`, `ModelName`, `ModelEndpoint`, `ModelApiKey`, the key encrypted
-at rest) live on the User row; `internal/agent.UserModels` opens them and builds
-one `ModelClient` per Job. The prescreen, the post-agent check and the tagger stay on
-the home gateway (`skills/gateway-records`).
+question — rides the deployment's hosted provider, not the home gateway. Its settings
+(`BLURT_AGENT_MODEL`, `BLURT_AGENT_API_KEY`, optional `BLURT_AGENT_URL`) come from
+`.env`; `main.go` builds one `ModelClient` for every Job, so there is no per-user
+model setup. The prescreen, the post-agent check and the tagger stay on the home
+gateway (`skills/gateway-records`).
 
 The endpoint is OpenAI-shaped, which is the difference from `/v1/infer`:
 

@@ -1,6 +1,6 @@
 // Command envgen writes .env from .env.example with the secrets that can be
-// generated locally (session secret, encryption key, VAPID pair). Human
-// values — SMTP app password, public origin — are left for the operator.
+// generated locally (session secret, VAPID pair). Human values — SMTP app
+// password, agent key, public origin — are left for the operator.
 package main
 
 import (
@@ -34,11 +34,8 @@ func main() {
 	}
 
 	sessionSecret := make([]byte, 32)
-	encryptionKey := make([]byte, 32)
-	for _, buf := range [][]byte{sessionSecret, encryptionKey} {
-		if _, err := rand.Read(buf); err != nil {
-			log.Fatalf("generate secret: %v", err)
-		}
+	if _, err := rand.Read(sessionSecret); err != nil {
+		log.Fatalf("generate secret: %v", err)
 	}
 	vapidKey, err := ecdh.P256().GenerateKey(rand.Reader)
 	if err != nil {
@@ -47,7 +44,6 @@ func main() {
 
 	generated := map[string]string{
 		"BLURT_SESSION_SECRET":    hex.EncodeToString(sessionSecret),
-		"BLURT_ENCRYPTION_KEY":    base64.StdEncoding.EncodeToString(encryptionKey),
 		"BLURT_VAPID_PUBLIC_KEY":  base64.RawURLEncoding.EncodeToString(vapidKey.PublicKey().Bytes()),
 		"BLURT_VAPID_PRIVATE_KEY": base64.RawURLEncoding.EncodeToString(vapidKey.Bytes()),
 	}
@@ -69,6 +65,6 @@ func main() {
 	if err := os.WriteFile(*out, []byte(result.String()), 0o600); err != nil {
 		log.Fatalf("write %s: %v", *out, err)
 	}
-	fmt.Printf("wrote %s with generated session secret, encryption key, and VAPID keys\n", *out)
-	fmt.Println("still needed: BLURT_SMTP_PASSWORD (Gmail App Password) and BLURT_PUBLIC_ORIGINS for a public host")
+	fmt.Printf("wrote %s with generated session secret and VAPID keys\n", *out)
+	fmt.Println("still needed: BLURT_SMTP_PASSWORD (Gmail App Password), BLURT_AGENT_API_KEY/BLURT_AGENT_MODEL, and BLURT_PUBLIC_ORIGINS for a public host")
 }

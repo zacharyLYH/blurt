@@ -14,8 +14,6 @@ services:
       BLURT_BIND: ":8080"
       BLURT_PUBLIC_ORIGINS: http://localhost:9977
       BLURT_SESSION_SECRET: e2e-session-secret-0123456789abcdef
-      # base64 of 32 zero bytes
-      BLURT_ENCRYPTION_KEY: AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
       # Dev login: the PIN is fixed (123456) and nothing is mailed, so the
       # stack needs no mailbox at all. The dev .env is still loaded, so blank
       # its real App Password instead of carrying it into a test container.

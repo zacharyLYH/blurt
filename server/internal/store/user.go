@@ -50,49 +50,6 @@ func (s *UserStore) ByID(ctx context.Context, userID int64) (User, error) {
 	return scanUser(row)
 }
 
-// ModelSettings is the model a user configured on the setup page. The key is the
-// ciphertext at rest, not the secret: whoever calls this decides how to open it.
-// Empty strings mean unconfigured, not broken.
-type ModelSettings struct {
-	Provider string
-	Model    string
-	Endpoint string
-	APIKey   string
-}
-
-// ModelSettings reads one user's model configuration. It is a separate read
-// because the identity returned to the client never carries a secret.
-func (s *UserStore) ModelSettings(ctx context.Context, userID int64) (ModelSettings, error) {
-	settings := ModelSettings{}
-	err := s.read.QueryRowContext(ctx, `
-		SELECT COALESCE(ModelProvider, ''), COALESCE(ModelName, ''),
-		       COALESCE(ModelEndpoint, ''), COALESCE(ModelApiKey, '')
-		FROM User WHERE UserId = ?`, userID).
-		Scan(&settings.Provider, &settings.Model, &settings.Endpoint, &settings.APIKey)
-	if err != nil {
-		return ModelSettings{}, fmt.Errorf("read model settings: %w", err)
-	}
-	return settings, nil
-}
-
-// SaveModelSettings writes the model a user configured on the setup page. The key
-// arrives sealed: the store never sees a plaintext secret, the same way it never
-// returns one. An empty key leaves the stored one alone, so changing the model does
-// not mean re-entering the secret.
-func (s *UserStore) SaveModelSettings(ctx context.Context, userID int64, settings ModelSettings) error {
-	result, err := s.write.ExecContext(ctx, `
-		UPDATE User SET ModelProvider = ?, ModelName = ?, ModelEndpoint = ?, ModelApiKey = ?
-		WHERE UserId = ?`,
-		settings.Provider, settings.Model, settings.Endpoint, settings.APIKey, userID)
-	if err != nil {
-		return fmt.Errorf("save model settings: %w", err)
-	}
-	if affected, err := result.RowsAffected(); err == nil && affected == 0 {
-		return ErrNotFound
-	}
-	return nil
-}
-
 // SaveQuestionnaire records the completed version and replaces this user's
 // questionnaire Memory with the new answers. It lives here because the
 // version on User is the record of progress; the Memory rows are the payload.

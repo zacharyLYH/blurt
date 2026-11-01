@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "react-day-picker/style.css";
 
 /* Blurt is dark-only: shadcn tokens live on :root, no .dark toggle. */
 :root {
@@ -64,6 +65,98 @@
     -webkit-font-smoothing: antialiased;
   }
 }
+/* react-day-picker, dressed in Blurt's tokens. The library owns layout and the
+   month math; these rules only replace its default skin. Unlayered on purpose:
+   the package's own stylesheet is unlayered too, so utilities would lose here. */
+.rdp-root {
+  --rdp-accent-color: var(--primary);
+  --rdp-accent-background-color: var(--secondary);
+  --rdp-day-height: auto;
+  --rdp-day-width: auto;
+  --rdp-day_button-height: auto;
+  --rdp-day_button-width: 100%;
+  --rdp-day_button-border-radius: var(--radius-md);
+  --rdp-day_button-border: 0;
+  --rdp-weekday-opacity: 1;
+  --rdp-today-color: var(--primary);
+  margin: 0;
+}
+
+.rdp-blurt .rdp-months,
+.rdp-blurt .rdp-month {
+  width: 100%;
+  max-width: none;
+}
+
+/* The page owns the month heading (and its own prev/next), so the library's
+   caption is redundant and only repeats the month. */
+.rdp-blurt .rdp-month_caption {
+  display: none;
+}
+
+.rdp-blurt .rdp-month_grid {
+  width: 100%;
+  table-layout: fixed;
+}
+
+.rdp-blurt .rdp-weekday {
+  padding: 0.25rem 0 0.5rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted-foreground);
+}
+
+.rdp-blurt .rdp-day {
+  padding: 1px;
+  vertical-align: top;
+}
+
+.rdp-blurt .rdp-day_button {
+  align-items: flex-start;
+  justify-content: flex-start;
+  flex-direction: column;
+  gap: 0.25rem;
+  width: 100%;
+  height: 2.75rem;
+  padding: 0.35rem 0.4rem;
+  border: 0;
+  border-radius: var(--radius-md);
+  color: var(--foreground);
+  transition: background-color 120ms ease;
+}
+
+.rdp-blurt .rdp-day_button:hover {
+  background-color: var(--accent);
+}
+
+.rdp-blurt .rdp-day_button:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 0;
+}
+
+.rdp-blurt .rdp-today:not(.rdp-selected) .rdp-day_button {
+  color: var(--primary);
+}
+
+.rdp-blurt .rdp-selected,
+.rdp-blurt .rdp-selected .rdp-day_button {
+  font-weight: inherit;
+  font-size: inherit;
+}
+
+.rdp-blurt .rdp-selected .rdp-day_button {
+  background-color: var(--secondary);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+
+@media (min-width: 768px) {
+  .rdp-blurt .rdp-day_button {
+    height: 3.25rem;
+    padding: 0.5rem 0.55rem;
+  }
+}
+
 /* The voice cue on a Job's thread: a halo that breathes and a mic that nudges
    upward, both carrying the same "pull me up" invitation. The motion is
    decoration — the label says what the control does — so it stops entirely for a

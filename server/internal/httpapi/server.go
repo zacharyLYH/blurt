@@ -45,15 +45,15 @@ type Deps struct {
 	Queues *queue.Queues
 	// Reminders backs the Reminders page. Nil is valid for the same reason.
 	Reminders *store.ReminderStore
+	// Notifications backs the page a push opens and the calendar. Nil is valid for
+	// the same reason.
+	Notifications *store.NotificationStore
 	// VAPIDPublicKey is handed to browsers when they create a push
 	// subscription. The private half stays inside the sender.
 	VAPIDPublicKey string
 	// AllowedOrigins guards unsafe requests against CSRF, alongside the
 	// SameSite=Lax session cookie.
 	AllowedOrigins []string
-	// EncryptionKey seals a user's model API key at rest. Nil leaves model setup
-	// unconfigured, which the endpoint reports rather than storing a plaintext key.
-	EncryptionKey []byte
 }
 
 // Server carries the handler's dependencies.
@@ -71,10 +71,6 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/auth/verify-pin", s.verifyPin)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/user", s.requireUser(s.getUser))
-	// The setup page writes the one model this user's Jobs plan with; the key is
-	// sealed before it reaches the row.
-	mux.HandleFunc("POST /api/user/model", s.requireUser(s.saveModelSettings))
-	mux.HandleFunc("/api/user/model", methodNotAllowed(http.MethodPost))
 	mux.HandleFunc("POST /api/questionnaire", s.requireUser(s.submitQuestionnaire))
 	mux.HandleFunc("GET /api/push/key", s.pushKey)
 	mux.HandleFunc("POST /api/push/subscribe", s.requireUser(s.subscribePush))
@@ -87,6 +83,13 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/reminders", s.requireUser(s.listReminders))
 	mux.HandleFunc("POST /api/reminders/{reminderId}/cancel", s.requireUser(s.cancelReminder))
 	mux.HandleFunc("/api/reminders/{reminderId}/cancel", methodNotAllowed(http.MethodPost))
+	// A notification is a Reminder the poll found due: the page opens it by id and
+	// feedback is a new row per submission.
+	mux.HandleFunc("GET /api/notifications", s.requireUser(s.listNotificationsForMonth))
+	mux.HandleFunc("GET /api/notifications/{reminderId}", s.requireUser(s.getNotification))
+	mux.HandleFunc("POST /api/notifications/{reminderId}/feedback", s.requireUser(s.submitNotificationFeedback))
+	mux.HandleFunc("/api/notifications/{reminderId}", methodNotAllowed(http.MethodGet))
+	mux.HandleFunc("/api/notifications/{reminderId}/feedback", methodNotAllowed(http.MethodPost))
 	// The clarification reply is one more turn in the same Conversation, so it
 	// rides the Job rather than opening a workflow of its own.
 	mux.HandleFunc("POST /api/jobs/{jobId}/messages", s.requireUser(s.replyToJob))
@@ -112,6 +115,7 @@ var knownRoutes = map[string]string{
 	"/api/push":             http.MethodPost,
 	"/api/jobs":             http.MethodGet + ", " + http.MethodPost,
 	"/api/reminders":        http.MethodGet,
+	"/api/notifications":    http.MethodGet,
 }
 
 // csrf requires an allowed Origin (or Referer) on unsafe methods. Cookies

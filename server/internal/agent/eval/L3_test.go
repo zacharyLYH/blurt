@@ -2,8 +2,8 @@ package eval
 
 // The L3 lane: the chain. A case seeds the database, sends text or recorded captures
 // through the two workers production boots, and asserts the rows that land. Nothing here
-// stubs a model: the planner is the user's own arm and the two cheap stages are the
-// deployment's, so a failure is the chain's, not one call's.
+// stubs a model: the planner and the two cheap stages are the deployment's, so a failure
+// is the chain's, not one call's.
 //
 // This is the only lane that can ask the two questions a single turn cannot:
 //
@@ -140,9 +140,10 @@ func newChainRun(t *testing.T, c Case, a chainArm) *chainRun {
 	pusher := &recordedPush{}
 	app := backend.New(backend.Deps{
 		DB: handle, Users: users, Jobs: jobs,
-		Sessions:  store.NewSessionStore(handle.Write, handle.Read),
-		Reminders: reminders,
-		Audio:     audio, Queues: queues,
+		Sessions:      store.NewSessionStore(handle.Write, handle.Read),
+		Reminders:     reminders,
+		Notifications: store.NewNotificationStore(handle.Write, handle.Read),
+		Audio:         audio, Queues: queues,
 		Loop: &agent.AgentLoop{
 			Store: jobs,
 			Recall: agent.Retrieval{

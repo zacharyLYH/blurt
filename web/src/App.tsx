@@ -1,8 +1,10 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import Calendar from './pages/Calendar'
 import Home from './pages/Home'
 import Job from './pages/Job'
 import JobReply from './pages/JobReply'
 import Login from './pages/Login'
+import NotificationDetail from './pages/NotificationDetail'
 import Permissions from './pages/Permissions'
 import Questionnaire from './pages/Questionnaire'
 import Reminders from './pages/Reminders'
@@ -26,7 +28,9 @@ function Gated({ children }: { children: React.ReactNode }) {
   // A notification can deep-link into the app, so the gate remembers where the
   // user was headed instead of dropping them on Home.
   if (!permissionsChecked()) {
-    return <Navigate to="/permissions" replace state={{ from: location.pathname }} />
+    // Keep the query too: a deep link can carry the month or any other state the
+    // destination page needs (the calendar's ?month is the one that matters).
+    return <Navigate to="/permissions" replace state={{ from: location.pathname + location.search }} />
   }
   return <>{children}</>
 }
@@ -72,6 +76,10 @@ export default function App() {
           {/* What is scheduled and what already happened. A notification opens straight
               into it, so it is a route of its own rather than a panel on Home. */}
           <Route path="/reminders" element={<Protected><Gated><Reminders /></Gated></Protected>} />
+          {/* The month view: every entry is a Reminder the poll found due. */}
+          <Route path="/calendar" element={<Protected><Gated><Calendar /></Gated></Protected>} />
+          {/* The page a push opens: the Reminder itself, with feedback per submission. */}
+          <Route path="/notifications/:reminderId" element={<Protected><Gated><NotificationDetail /></Gated></Protected>} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </BrowserRouter>

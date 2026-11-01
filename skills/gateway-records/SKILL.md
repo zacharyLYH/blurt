@@ -7,7 +7,7 @@ description: Call the self-hosted gateway's chat route to turn a capture into st
 
 The gateway serves phonon (audio) and chat models over the same `/v1/infer` route
 with a different `payload`; laya and its typed decisions are gone. The chat route
-now answers Blurt's two cheap stages — prescreening and the memory tagger. The core planner moved to the user's own hosted provider, which
+now answers Blurt's two cheap stages — prescreening and the memory tagger. The core planner rides the deployment's hosted provider, which
 speaks OpenAI's envelope: see [openrouter-model](../openrouter-model/SKILL.md).
 
 A chat model takes OpenAI-shaped messages plus a JSON schema, and answers with an

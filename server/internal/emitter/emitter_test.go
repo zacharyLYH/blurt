@@ -3,6 +3,7 @@ package emitter
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -117,9 +118,9 @@ func (s *stack) commit(t *testing.T, reminders ...store.Reminder) {
 }
 
 // sweep runs one pass of the emitter loop, which is what one tick of Run does.
-func (s *stack) sweep(t *testing.T, spacing time.Duration) {
+func (s *stack) sweep(t *testing.T) {
 	t.Helper()
-	e := &Emitter{Reminders: s.reminders, Pusher: s.relay, Spacing: spacing, Now: s.at.now}
+	e := &Emitter{Reminders: s.reminders, Pusher: s.relay, Now: s.at.now}
 	e.sweep(context.Background())
 }
 
@@ -190,15 +191,15 @@ func repeat(text, next string) store.Reminder {
 }
 
 // One arrived Reminder is one notification, and a second sweep sends nothing: the
-// reminder it already fired is no longer resolved. The attempt is durable before the
-// push — the payload's TraceId names the row the delivery result then points back at —
-// because a crash in between must cost this firing rather than repeat it forever.
+// reminder it already fired is no longer resolved. The Notification instance is
+// durable before the push — the payload names it, and the page the user opens reads
+// that row — because a crash in between must cost this firing rather than repeat it.
 func TestSweepFiresAnArrivedReminderOnce(t *testing.T) {
 	s := newStack(t)
 	s.commit(t, oneOff("Buy glue"))
 
-	s.sweep(t, time.Millisecond)
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
+	s.sweep(t)
 
 	sent, _ := s.relay.sent()
 	if len(sent) != 1 {
@@ -210,16 +211,20 @@ func TestSweepFiresAnArrivedReminderOnce(t *testing.T) {
 		t.Fatalf("title = %q, want the reminder's own words", sent[0].Title)
 	}
 	wantBody(t, sent[0].Body, "6:00 PM")
-	if sent[0].Navigate != "/reminders" || sent[0].Tag == "" || sent[0].TraceID == 0 {
-		t.Fatalf("notification = %+v, want a target, a tag and the attempt's TraceId", sent[0])
+	if sent[0].Tag == "" || sent[0].ReminderID == 0 {
+		t.Fatalf("notification = %+v, want a tag and the reminder it is about", sent[0])
 	}
-	// Two Trace rows: the attempt the push pointed at, then what the relay answered.
+	want := fmt.Sprintf("/notifications/%d", sent[0].ReminderID)
+	if sent[0].Navigate != want {
+		t.Fatalf("navigate = %q, want %q", sent[0].Navigate, want)
+	}
+	// Two Trace rows: the attempt, then what the relay answered at send time.
 	traces := s.traces(t, "Buy glue")
 	if len(traces) != 2 || traces[0]["outcome"] != "attempt" || traces[1]["outcome"] != "sent" {
 		t.Fatalf("traces = %+v, want an attempt then its delivery", traces)
 	}
-	if traces[1]["attemptTraceId"] != float64(sent[0].TraceID) {
-		t.Fatalf("delivery = %+v, want it pointing at trace %d", traces[1], sent[0].TraceID)
+	if traces[1]["sentAt"] == "" {
+		t.Fatalf("delivery = %+v, want the instant we sent it", traces[1])
 	}
 	if stored := s.stored(t, "Buy glue"); stored.Status != store.ReminderFired {
 		t.Fatalf("status = %q, want fired", stored.Status)
@@ -235,7 +240,7 @@ func TestSweepLeavesAReminderThatHasNotArrivedAlone(t *testing.T) {
 	ahead.LocalDateTime, ahead.EmitAtUtc = "2026-10-29T18:00", "2026-10-29T10:00:00Z"
 	s.commit(t, ahead, repeat("Take pills", "2026-10-28T01:00:00Z"))
 
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
 
 	if sent, _ := s.relay.sent(); len(sent) != 0 {
 		t.Fatalf("sent = %+v, want nothing until the instant arrives", sent)
@@ -257,8 +262,8 @@ func TestSweepAdvancesARepeatInsteadOfFiringItAgain(t *testing.T) {
 	s := newStack(t)
 	s.commit(t, repeat("Take pills", "2026-10-25T01:00:00Z"))
 
-	s.sweep(t, time.Millisecond)
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
+	s.sweep(t)
 
 	sent, _ := s.relay.sent()
 	if len(sent) != 1 {
@@ -282,8 +287,8 @@ func TestSweepCatchesUpOnceAfterDowntime(t *testing.T) {
 	s := newStack(t)
 	s.commit(t, repeat("Take pills", "2026-10-22T01:00:00Z"))
 
-	s.sweep(t, time.Millisecond)
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
+	s.sweep(t)
 
 	if sent, _ := s.relay.sent(); len(sent) != 1 {
 		t.Fatalf("sent = %d, want one catch-up notification", len(sent))
@@ -303,7 +308,7 @@ func TestCancelledReminderNeverFires(t *testing.T) {
 		t.Fatalf("cancel = %v (%v), want it called off", cancelled, err)
 	}
 
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
 
 	if sent, _ := s.relay.sent(); len(sent) != 0 {
 		t.Fatalf("sent = %+v, want a called-off reminder to stay silent", sent)
@@ -327,7 +332,7 @@ func TestSweepSkipsRemindersItCannotPlace(t *testing.T) {
 	unreadable.Rule = &store.Rule{Frequency: store.FrequencyDaily, Time: "half past nine"}
 	s.commit(t, unknownZone, unreadable, oneOff("Buy glue"))
 
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
 
 	sent, _ := s.relay.sent()
 	if len(sent) != 1 || sent[0].Title != "Buy glue" {
@@ -350,7 +355,7 @@ func TestFiringIsRecordedWithNoDeviceSubscribed(t *testing.T) {
 	s.relay.result = push.Result{}
 	s.commit(t, oneOff("Buy glue"))
 
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
 
 	if stored := s.stored(t, "Buy glue"); stored.Status != store.ReminderFired {
 		t.Fatalf("status = %q, want fired", stored.Status)
@@ -369,8 +374,8 @@ func TestARefusedDeliveryIsRecordedAndStaysFired(t *testing.T) {
 	s.relay.err = push.ErrVAPID
 	s.commit(t, oneOff("Buy glue"))
 
-	s.sweep(t, time.Millisecond)
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
+	s.sweep(t)
 
 	if sent, _ := s.relay.sent(); len(sent) != 1 {
 		t.Fatalf("sent = %d, want no retry on the next sweep", len(sent))
@@ -384,23 +389,50 @@ func TestARefusedDeliveryIsRecordedAndStaysFired(t *testing.T) {
 	}
 }
 
-// Two arrived at once go out oldest first and spaced, so the user reads them one after
-// the other rather than as a burst that looks like a single interruption.
-func TestSweepSpacesDueNotifications(t *testing.T) {
+// Two arrived at once are two independent pipes, and both still get their own
+// Notification row: one slow relay must not cost the other reminder its firing.
+func TestSweepFiresEveryDueReminderConcurrently(t *testing.T) {
 	s := newStack(t)
 	first := oneOff("Buy glue")
 	first.LocalDateTime, first.EmitAtUtc = "2026-10-25T17:00", "2026-10-25T09:00:00Z"
 	s.commit(t, first, oneOff("Post letter"))
 
-	const spacing = 40 * time.Millisecond
-	s.sweep(t, spacing)
+	s.sweep(t)
 
-	sent, arrived := s.relay.sent()
-	if len(sent) != 2 || sent[0].Title != "Buy glue" || sent[1].Title != "Post letter" {
-		t.Fatalf("sent = %+v, want both in the order they came due", sent)
+	sent, _ := s.relay.sent()
+	if len(sent) != 2 {
+		t.Fatalf("sent = %+v, want both due reminders", sent)
 	}
-	if gap := arrived[1].Sub(arrived[0]); gap < spacing {
-		t.Fatalf("gap = %v, want at least %v between two notifications", gap, spacing)
+	seen := map[string]int64{}
+	for _, msg := range sent {
+		seen[msg.Title] = msg.ReminderID
+	}
+	if seen["Buy glue"] == 0 || seen["Post letter"] == 0 || seen["Buy glue"] == seen["Post letter"] {
+		t.Fatalf("notifications = %+v, want one reminder each", seen)
+	}
+}
+
+// A signed-out user has no device worth waking. With sessions wired in, the firing is
+// still claimed and recorded, but the push is skipped and the delivery row says why.
+func TestSweepSkipsThePushWhenNoSessionIsLive(t *testing.T) {
+	s := newStack(t)
+	s.commit(t, oneOff("Buy glue"))
+	e := &Emitter{
+		Reminders: s.reminders, Pusher: s.relay,
+		Sessions: store.NewSessionStore(s.handle.Write, s.handle.Read),
+		Now:      s.at.now,
+	}
+	e.sweep(context.Background())
+
+	if sent, _ := s.relay.sent(); len(sent) != 0 {
+		t.Fatalf("sent = %+v, want no push without a live session", sent)
+	}
+	if stored := s.stored(t, "Buy glue"); stored.Status != store.ReminderFired {
+		t.Fatalf("status = %q, want the reminder to still fire", stored.Status)
+	}
+	traces := s.traces(t, "Buy glue")
+	if len(traces) != 2 || traces[1]["outcome"] != "skipped_no_session" || traces[1]["sentAt"] == "" {
+		t.Fatalf("traces = %+v, want an attempt then a no-session skip at send time", traces)
 	}
 }
 
@@ -414,7 +446,7 @@ func TestReminderWithNoJobIsLeftAlone(t *testing.T) {
 		t.Fatalf("clear source job: %v", err)
 	}
 
-	s.sweep(t, time.Millisecond)
+	s.sweep(t)
 
 	if sent, _ := s.relay.sent(); len(sent) != 0 {
 		t.Fatalf("sent = %+v, want nothing fired without a trace to write", sent)

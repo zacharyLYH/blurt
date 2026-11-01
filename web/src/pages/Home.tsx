@@ -206,12 +206,14 @@ export default function Home() {
             <h1 data-testid="home-heading" className="text-2xl font-semibold tracking-tight md:text-3xl">
               Hi {user?.name || 'there'}
             </h1>
-            <p className="mt-1 text-sm text-muted-foreground">{user?.email}</p>
+            <p data-testid="home-email" className="mt-1 text-sm text-muted-foreground">{user?.email}</p>
           </div>
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" data-testid="reminders-link" onClick={() => navigate('/reminders')}>
-              Reminders
-            </Button>
+          <div className="flex items-center gap-1">			<Button variant="ghost" size="sm" data-testid="calendar-link" onClick={() => navigate('/calendar')}>
+			  Calendar
+			</Button>
+			<Button variant="ghost" size="sm" data-testid="reminders-link" onClick={() => navigate('/reminders')}>
+			  Reminders
+			</Button>
             <Button variant="ghost" size="sm" onClick={() => void signOut()}>
               Sign out
             </Button>

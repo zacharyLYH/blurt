@@ -1,7 +1,6 @@
 package flow
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -13,23 +12,13 @@ import (
 	"blurt/internal/store"
 )
 
-// The split deployment's model ids. The planner is the Job owner's own provider; the screen
+// The split deployment's model ids. The planner is the deployment's model; the screen
 // and the tagger are the home gateway's two cheap models.
 const (
 	screenModel  = "screen-model"
 	tagModel     = "tag-model"
 	plannerModel = "owner/planner-model"
 )
-
-// fixedResolver is the per-user model port: one model, named, for every Job.
-type fixedResolver struct {
-	model agent.Model
-	name  string
-}
-
-func (f fixedResolver) ModelFor(context.Context, int64) (agent.Model, string, error) {
-	return f.model, f.name, nil
-}
 
 // stageCall is one request as it reached the endpoint: which model id it named and
 // which wire shape carried it.
@@ -139,7 +128,7 @@ func (p *pump) wantStages(t *testing.T, script *stageScript, want map[string]sta
 }
 
 // TestPipelineThreeStagesAskTheirOwnModel is the split-model pin. The planner rides the
-// Job owner's endpoint; the screen and the tagger ride the home gateway, each under its own
+// deployment's endpoint; the screen and the tagger ride the home gateway, each under its own
 // model id. There is no single client to fall back on, which is the production shape — so a
 // stage wired to the wrong client, model or wire envelope fails here rather than in a
 // deployment where nobody is watching the gateway's logs.
@@ -148,21 +137,17 @@ func TestPipelineThreeStagesAskTheirOwnModel(t *testing.T) {
 	p := newPump(t)
 	loop := p.loop
 	// No fallback model: every stage must be wired explicitly, as main.go wires it.
-	loop.Planner = agent.Stage{}
+	loop.Planner = agent.Stage{Name: plannerModel, Model: agent.NewModelClient(agent.Settings{
+		Provider: agent.ProviderOpenRouter, URL: server.URL, APIKey: "owner", Model: plannerModel})}
 	gateway := func(name string) agent.Stage {
 		return agent.Stage{Name: name, Model: agent.NewModelClient(agent.Settings{
 			Provider: agent.ProviderGateway, URL: server.URL, APIKey: "helper", Model: name})}
 	}
 	loop.Prescreen, loop.Tags = gateway(screenModel), gateway(tagModel)
-	loop.Resolver = fixedResolver{
-		model: agent.NewModelClient(agent.Settings{
-			Provider: agent.ProviderOpenRouter, URL: server.URL, APIKey: "owner", Model: plannerModel}),
-		name: plannerModel,
-	}
 	p.start()
 
 	job := p.text(t, "remember milk is cheaper at store a", "Asia/Singapore")
-	p.settle(t, job.JobID, status(store.JobComplete), "the Memory committed by the owner's model")
+	p.settle(t, job.JobID, status(store.JobComplete), "the Memory committed by the planner's model")
 	if tags := p.tagged(t, "milk is cheaper at store a"); tags != "grocery,dairy" {
 		t.Fatalf("tags = %q, want the gateway tagger's features", tags)
 	}
@@ -173,7 +158,7 @@ func TestPipelineThreeStagesAskTheirOwnModel(t *testing.T) {
 		"planner":   {Model: plannerModel, Envelope: "openai"},
 		"tags":      {Model: tagModel, Envelope: "gateway"},
 	})
-	// The owner's model named the run, and the three gateway models are in the Trace.
+	// The planner named the run, and the three gateway models are in the Trace.
 	trace := p.lastTrace(t, job.JobID)
 	if got := traceField(trace, "model"); got != plannerModel {
 		t.Fatalf("trace model = %q, want %q", got, plannerModel)

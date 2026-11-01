@@ -30,9 +30,10 @@ test('a capture becomes a real push through the emitter', async ({ request }) =>
     // The instant is rendered in the zone the reminder was scheduled in, with a label beside
     // it; the host's own tzdata decides whether that label reads "SGT" or "+08".
     expect(payload.notification.body).toMatch(/^\d{1,2}:\d{2} [AP]M \S+$/)
-    expect(payload.notification.navigate).toBe('/reminders')
-    // The attempt's Trace row, which the service worker keeps for notification feedback.
-    expect(payload.notificationTraceId).toBeGreaterThan(0)
+    // A notification is just the Reminder the poll found due: the page it opens is the
+    // reminder itself, not a separate instance row or a Trace id.
+    expect(payload.reminderId).toBeGreaterThan(0)
+    expect(payload.notification.navigate).toBe(`/notifications/${payload.reminderId}`)
 
     // Firing is durable, and the page's own API is where the user sees it: a one-off that
     // fired belongs to the past.

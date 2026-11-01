@@ -23,7 +23,6 @@ import (
 	"blurt/internal/httpapi"
 	"blurt/internal/push"
 	"blurt/internal/queue"
-	"blurt/internal/secret"
 	"blurt/internal/store"
 )
 
@@ -166,9 +165,10 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 		Jobs:           store.NewJobStore(handle.Write, handle.Read),
 		Audio:          audio,
 		Queues:         queues,
+		Reminders:      store.NewReminderStore(handle.Write, handle.Read),
+		Notifications:  store.NewNotificationStore(handle.Write, handle.Read),
 		VAPIDPublicKey: testVAPIDPublicKey,
 		AllowedOrigins: []string{testOrigin},
-		EncryptionKey:  testModelKey(),
 	}))
 	t.Cleanup(server.Close)
 
@@ -758,9 +758,9 @@ func TestPushSendFansOutToCallerDevices(t *testing.T) {
 	if err != nil || target.Path != "/home" || target.Host == "" {
 		t.Fatalf("navigate = %q, want a same-origin /home", pusher.message.Navigate)
 	}
-	// A Trace row is backend-owned, so a client cannot point at one.
-	if pusher.message.TraceID != 0 {
-		t.Fatalf("TraceID = %d, want the backend to own it", pusher.message.TraceID)
+	// The reminder the push is about is backend-owned, so a client cannot point at one.
+	if pusher.message.ReminderID != 0 {
+		t.Fatalf("reminderId = %d, want the backend to own it", pusher.message.ReminderID)
 	}
 
 	// An explicit same-origin target is passed through unchanged.
@@ -919,7 +919,3 @@ func TestLogoutRevokesSession(t *testing.T) {
 		t.Fatalf("after logout status = %d, want 401: %s", status, body)
 	}
 }
-
-// testModelKey is the setup page's sealing key: any 32 bytes, because the tests open the
-// row back through the same key the endpoint used.
-func testModelKey() []byte { return bytes.Repeat([]byte{7}, secret.KeyLen) }

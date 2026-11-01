@@ -173,23 +173,21 @@ func (s *ReminderStore) Due(ctx context.Context, now time.Time, limit int) ([]Re
 	return scanReminders(rows)
 }
 
-// Fire is the emitter's claim on one Reminder plus the Trace row for the attempt,
-// in one transaction, and reports whether this caller is the one that got it. The
-// claim is a compare-and-swap on the single thing that makes the Reminder due: a
-// one-off moves resolved to fired, and a repeat moves to the instant it fires next.
-// Only the caller that reads the old value goes on to send, so a second sweep, a
-// restart, or a cancel that landed first cannot put the same firing on the wire
-// twice. The returned TraceId is the notification id the push carries, and the row
-// the delivery outcome then points back at.
-func (s *ReminderStore) Fire(ctx context.Context, reminder Reminder, next time.Time, detail map[string]any) (int64, bool, error) {
+// Fire is the emitter's claim on one Reminder plus the Trace row for the attempt, in
+// one transaction, and reports whether this caller is the one that got it. The claim
+// is a compare-and-swap on the single thing that makes the Reminder due: a one-off
+// moves resolved to fired, and a repeat moves to the instant it fires next. Only the
+// caller that reads the old value goes on to send, so a second sweep, a restart, or a
+// cancel that landed first cannot put the same firing on the wire twice.
+func (s *ReminderStore) Fire(ctx context.Context, reminder Reminder, next time.Time, detail map[string]any) (bool, error) {
 	if reminder.Rule != nil && next.IsZero() {
 		// A repeat cannot advance without the instant it moves to. Refusing here is
 		// what stops a pattern the calendar cannot place from firing every sweep.
-		return 0, false, nil
+		return false, nil
 	}
 	tx, err := s.write.BeginTx(ctx, nil)
 	if err != nil {
-		return 0, false, fmt.Errorf("begin reminder fire: %w", err)
+		return false, fmt.Errorf("begin reminder fire: %w", err)
 	}
 	defer tx.Rollback()
 
@@ -199,10 +197,10 @@ func (s *ReminderStore) Fire(ctx context.Context, reminder Reminder, next time.T
 			`UPDATE Reminder SET Status = ? WHERE ReminderId = ? AND Status = ?`,
 			ReminderFired, reminder.ReminderID, ReminderResolved)
 		if err != nil {
-			return 0, false, fmt.Errorf("claim reminder: %w", err)
+			return false, fmt.Errorf("claim reminder: %w", err)
 		}
 		if claimed, err = claimedRow(res); err != nil {
-			return 0, false, err
+			return false, err
 		}
 	} else {
 		res, err := tx.ExecContext(ctx, `
@@ -212,24 +210,23 @@ func (s *ReminderStore) Fire(ctx context.Context, reminder Reminder, next time.T
 			timestamp(next), reminder.ReminderID, reminder.NextEmitAtUtc,
 			reminder.ReminderID, ReminderResolved)
 		if err != nil {
-			return 0, false, fmt.Errorf("claim recurring reminder: %w", err)
+			return false, fmt.Errorf("claim recurring reminder: %w", err)
 		}
 		if claimed, err = claimedRow(res); err != nil {
-			return 0, false, err
+			return false, err
 		}
 	}
 	if !claimed {
-		return 0, false, nil
+		return false, nil
 	}
 
-	traceID, err := recordTrace(ctx, tx, NotificationStage, reminder.SourceJobID, reminder.ReminderID, detail)
-	if err != nil {
-		return 0, false, err
+	if _, err := recordTrace(ctx, tx, NotificationStage, reminder.SourceJobID, reminder.ReminderID, detail); err != nil {
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return 0, false, fmt.Errorf("commit reminder fire: %w", err)
+		return false, fmt.Errorf("commit reminder fire: %w", err)
 	}
-	return traceID, true, nil
+	return true, nil
 }
 
 // insertReminder runs inside the Job's own transaction, and records the row only

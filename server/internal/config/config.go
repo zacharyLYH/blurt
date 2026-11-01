@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"blurt/internal/secret"
 )
 
 const (
@@ -29,6 +27,8 @@ const (
 	vapidPublicKeyLen = 65
 	// vapidPrivateKeyLen is a P-256 scalar.
 	vapidPrivateKeyLen = 32
+	// defaultAgentURL is the OpenAI-compatible route the core planner speaks.
+	defaultAgentURL = "https://openrouter.ai/api/v1/chat/completions"
 )
 
 // SMTP describes the outbound mailbox that sends login PINs.
@@ -58,13 +58,21 @@ type STT struct {
 
 // Helper is the home gateway the two cheap stages ask: prescreening and the memory tagger.
 // They share the gateway that serves phonon, so the URL and key fall back to the STT ones and
-// only the model differs per stage. The core turn is the one that rides a user's own hosted
-// provider.
+// only the model differs per stage. The core turn is the one that rides the deployment's
+// hosted provider.
 type Helper struct {
 	URL       string
 	APIKey    string
 	Prescreen string // prescreening
 	Tags      string // memory tags
+}
+
+// Agent is the one core planner every user plans on. It is deployment
+// configuration, not user data.
+type Agent struct {
+	URL    string
+	APIKey string
+	Model  string
 }
 
 // Config is the fully resolved runtime configuration.
@@ -74,7 +82,6 @@ type Config struct {
 	Bind          string   // listen address, e.g. :8080
 	PublicOrigins []string // allowed browser origins: public host plus localhost
 	SessionSecret string
-	EncryptionKey []byte
 	// FakePIN is dev only: login accepts a fixed PIN and no mail is sent, so a
 	// local stack needs no mailbox. Never set it on a public host.
 	FakePIN bool
@@ -89,6 +96,8 @@ type Config struct {
 	// FakeAgent is dev only: a scripted model stands in so the AgentLoop can be
 	// exercised without a provider. Never set it on a public host.
 	FakeAgent bool
+	// Agent is the core planner every user plans on.
+	Agent Agent
 	// Helper is the local gateway for the two cheap stages. It is required unless
 	// the fake is on, which is how the local/e2e stack runs.
 	Helper Helper
@@ -120,15 +129,6 @@ func Load() (*Config, error) {
 
 	if len(cfg.SessionSecret) > 0 && len(cfg.SessionSecret) < minSessionSecretLen {
 		problems = append(problems, fmt.Sprintf("BLURT_SESSION_SECRET must be at least %d characters", minSessionSecretLen))
-	}
-
-	if raw := req("BLURT_ENCRYPTION_KEY"); raw != "" {
-		key, err := base64.StdEncoding.DecodeString(raw)
-		if err != nil || len(key) != secret.KeyLen {
-			problems = append(problems, fmt.Sprintf("BLURT_ENCRYPTION_KEY must be base64 of exactly %d bytes", secret.KeyLen))
-		} else {
-			cfg.EncryptionKey = key
-		}
 	}
 
 	// SMTP is optional here: the server boots without mail so tests and tools
@@ -172,10 +172,28 @@ func Load() (*Config, error) {
 		problems = append(problems, "BLURT_STT_URL "+err.Error())
 	}
 
-	// The model is not advisory: a capture with no model could never become a
-	// record, but the settings are per user now, so the only boot-time switch is
-	// the scripted fake.
+	// The core planner is deployment configuration: every user plans on the same
+	// model and key, and a capture with no model could never become a record.
 	cfg.FakeAgent = envBool(&problems, "BLURT_FAKE_AGENT")
+	cfg.Agent = Agent{
+		URL:    opt("BLURT_AGENT_URL"),
+		APIKey: opt("BLURT_AGENT_API_KEY"),
+		Model:  opt("BLURT_AGENT_MODEL"),
+	}
+	if cfg.Agent.URL == "" {
+		cfg.Agent.URL = defaultAgentURL
+	}
+	if err := checkHTTPURL(cfg.Agent.URL); err != nil {
+		problems = append(problems, "BLURT_AGENT_URL "+err.Error())
+	}
+	if !cfg.FakeAgent {
+		if cfg.Agent.APIKey == "" {
+			problems = append(problems, "BLURT_AGENT_API_KEY is required unless BLURT_FAKE_AGENT is true")
+		}
+		if cfg.Agent.Model == "" {
+			problems = append(problems, "BLURT_AGENT_MODEL is required unless BLURT_FAKE_AGENT is true")
+		}
+	}
 	cfg.FakeClockFastForward = envDuration(&problems, "BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT")
 
 	// The cheap stages ride the home gateway. They are not advisory: a capture that

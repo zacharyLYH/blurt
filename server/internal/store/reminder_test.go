@@ -269,7 +269,7 @@ func TestDuePicksUpArrivedResolvedReminders(t *testing.T) {
 	}
 
 	// A fired one-off and a called-off repeat are both done being due.
-	if _, claimed, err := reminders.Fire(ctx, due[1], time.Time{}, nil); err != nil || !claimed {
+	if claimed, err := reminders.Fire(ctx, due[1], time.Time{}, nil); err != nil || !claimed {
 		t.Fatalf("fire one-off = %v (%v), want it claimed", claimed, err)
 	}
 	if cancelled, err := reminders.Cancel(ctx, userID, due[0].ReminderID); err != nil || !cancelled {
@@ -303,11 +303,11 @@ func TestFireClaimsOnceAndAdvancesARepeat(t *testing.T) {
 	}
 	repeat, oneOff := due[0], due[1]
 
-	traceID, claimed, err := reminders.Fire(ctx, oneOff, time.Time{}, map[string]any{"outcome": "attempt"})
-	if err != nil || !claimed || traceID == 0 {
-		t.Fatalf("fire = %d %v (%v), want a claim with a trace row", traceID, claimed, err)
+	claimed, err := reminders.Fire(ctx, oneOff, time.Time{}, map[string]any{"outcome": "attempt"})
+	if err != nil || !claimed {
+		t.Fatalf("fire = %v (%v), want a claim with a trace row", claimed, err)
 	}
-	if _, again, err := reminders.Fire(ctx, oneOff, time.Time{}, nil); err != nil || again {
+	if again, err := reminders.Fire(ctx, oneOff, time.Time{}, nil); err != nil || again {
 		t.Fatalf("second fire = %v (%v), want the claim refused", again, err)
 	}
 	var status string
@@ -320,10 +320,11 @@ func TestFireClaimsOnceAndAdvancesARepeat(t *testing.T) {
 	}
 
 	// The attempt row hangs off the Job that committed the Reminder and names the
-	// Reminder it was about: that pair is what a reader traces a firing back through.
+	// Reminder and firing it was about: that is what a reader traces it through.
 	var jobID, reminderID int64
 	if err := handle.Read.QueryRow(
-		`SELECT JobId, ReminderId FROM Trace WHERE TraceId = ?`, traceID).Scan(&jobID, &reminderID); err != nil {
+		`SELECT JobId, ReminderId FROM Trace WHERE ReminderId = ? AND Stage = ? ORDER BY TraceId DESC LIMIT 1`,
+		oneOff.ReminderID, NotificationStage).Scan(&jobID, &reminderID); err != nil {
 		t.Fatalf("read trace: %v", err)
 	}
 	if jobID != job.JobID || reminderID != oneOff.ReminderID {
@@ -334,15 +335,15 @@ func TestFireClaimsOnceAndAdvancesARepeat(t *testing.T) {
 	// A repeat stays resolved and moves instead, derived from its rule rather than by
 	// adding a day to the instant it just fired.
 	next := time.Date(2026, 10, 26, 1, 0, 0, 0, time.UTC)
-	if _, claimed, err := reminders.Fire(ctx, repeat, next, nil); err != nil || !claimed {
+	if claimed, err := reminders.Fire(ctx, repeat, next, nil); err != nil || !claimed {
 		t.Fatalf("fire repeat = %v (%v), want it claimed", claimed, err)
 	}
-	if _, stale, err := reminders.Fire(ctx, repeat, next, nil); err != nil || stale {
+	if stale, err := reminders.Fire(ctx, repeat, next, nil); err != nil || stale {
 		t.Fatalf("stale repeat fire = %v (%v), want the old instant to lose the swap", stale, err)
 	}
 	// A pattern the calendar cannot place has no next instant, so it must not fire and
 	// must not move: otherwise it would ring on every sweep forever.
-	if _, placed, err := reminders.Fire(ctx, repeat, time.Time{}, nil); err != nil || placed {
+	if placed, err := reminders.Fire(ctx, repeat, time.Time{}, nil); err != nil || placed {
 		t.Fatalf("unplaceable fire = %v (%v), want it refused", placed, err)
 	}
 
@@ -372,9 +373,10 @@ func TestCancelCallsOffWithoutDeleting(t *testing.T) {
 	}
 	commitThree(t, handle, job.JobID)
 	id := reminderID(t, handle, "Buy glue")
-	if _, claimed, err := reminders.Fire(ctx,
-		Reminder{ReminderID: reminderID(t, handle, "Later glue"), SourceJobID: job.JobID},
-		time.Time{}, nil); err != nil || !claimed {
+	if claimed, err := reminders.Fire(ctx, Reminder{
+		ReminderID: reminderID(t, handle, "Later glue"), UserID: userID, SourceJobID: job.JobID,
+		Timezone: "Asia/Singapore", EmitAtUtc: "2026-10-26T10:00:00Z",
+	}, time.Time{}, nil); err != nil || !claimed {
 		t.Fatalf("fire = %v (%v), want it claimed", claimed, err)
 	}
 

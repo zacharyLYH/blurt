@@ -1,7 +1,6 @@
-// The model port: what the AgentLoop asks for, and the two chat envelopes that answer it. A
-// user brings one endpoint, one key and one model, so the transport is built per Job from the
-// User row and every stage rides it: the screen, the agent loop, the strict call behind it
-// and the tagger.
+// The model port: what the AgentLoop asks for, and the two chat envelopes that answer it. The
+// deployment names one endpoint, key and model, and every stage rides it: the screen, the
+// agent loop, the strict call behind it and the tagger.
 //
 // Two wire shapes, differing only in framing. The home gateway takes
 // {"model", "payload": {messages, tools, max_tokens, response_format}} and answers under
@@ -133,8 +132,7 @@ const (
 	ProviderOpenRouter Provider = "openrouter"
 )
 
-// Settings is one user's model: what the setup page stores on the User row, with
-// the key already decrypted.
+// Settings is the deployment's model: one endpoint, key and model for every Job.
 type Settings struct {
 	Provider Provider
 	URL      string
@@ -297,8 +295,9 @@ func (r inferReply) first() (replyChoice, bool) {
 
 var _ Model = (*ModelClient)(nil)
 
-// NewModelClient builds the transport for one user's settings. Only ProviderOpenRouter
-// is not the gateway envelope, so an unset provider takes the gateway path anyway.
+// NewModelClient builds the transport for the deployment's settings. Only
+// ProviderOpenRouter is not the gateway envelope, so an unset provider takes the
+// gateway path anyway.
 func NewModelClient(settings Settings) *ModelClient {
 	return &ModelClient{
 		settings: settings,
