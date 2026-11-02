@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { BASE_URL, ciTimeout } from './env'
+import { BASE_URL, ciTimeout, visualProofs } from './env'
 import { deliverPush, clickNotification } from './fake-relay'
 import { passPermissions, signIn, uniqueEmail } from './helpers'
 import { createReminder, subscribeRequest, waitForReminder } from './api'
@@ -109,6 +109,7 @@ test('a missing or foreign notification has no form', async ({ page }) => {
 })
 
 test.describe('visual proof', () => {
+  test.skip(!visualProofs, 'visual proofs run where the baselines live: make e2e-visual')
   test.use({ viewport: { width: 390, height: 844 } })
 
   test('notification page, mobile', async ({ page }) => {
@@ -123,6 +124,7 @@ test.describe('visual proof', () => {
 })
 
 test.describe('visual proof, desktop', () => {
+  test.skip(!visualProofs, 'visual proofs run where the baselines live: make e2e-visual')
   test.use({ viewport: { width: 1280, height: 800 } })
 
   test('notification page, desktop', async ({ page }) => {

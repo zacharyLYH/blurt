@@ -6,6 +6,7 @@ import Login from './pages/Login'
 import NotificationDetail from './pages/NotificationDetail'
 import Permissions from './pages/Permissions'
 import Questionnaire from './pages/Questionnaire'
+import Traces from './pages/Traces'
 import { permissionsChecked } from './lib/permissions'
 import { UserProvider, useUser } from './lib/user'
 
@@ -82,6 +83,8 @@ export default function App() {
           <Route path="/calendar" element={<CalendarAlias />} />
           {/* The page a push opens: the Reminder itself, with feedback per submission. */}
           <Route path="/notifications/:reminderId" element={<Protected><Gated><NotificationDetail /></Gated></Protected>} />
+          {/* The debug page: one reminder's stage history, indented by job. */}
+          <Route path="/traces" element={<Protected><Gated><Traces /></Gated></Protected>} />
           <Route path="*" element={<Navigate to="/home" replace />} />
         </Routes>
       </BrowserRouter>

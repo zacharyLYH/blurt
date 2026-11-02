@@ -186,12 +186,13 @@ type ModelClient struct {
 // prompt is the system prompt the agent loop sends.
 func (h *ModelClient) prompt() string { return pick(h.Prompt, AgentPrompt) }
 
-// pick is a prompt arm's own text when it has one, and the shipped prompt otherwise.
-func pick(override, shipped string) string {
-	if override != "" {
-		return override
+// pick is first when it has something to say and fallback otherwise: a prompt arm's own text over
+// the shipped prompt, or a row's value over the one the capture did not name.
+func pick(first, fallback string) string {
+	if first != "" {
+		return first
 	}
-	return shipped
+	return fallback
 }
 
 // Message is one turn of a conversation as the provider takes it: the role, the words,
@@ -514,7 +515,7 @@ func (h *ModelClient) Finalize(ctx context.Context, in PlannerInput, sent []Mess
 	if err != nil {
 		return Answer{}, err
 	}
-	answer, err := answerFrom(parsed, in.Now)
+	answer, err := answerFrom(parsed)
 	if err != nil {
 		return Answer{}, schemaError{err}
 	}

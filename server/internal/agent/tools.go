@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 
 	"blurt/internal/store"
@@ -67,7 +66,7 @@ const (
     "zone":       {"type": "string", "description": "the IANA zone the row rings in"},
     "day":        {"type": "string", "description": "the day after the change, as the user's own word or a bare date YYYY-MM-DD; empty keeps the row's day"},
     "time":       {"type": "string", "description": "notify clock HH:MM 24-hour"},
-    "recurrence": {"type": "string", "enum": ["none", "daily", "weekly", "monthly", "yearly"], "description": "none for a one-off"}
+    "recurrence": {"type": "string", "enum": ["", "none", "daily", "weekly", "monthly", "yearly"], "description": "empty keeps the row's repeat; none makes it a one-off; otherwise the repeat the capture asks for"}
   },
   "required": ["reminder_id", "text", "zone", "day", "time", "recurrence"]
 }`
@@ -87,11 +86,9 @@ func (r *jobRun) runTool(ctx context.Context, call ToolCall, left int) (string, 
 		}
 		result := reminderRows(rows)
 		r.looked = append(r.looked, result)
-		for _, reminder := range rows {
-			// The ids this run may name later: the whitelist's whole memory is what the
-			// model was shown.
-			r.found = append(r.found, reminder.ReminderID)
-		}
+		// The rows this run may name later: the whitelist's whole memory is what the model
+		// was shown, and a change is filled from the row itself.
+		r.found = append(r.found, rows...)
 		return counted(result, left), false
 	case toolFindMemories:
 		rows, err := r.findMemories(ctx, call)
@@ -132,10 +129,15 @@ func (r *jobRun) findMemories(ctx context.Context, call ToolCall) ([]store.Memor
 	return r.loop.Recall.FindMemories(ctx, r.job.UserID, query, toolRows)
 }
 
-// named reports whether an id is one this run's own find_reminders printed. A small integer is a
-// real row somebody owns, so an id the model never saw is refused rather than trusted.
-func (r *jobRun) named(id int64) bool {
-	return slices.Contains(r.found, id)
+// printed is the row an id names, when this run's own find_reminders printed it. A small integer
+// is a real row somebody owns, so an id the model never saw is refused rather than trusted.
+func printed(rows []store.Reminder, id int64) (store.Reminder, bool) {
+	for _, row := range rows {
+		if row.ReminderID == id {
+			return row, true
+		}
+	}
+	return store.Reminder{}, false
 }
 
 // checkUpdate is the change pre-check: whether that row is still the caller's to change, then the
@@ -143,18 +145,12 @@ func (r *jobRun) named(id int64) bool {
 // place lint accepts. It is advisory, the way recall is: a refusal is a tool result the model
 // reads, never a fault, and lint still decides at submit.
 func (r *jobRun) checkUpdate(ctx context.Context, call ToolCall) (string, error) {
-	var args struct {
-		ReminderID int64  `json:"reminder_id"`
-		Text       string `json:"text"`
-		Zone       string `json:"zone"`
-		Day        string `json:"day"`
-		Time       string `json:"time"`
-		Recurrence string `json:"recurrence"`
-	}
+	// The arguments are one op's fields, so the wire shape is the same one the answer reads.
+	var args plannerOp
 	if err := json.Unmarshal([]byte(call.Function.Arguments), &args); err != nil {
 		return "", fmt.Errorf("arguments are not a change: %w", err)
 	}
-	if !r.named(args.ReminderID) {
+	if _, ok := printed(r.found, args.ReminderID); !ok {
 		return fmt.Sprintf("cannot update id=%d: it is not a row this run looked up", args.ReminderID), nil
 	}
 	reminder, ok, err := r.loop.Recall.FindReminder(ctx, r.job.UserID, args.ReminderID)
@@ -167,35 +163,10 @@ func (r *jobRun) checkUpdate(ctx context.Context, call ToolCall) (string, error)
 	if reminder.Status != store.ReminderResolved {
 		return fmt.Sprintf("cannot update id=%d: it is %s", args.ReminderID, reminderState(reminder)), nil
 	}
-	// The check answers for the row too: a change names only what it changes, so every field it
-	// left unsaid is the row's — exactly as the commit will fill it.
-	text := strings.TrimSpace(args.Text)
-	if text == "" {
-		text = reminder.Text
-	}
-	zone := strings.TrimSpace(args.Zone)
-	if zone == "" {
-		zone = reminder.Timezone
-	}
-	day := strings.TrimSpace(args.Day)
-	date, clock := rowWhen(reminder)
-	if day == "" {
-		day = date
-	} else if at, ok := resolveDay(day, inZone(r.started, zone)); ok {
-		date = at.Format("2006-01-02")
-	} else {
-		date = ""
-	}
-	time := strings.TrimSpace(args.Time)
-	if time == "" {
-		time = clock
-	}
-	recurrence := strings.TrimSpace(args.Recurrence)
-	if recurrence == "" {
-		recurrence = rowRecurrence(reminder)
-	}
-	record := Record{Kind: KindReminder, Text: text, Zone: zone, Day: day, Date: date,
-		Time: time, Recurrence: recurrence}
+	// The check answers for the row too, through the commit's own fill and the answer's own
+	// wire mapping: a place it accepts is a place the commit writes.
+	record := recordFrom(args, IntentUpdate)
+	settleRecord(&record, reminder, deviceZone(r.job), r.started)
 	if faults := lintRecord(record, r.started); len(faults) > 0 {
 		return fmt.Sprintf("cannot update id=%d: %s", args.ReminderID, strings.Join(faults, "; ")), nil
 	}

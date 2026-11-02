@@ -1,6 +1,6 @@
 # E2E override: the same images as production, but the server runs on
 # throwaway values and the app is published on a dedicated port so a running
-# dev stack on 9998 never collides. Always merged over the base file:
+# dev stack on 9996 never collides. Always merged over the base file:
 #
 #   docker compose -f docker-compose.yml -f docker-compose.e2e.yml \
 #     -p blurt-e2e up --build

@@ -1,5 +1,5 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
-import { BASE_URL } from './env'
+import { BASE_URL, visualProofs } from './env'
 import { fillQuestionnaire, passPermissions, signIn } from './helpers'
 
 // Visual proof for the everyday screens: login, the recording boom, the
@@ -87,6 +87,7 @@ async function captureEverydayScreens(page: Page, context: BrowserContext, suffi
 }
 
 test.describe('visual proof, mobile', () => {
+  test.skip(!visualProofs, 'visual proofs run where the baselines live: make e2e-visual')
   test.use({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Singapore' })
 
   test('login, mobile', async ({ page }) => {
@@ -104,6 +105,7 @@ test.describe('visual proof, mobile', () => {
 })
 
 test.describe('visual proof, desktop', () => {
+  test.skip(!visualProofs, 'visual proofs run where the baselines live: make e2e-visual')
   test.use({ viewport: { width: 1280, height: 900 }, timezoneId: 'Asia/Singapore' })
 
   test('login, desktop', async ({ page }) => {

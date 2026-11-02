@@ -14,7 +14,7 @@ make env-init          # .env.example -> .env, plus generated session secret and
 make start-reset-full  # or: start-no-reset | stop | logs
 ```
 
-App: <http://localhost:9998>. nginx proxies `/api` and `/health`; the Go server has no host port.
+App: <http://localhost:9996>. nginx proxies `/api` and `/health`; the Go server has no host port.
 
 ## Configure
 
@@ -26,7 +26,7 @@ Boot panics on any gap. Every `BLURT_FAKE_*` switch is local/e2e only: never set
 | `BLURT_PRESCREEN_MODEL` `BLURT_TAGS_MODEL` | the two cheap stages: prescreen and memory tagger. Same gateway as STT, so URL and key default to `BLURT_STT_*`; `BLURT_AUX_URL` / `BLURT_AUX_API_KEY` override. |
 | `BLURT_AGENT_MODEL` `BLURT_AGENT_API_KEY` | the one core planner every user plans on. `BLURT_AGENT_URL` overrides the OpenRouter default. Required unless the fake is on. |
 | `BLURT_SMTP_*` | login-PIN mail. Gmail App Password (2FA required); nothing else to configure. |
-| `BLURT_PUBLIC_ORIGINS` | comma-separated CSRF allowlist. Empty = localhost:9998 + :5173 (dev only). Set it and localhost is no longer trusted unless listed. |
+| `BLURT_PUBLIC_ORIGINS` | comma-separated CSRF allowlist. Empty = localhost:9996 + :5173 (dev only). Set it and localhost is no longer trusted unless listed. |
 | `BLURT_REDIS_URL` | queue transport. Default `redis://redis:6379/0`. |
 | `BLURT_FAKE_PIN` | fixed PIN `123456`, no mail. |
 | `BLURT_FAKE_STT` | deterministic transcriber, no gateway. |
@@ -92,4 +92,4 @@ Output: a per-case scorecard on stdout (pass rate, calls, faults, latency — sh
 
 ## Deploy
 
-Point the host at nginx `127.0.0.1:9998` (`BLURT_WEB_PORT` overrides). Cloudflare Tunnel or any reverse proxy works.
+Point the host at nginx `127.0.0.1:9996` (`BLURT_WEB_PORT` overrides). Cloudflare Tunnel or any reverse proxy works.

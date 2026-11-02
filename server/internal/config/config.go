@@ -19,7 +19,7 @@ const (
 	// defaultOrigins are the local dev origins, used only when no public host
 	// is configured. A deploy that sets BLURT_PUBLIC_ORIGINS trusts exactly
 	// what it lists, not localhost.
-	defaultOrigins = "http://localhost:9998,http://localhost:5173"
+	defaultOrigins = "http://localhost:9996,http://localhost:5173"
 	// minSessionSecretLen keeps opaque session tokens unguessable even if the
 	// signing material is reused for hashing.
 	minSessionSecretLen = 32

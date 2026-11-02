@@ -151,10 +151,12 @@ func TestModelClientFinalizeSendsTheStructuredSchema(t *testing.T) {
 		t.Fatalf("user turn = %q, want the local clock in it", got.Payload.Messages[1].Content)
 	}
 
-	if turn.Kind != AnswerRecords || len(turn.Ops) != 1 || turn.Ops[0].Record.Date != "2026-10-25" ||
-		turn.Ops[0].Record.Day != "tomorrow" || turn.Ops[0].Record.Recurrence != RecurrenceNone ||
+	// What the strict call promises is the wire answer: the day token the model copied, not
+	// the date. The calendar is settleRecord's, which reads the token once the zone is known.
+	if turn.Kind != AnswerRecords || len(turn.Ops) != 1 || turn.Ops[0].Record.Day != "tomorrow" ||
+		turn.Ops[0].Record.Time != "19:00" || turn.Ops[0].Record.Recurrence != RecurrenceNone ||
 		turn.Evidence == "" {
-		t.Fatalf("turn = %+v, want one resolved reminder", turn)
+		t.Fatalf("turn = %+v, want one reminder off the schema", turn)
 	}
 }
 
@@ -293,8 +295,8 @@ func TestGatewayRefusesAnUnreadableAnswer(t *testing.T) {
 
 // answerFrom is the whole shape decision: which kind it is, what that kind proposed, one op per
 // row the capture acts on, and the strictness the decoder cannot give us — a question filled
-// nothing and a records answer did not also ask. The day is the one field the server reads
-// rather than copies.
+// nothing and a records answer did not also ask. The day token rides through as the model wrote
+// it; settleRecord is what turns it into a date, once, against the op's own zone.
 func TestAnswerFrom(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -306,19 +308,19 @@ func TestAnswerFrom(t *testing.T) {
 			Intent: "create", Text: " Call mum ", Zone: " Asia/Singapore ", Day: "tomorrow",
 			Time: "19:00", Recurrence: "none"}}, Evidence: " they said 7pm "},
 			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder, Text: "Call mum",
-				Zone: "Asia/Singapore", Day: "tomorrow", Date: "2026-10-25", Time: "19:00",
+				Zone: "Asia/Singapore", Day: "tomorrow", Time: "19:00",
 				Recurrence: RecurrenceNone}}}},
 		{"a repeat", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
 			Intent: "create", Text: "Trash", Zone: "Asia/Singapore", Day: "this:tuesday",
 			Time: "19:00", Recurrence: "weekly"}}},
 			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder, Text: "Trash",
-				Zone: "Asia/Singapore", Day: "this:tuesday", Date: "2026-10-27", Time: "19:00",
+				Zone: "Asia/Singapore", Day: "this:tuesday", Time: "19:00",
 				Recurrence: store.FrequencyWeekly}}}},
 		{"a day count", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
 			Intent: "create", Text: "Renew the pass", Zone: "Asia/Singapore", Day: "in:13d",
 			Time: "09:00", Recurrence: "none"}}},
 			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder,
-				Text: "Renew the pass", Zone: "Asia/Singapore", Day: "in:13d", Date: "2026-11-06",
+				Text: "Renew the pass", Zone: "Asia/Singapore", Day: "in:13d",
 				Time: "09:00", Recurrence: RecurrenceNone}}}},
 		{"an unanswered pattern", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
 			Intent: "create", Text: "Buy glue"}}},
@@ -342,15 +344,14 @@ func TestAnswerFrom(t *testing.T) {
 			{Intent: "update", ReminderID: 9, Day: "tomorrow"}}},
 			AnswerRecords, []Op{
 				{Intent: IntentUpdate, ReminderID: 7, Record: Record{Kind: KindReminder, Time: "20:00"}},
-				{Intent: IntentUpdate, ReminderID: 9, Record: Record{Kind: KindReminder, Day: "tomorrow",
-					Date: "2026-10-25"}}}},
+				{Intent: IntentUpdate, ReminderID: 9, Record: Record{Kind: KindReminder, Day: "tomorrow"}}}},
 		{"a call-off", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{Intent: "cancel"}}},
 			AnswerRecords, []Op{{Intent: IntentCancel}}},
 		{"an event and a fact", plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
 			Intent: "create", Text: "Lunch at Ikea", Zone: "Asia/Singapore", Day: "this:friday",
 			Time: "13:00", Recurrence: "none"}}, Memories: []string{"I have an Ikea voucher"}},
 			AnswerRecords, []Op{{Intent: IntentCreate, Record: Record{Kind: KindReminder,
-				Text: "Lunch at Ikea", Zone: "Asia/Singapore", Day: "this:friday", Date: "2026-10-30",
+				Text: "Lunch at Ikea", Zone: "Asia/Singapore", Day: "this:friday",
 				Time: "13:00", Recurrence: RecurrenceNone}}}},
 		{"a question", plannerAnswer{Kind: AnswerQuestion, Question: " When? "}, AnswerQuestion, nil},
 		// A kind the server does not know proposes nothing, and the linter is what names it.
@@ -358,7 +359,7 @@ func TestAnswerFrom(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			turn, err := answerFrom(test.parsed, pinned)
+			turn, err := answerFrom(test.parsed)
 			if err != nil {
 				t.Fatalf("answerFrom: %v", err)
 			}
@@ -375,7 +376,7 @@ func TestAnswerFrom(t *testing.T) {
 	}
 	// The facts are read as sentences, and blanks are not facts.
 	turn, err := answerFrom(plannerAnswer{Kind: AnswerRecords, Memories: []string{
-		" Milk is cheaper at store A ", "  "}, Question: "", Ops: nil}, pinned)
+		" Milk is cheaper at store A ", "  "}, Question: "", Ops: nil})
 	if err != nil {
 		t.Fatalf("answerFrom: %v", err)
 	}
@@ -401,25 +402,30 @@ func TestAnswerFromRefusesAnAskThatProposes(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			if _, err := answerFrom(test.parsed, pinned); err == nil {
+			if _, err := answerFrom(test.parsed); err == nil {
 				t.Fatal("answerFrom accepted an answer that both proposes and asks")
 			}
 		})
 	}
 }
 
-// A day token is the user's calendar, not the server's: at 00:30 in Singapore the
-// server's UTC clock still reads the previous day, and "today" must not slip back one.
-func TestAnswerFromResolvesTheDayInTheRecordZone(t *testing.T) {
-	turn, err := answerFrom(plannerAnswer{Kind: AnswerRecords, Ops: []plannerOp{{
-		Intent: "create", Text: "Buy glue", Zone: zone, Day: "today", Time: "09:00",
-		Recurrence: RecurrenceNone}}},
-		time.Date(2026, 10, 24, 16, 30, 0, 0, time.UTC))
-	if err != nil {
-		t.Fatalf("answerFrom: %v", err)
+// A day token is the user's calendar, not the server's: at 00:30 in Singapore the server's
+// UTC clock still reads the previous day, and "today" must not slip back one. settleRecord is
+// the one place the token is read, and it reads it after the zone is settled — so a change that
+// leaves the zone unsaid is read on the row's calendar rather than the capture device's.
+func TestSettleRecordResolvesTheDayInTheRecordZone(t *testing.T) {
+	at := time.Date(2026, 10, 24, 16, 30, 0, 0, time.UTC) // 00:30 on the 25th in Singapore
+	create := Record{Kind: KindReminder, Text: "Buy glue", Zone: zone, Day: "today", Time: "09:00"}
+	settleRecord(&create, store.Reminder{}, "", at)
+	if create.Date != "2026-10-25" {
+		t.Fatalf("date = %q, want the user's own day", create.Date)
 	}
-	if got := turn.Ops[0].Record.Date; got != "2026-10-25" {
-		t.Fatalf("date = %q, want the user's own day", got)
+
+	row := store.Reminder{ReminderID: 7, Text: "Dentist", Timezone: zone, LocalDateTime: "2026-10-27T10:00"}
+	change := Record{Kind: KindReminder, Day: "tomorrow"}
+	settleRecord(&change, row, "America/New_York", at)
+	if change.Date != "2026-10-26" || change.Zone != zone || change.Text != "Dentist" {
+		t.Fatalf("change = %+v, want the row's own calendar, words and zone", change)
 	}
 }
 

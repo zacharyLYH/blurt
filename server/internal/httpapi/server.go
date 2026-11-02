@@ -48,6 +48,8 @@ type Deps struct {
 	// Notifications backs the page a push opens and the calendar. Nil is valid for
 	// the same reason.
 	Notifications *store.NotificationStore
+	// Traces backs the debug page. Nil is valid for the same reason.
+	Traces *store.TraceStore
 	// VAPIDPublicKey is handed to browsers when they create a push
 	// subscription. The private half stays inside the sender.
 	VAPIDPublicKey string
@@ -93,6 +95,11 @@ func New(deps Deps) http.Handler {
 	// The clarification reply is one more turn in the same Conversation, so it
 	// rides the Job rather than opening a workflow of its own.
 	mux.HandleFunc("POST /api/jobs/{jobId}/messages", s.requireUser(s.replyToJob))
+	// The debug page reads what each stage did for one reminder. Nothing the product
+	// shows depends on it, which is why it is a read and not a product surface.
+	mux.HandleFunc("GET /api/traces", s.requireUser(s.listTraces))
+	mux.HandleFunc("GET /api/traces/{reminderId}", s.requireUser(s.getTrace))
+	mux.HandleFunc("/api/traces/{reminderId}", methodNotAllowed(http.MethodGet))
 	// Wrong method on a real Job path gets 405, not the generic 501 below.
 	mux.HandleFunc("/api/jobs/{jobId}", methodNotAllowed(http.MethodGet))
 	mux.HandleFunc("/api/jobs/{jobId}/messages", methodNotAllowed(http.MethodPost))
@@ -113,9 +120,9 @@ var knownRoutes = map[string]string{
 	"/api/push/key":         http.MethodGet,
 	"/api/push/subscribe":   http.MethodPost,
 	"/api/push":             http.MethodPost,
-	"/api/jobs":             http.MethodGet + ", " + http.MethodPost,
-	"/api/reminders":        http.MethodGet,
-	"/api/notifications":    http.MethodGet,
+	"/api/jobs":             http.MethodGet + ", " + http.MethodPost, "/api/reminders": http.MethodGet,
+	"/api/notifications": http.MethodGet,
+	"/api/traces":        http.MethodGet,
 }
 
 // csrf requires an allowed Origin (or Referer) on unsafe methods. Cookies

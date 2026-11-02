@@ -54,6 +54,8 @@ jobs:
         working-directory: web
       - run: npx playwright install --with-deps chromium
         working-directory: web
+      # The pixel proofs are skipped here on purpose: their baselines are macOS shots,
+      # and this runner has none. `make e2e-visual` is the lane that owns them.
       - run: npm run test:e2e
         working-directory: web
       - if: failure()

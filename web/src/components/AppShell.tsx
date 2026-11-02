@@ -155,6 +155,32 @@ export function AppShell({ inbox, push, onSignOut, onOpenInbox, children }: AppS
           type="button"
           variant="ghost"
           size="icon"
+          aria-label="Traces"
+          title="Traces"
+          onClick={() => navigate('/traces')}
+          className="size-8 shrink-0"
+        >
+          <svg
+            viewBox="0 0 24 24"
+            className="size-4"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="6" cy="6" r="2.5" />
+            <circle cx="6" cy="18" r="2.5" />
+            <circle cx="18" cy="12" r="2.5" />
+            <path d="M8.5 6h4a3 3 0 0 1 3 3v.5M8.5 18h4a3 3 0 0 0 3-3v-.5" />
+          </svg>
+        </Button>
+
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
           aria-label="Sign out"
           title="Sign out"
           onClick={onSignOut}

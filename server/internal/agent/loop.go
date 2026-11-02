@@ -155,9 +155,10 @@ type jobRun struct {
 	// only evidence a question may quote a clock from: a time the model supplied itself
 	// would reach the user as theirs.
 	looked []string
-	// found is the ids those lookups printed, which is the whole of the whitelist: a change
-	// may name one of them and nothing else.
-	found []int64
+	// found is what those lookups printed, which is the whole of the whitelist: a change may
+	// name one of them and nothing else, and an update is filled from the row it names rather
+	// than read again.
+	found []store.Reminder
 	// updates are the rows this run rewrites in place, each carrying its own id.
 	updates []store.Reminder
 	// stale is set when a rewrite found its row gone between the lookup and the commit.
@@ -223,10 +224,7 @@ func (r *jobRun) agent(ctx context.Context) (state, error) {
 		}
 		sent = conversation
 		if fault == "" {
-			answer, err = r.settle(ctx, answer)
-			if err != nil {
-				return nil, err
-			}
+			answer = r.settle(answer)
 			if faults := lint(answer, r.started, r.found); len(faults) > 0 {
 				fault = note(faults)
 			}
@@ -250,38 +248,24 @@ func (r *jobRun) agent(ctx context.Context) (state, error) {
 }
 
 // settle fills what the model left unsaid, so it never has to copy a field the server already
-// holds. A change says only what it changes: the rest is the row's — its words, its zone, the day
-// it falls on, its clock and its repeat. A create that names no place rings in the user's own
-// zone. Filling here rather than trusting a copy means the copy cannot be wrong, and the linter
-// still sees a whole record either way. Two changes are two rows, so this fills op by op.
-func (r *jobRun) settle(ctx context.Context, answer Answer) (Answer, error) {
+// holds: a change is a delta, and the rest is the row's. The row is the one this run's own
+// lookup printed, so nothing is read twice; a row it never saw is the whitelist's to refuse
+// before any field is checked.
+func (r *jobRun) settle(answer Answer) Answer {
 	for i := range answer.Ops {
 		op := &answer.Ops[i]
-		row := store.Reminder{}
-		if op.Intent == IntentUpdate {
-			found, ok, err := r.loop.Recall.FindReminder(ctx, r.job.UserID, op.ReminderID)
-			if err != nil {
-				return answer, err
-			}
-			// A row that is not there is lint's to refuse: it names the id and the reason.
-			if ok {
-				row = found
-			}
-		}
+		row, _ := printed(r.found, op.ReminderID)
 		settleRecord(&op.Record, row, deviceZone(r.job), r.started)
 	}
-	return answer, nil
+	return answer
 }
 
-// settleRecord is one op's fill: the row it changes, or the user's own zone for a create. An
-// empty field means "as it was", and a day token is read the way answerFrom reads it, so a double
-// hands over the token alone and lint sees the same record either way.
+// settleRecord is the one fill: the row an op changes, or the user's own zone for a create. An
+// empty field means "as it was", and the day token becomes a date here — once, after the zone is
+// settled — so the calendar is read in the zone the row rings in.
 func settleRecord(record *Record, row store.Reminder, zone string, now time.Time) {
 	if record.Zone == "" {
-		record.Zone = row.Timezone
-		if record.Zone == "" {
-			record.Zone = zone
-		}
+		record.Zone = pick(row.Timezone, zone)
 	}
 	if record.Date == "" && record.Day != "" {
 		if at, ok := resolveDay(record.Day, inZone(now, record.Zone)); ok {
@@ -291,23 +275,18 @@ func settleRecord(record *Record, row store.Reminder, zone string, now time.Time
 	if row.ReminderID == 0 {
 		return
 	}
-	if record.Text == "" {
-		record.Text = row.Text
-	}
 	date, clock := rowWhen(row)
+	record.Text = pick(record.Text, row.Text)
+	record.Time = pick(record.Time, clock)
+	record.Recurrence = pick(record.Recurrence, rowRecurrence(row))
 	if record.Date == "" && record.Day == "" {
 		record.Day, record.Date = date, date
-	}
-	if record.Time == "" {
-		record.Time = clock
-	}
-	if record.Recurrence == "" {
-		record.Recurrence = rowRecurrence(row)
 	}
 }
 
 // rowWhen is the day and clock a row already carries: a one-off's own, a repeat's next
-// occurrence in the row's zone.
+// occurrence in the row's zone. It is the one reader of a stored moment, so the day a change
+// copies and the day a tool result prints cannot disagree.
 func rowWhen(row store.Reminder) (string, string) {
 	when := row.LocalDateTime
 	if when == "" {

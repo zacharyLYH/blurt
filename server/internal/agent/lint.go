@@ -2,9 +2,10 @@ package agent
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"time"
+
+	"blurt/internal/store"
 )
 
 // check is one deterministic test of one proposed record. It answers the faults it found,
@@ -22,12 +23,13 @@ var checks = []check{checkDay, checkFields, checkAfterNow}
 // row it names, and every check over the record it proposes — all faults collected, or nil when
 // the answer stands. It reads the answer and the ids this run's own lookups printed, and nothing
 // else; it is the server's own authority, the same checks that would have been put to the user as
-// a question, offered to the model first instead.
+// a question, offered to the model first instead. found is what this run's own lookups printed,
+// so the whitelist is a question about the conversation rather than about the table.
 //
 // The strict shape (one kind, and the fields the other kind does not use) is answerFrom's, where
 // the JSON is read, and a question carries no op, so asking passes lint for free. A call-off is
 // whole with no record at all: the app owns that write, so its op only has to say where it is.
-func lint(answer Answer, now time.Time, found []int64) []string {
+func lint(answer Answer, now time.Time, found []store.Reminder) []string {
 	switch answer.Kind {
 	case AnswerQuestion:
 		return nil
@@ -50,7 +52,7 @@ func lint(answer Answer, now time.Time, found []int64) []string {
 // lintOp is the verdict on one op: the verb it names, the row it names, and the record it
 // proposes. It speaks for that op alone, so a two-op answer reads as two verdicts and the model
 // is told about both at once.
-func lintOp(op Op, now time.Time, found []int64) []string {
+func lintOp(op Op, now time.Time, found []store.Reminder) []string {
 	switch op.Intent {
 	case IntentCreate:
 		if op.ReminderID != 0 {
@@ -72,9 +74,11 @@ func lintOp(op Op, now time.Time, found []int64) []string {
 	}
 	// The whitelist: a row may be named only if this run's own lookups printed it. The ids are
 	// small integers over one user's own rows, so a guessed one is somebody's real Reminder.
-	if op.ReminderID != 0 && !slices.Contains(found, op.ReminderID) {
-		return []string{fmt.Sprintf(
-			"reminder_id %d was not one of this run's own find_reminders results", op.ReminderID)}
+	if op.ReminderID != 0 {
+		if _, ok := printed(found, op.ReminderID); !ok {
+			return []string{fmt.Sprintf(
+				"reminder_id %d was not one of this run's own find_reminders results", op.ReminderID)}
+		}
 	}
 	return lintRecord(op.Record, now)
 }

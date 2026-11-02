@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { createReminder, waitForReminder } from './api'
-import { ciTimeout } from './env'
+import { ciTimeout, visualProofs } from './env'
 import { completeQuestionnaire, passPermissions, signIn, uniqueEmail } from './helpers'
 
 // The calendar is Reminder-only and month-scoped. These specs seed reminders on fixed
@@ -114,6 +114,7 @@ test('one user never sees another user’s month', async ({ page }) => {
 })
 
 test.describe('visual proof, mobile', () => {
+  test.skip(!visualProofs, 'visual proofs run where the baselines live: make e2e-visual')
   test.use({ viewport: { width: 390, height: 844 }, timezoneId: 'Asia/Singapore' })
 
   test('calendar, mobile', async ({ page }) => {
@@ -139,6 +140,7 @@ test.describe('visual proof, mobile', () => {
 })
 
 test.describe('visual proof, desktop', () => {
+  test.skip(!visualProofs, 'visual proofs run where the baselines live: make e2e-visual')
   test.use({ viewport: { width: 1280, height: 900 }, timezoneId: 'Asia/Singapore' })
 
   test('calendar, desktop', async ({ page }) => {

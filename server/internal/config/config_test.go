@@ -123,7 +123,7 @@ func TestOriginsLocalhostOnlyWithoutPublicOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load without a public origin: %v", err)
 	}
-	want = []string{"http://localhost:9998", "http://localhost:5173"}
+	want = []string{"http://localhost:9996", "http://localhost:5173"}
 	if len(cfg.PublicOrigins) != len(want) {
 		t.Fatalf("origins = %v, want %v", cfg.PublicOrigins, want)
 	}

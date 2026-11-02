@@ -31,6 +31,7 @@ type Deps struct {
 	Sessions      *store.SessionStore
 	Reminders     *store.ReminderStore
 	Notifications *store.NotificationStore
+	Traces        *store.TraceStore
 	Audio         *capture.Store
 	Queues        *queue.Queues
 	// Loop is the agent's own, built by the caller: main resolves the user's model there,
@@ -93,6 +94,7 @@ func (b *Backend) Handler() http.Handler {
 		Queues:         b.Queues,
 		Reminders:      b.Reminders,
 		Notifications:  b.Notifications,
+		Traces:         b.Traces,
 		VAPIDPublicKey: b.VAPIDPublicKey,
 		AllowedOrigins: b.AllowedOrigins,
 	})

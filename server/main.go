@@ -87,6 +87,7 @@ func main() {
 	// firing transition is the one write that is its own.
 	reminders := store.NewReminderStore(handle.Write, handle.Read)
 	notifications := store.NewNotificationStore(handle.Write, handle.Read)
+	traces := store.NewTraceStore(handle.Read)
 
 	// Both consumer groups must exist before the first producer publishes.
 	boot := context.Background()
@@ -157,6 +158,7 @@ func main() {
 	app := backend.New(backend.Deps{
 		DB: handle, Users: users, Jobs: jobs, Sessions: sessions, Reminders: reminders,
 		Notifications: notifications,
+		Traces:        traces,
 		Audio:         audio,
 		Queues: &queue.Queues{
 			TranscriptionQueue: transcriptionQueue,

@@ -79,6 +79,9 @@ CREATE TABLE IF NOT EXISTS Memory (
     CreatedAt   TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_memory_user ON Memory(UserId);
+-- The tagger's write finds one committed row by its Job and text: without this it is a
+-- scan of every Memory the user ever kept.
+CREATE INDEX IF NOT EXISTS idx_memory_source ON Memory(SourceJobId, Text);
 
 -- BM25 retrieval for phase 1, kept in sync by the triggers below. The porter
 -- tokenizer stems BOTH the indexed words and the query's, so a capture saying
@@ -121,6 +124,9 @@ CREATE TABLE IF NOT EXISTS Trace (
     Detail     TEXT    NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_trace_job ON Trace(JobId, Timestamp);
+-- The debug page reads one Reminder's history: firings by ReminderId, the capture
+-- by the Job that made the row.
+CREATE INDEX IF NOT EXISTS idx_trace_reminder ON Trace(ReminderId);
 
 -- One report per submission, keyed by its own id. A recurring Reminder can have
 -- many rows with the same ReminderId: the feedback row is the instance, which is

@@ -3,6 +3,8 @@ package agent
 import (
 	"strings"
 	"testing"
+
+	"blurt/internal/store"
 )
 
 // TestLintCollectsEveryFault pins the linter's own contract: every check runs, every fault
@@ -13,7 +15,7 @@ func TestLintCollectsEveryFault(t *testing.T) {
 	cases := []struct {
 		name    string
 		answer  Answer
-		found   []int64
+		found   []store.Reminder
 		want    []string
 		nothing bool
 	}{
@@ -35,7 +37,7 @@ func TestLintCollectsEveryFault(t *testing.T) {
 		{"a change to a row this run saw",
 			Answer{Kind: AnswerRecords, Ops: []Op{{Intent: IntentUpdate, ReminderID: 42,
 				Record: oneOff("Call mum", "2026-10-25", "19:00")}}},
-			[]int64{42}, nil, true},
+			[]store.Reminder{{ReminderID: 42}}, nil, true},
 		{"a records answer with nothing in it", Answer{Kind: AnswerRecords},
 			nil, []string{"nothing proposed"}, false},
 		// A zero record is refused by every field that has no default: the event, the

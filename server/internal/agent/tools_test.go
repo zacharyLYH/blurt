@@ -61,7 +61,7 @@ func TestToolsAnswerTheAgent(t *testing.T) {
 		memories: []store.Memory{{Text: "Milk is cheaper at store A", Tags: "milk,grocery"}},
 	}
 	r := &jobRun{loop: &AgentLoop{Recall: recall}, job: store.Job{JobID: 1, UserID: 7}, started: pinned,
-		found: []int64{42}}
+		found: recall.reminders}
 
 	cases := []struct {
 		name   string

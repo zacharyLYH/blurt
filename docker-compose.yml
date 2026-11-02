@@ -4,7 +4,7 @@
 # and only `down -v` throws it away.
 #
 #   make start-no-reset
-#   curl http://localhost:9998/health
+#   curl http://localhost:9996/health
 services:
   redis:
     image: redis:8.10-alpine
@@ -51,7 +51,7 @@ services:
     ports:
       # Only the machine running Blurt reaches nginx; a tunnel or reverse
       # proxy fronts blurt.bytesbylyh.dev at this port.
-      - "127.0.0.1:${BLURT_WEB_PORT:-9998}:8080"
+      - "127.0.0.1:${BLURT_WEB_PORT:-9996}:8080"
     depends_on:
       server:
         condition: service_healthy
