@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"testing"
 	"time"
 
 	"blurt/internal/agent"
@@ -279,6 +280,20 @@ func (c Case) check() error {
 		return fmt.Errorf("unknown stage %q", c.Stage)
 	}
 	return nil
+}
+
+// TestCasesLoad pins every case file in the default gate, provider or not: a name that
+// disagrees with its file, a step that sets two turns, an anchor that will not parse, or a
+// fixture that does not exist is otherwise a lane that fails on the one machine holding the
+// key, hours later.
+func TestCasesLoad(t *testing.T) {
+	cases, err := loadCases(caseDir)
+	if err != nil {
+		t.Fatalf("load cases: %v", err)
+	}
+	if len(cases) == 0 {
+		t.Fatal("no case files loaded")
+	}
 }
 
 // checkUnchanged refuses an unchanged expectation that names nothing to find: the row is

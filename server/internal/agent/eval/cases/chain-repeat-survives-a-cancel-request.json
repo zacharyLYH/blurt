@@ -1,0 +1,40 @@
+{
+  "name": "chain-repeat-survives-a-cancel-request",
+  "source": "L3:call-off — a cancel asked of a repeat the chain just created leaves the rule row exactly as it was",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to water the plants every monday at 9am",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["plant"],
+            "utc": "2026-10-26T01:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "weekly",
+            "rule": {
+              "frequency": "weekly",
+              "time": "09:00"
+            }
+          }
+        ],
+        "memories": []
+      }
+    },
+    {
+      "capture": "cancel the plants reminder",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "updated": [],
+        "memories": [],
+        "reply_contains": ["doesn't cancel reminders"]
+      }
+    }
+  ]
+}

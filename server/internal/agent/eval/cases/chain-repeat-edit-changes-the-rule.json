@@ -1,0 +1,51 @@
+{
+  "name": "chain-repeat-edit-changes-the-rule",
+  "source": "L3:two-schedules — a repeat is created, then moved: the rule row is rewritten, not a second reminder",
+  "layer": "L3",
+  "size": "medium",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to take my vitamins every day at 9am",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["vitamin"],
+            "utc": "2026-10-25T01:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "daily",
+            "rule": {
+              "frequency": "daily",
+              "time": "09:00"
+            }
+          }
+        ],
+        "memories": []
+      }
+    },
+    {
+      "capture": "actually make the vitamins 8am instead",
+      "expect": {
+        "kind": "records",
+        "reminders": [],
+        "updated": [
+          {
+            "text_contains": ["vitamin"],
+            "utc": "2026-10-25T00:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "daily",
+            "rule": {
+              "frequency": "daily",
+              "time": "08:00"
+            }
+          }
+        ],
+        "memories": [],
+        "reply_contains": ["updated"]
+      }
+    }
+  ]
+}

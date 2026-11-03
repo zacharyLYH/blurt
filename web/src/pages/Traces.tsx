@@ -24,6 +24,21 @@ const stageTint: Record<string, string> = {
   notification: 'bg-primary/15 text-primary',
 }
 
+// StageBadge is a stage's chip. The row and the detail sheet show the same
+// stage, so the colour and the type come from one place.
+function StageBadge({ stage }: { stage: string }) {
+  return (
+    <span
+      className={cn(
+        'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
+        stageTint[stage] ?? 'bg-muted text-muted-foreground',
+      )}
+    >
+      {stage}
+    </span>
+  )
+}
+
 // facts are the detail keys worth a line above the JSON: the ones a reader is
 // looking for when a reminder came out wrong.
 const facts = ['outcome', 'kind', 'intent', 'model', 'turns', 'attempt', 'lint']
@@ -95,14 +110,7 @@ function TraceRow({
 
   return (
     <div className="flex items-center gap-2 rounded-md border border-border/40 bg-card/40 py-1.5 pl-4 pr-2">
-      <span
-        className={cn(
-          'shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-          stageTint[trace.stage] ?? 'bg-muted text-muted-foreground',
-        )}
-      >
-        {trace.stage}
-      </span>
+      <StageBadge stage={trace.stage} />
       <span className="shrink-0 font-mono text-[11px] text-muted-foreground">
         {clockOf(trace.timestamp)}
       </span>
@@ -314,14 +322,7 @@ export default function Traces() {
             <>
               <SheetHeader>
                 <SheetTitle>
-                  <span
-                    className={cn(
-                      'rounded px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-                      stageTint[detail.stage] ?? 'bg-muted text-muted-foreground',
-                    )}
-                  >
-                    {detail.stage}
-                  </span>
+                  <StageBadge stage={detail.stage} />
                   job {detail.jobId}
                 </SheetTitle>
                 <SheetDescription>

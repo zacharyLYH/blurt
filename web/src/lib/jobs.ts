@@ -32,8 +32,10 @@ export interface JobSummary {
   createdAt: string
 }
 
-export function sendAudio(recording: Recording): Promise<Job> {
-  return api<JobEnvelope>('/api/jobs', {
+// A turn is a turn: a clip and a typed line post to the same endpoint, and
+// opening a conversation differs from continuing one only in the URL.
+function postAudio(url: string, recording: Recording): Promise<Job> {
+  return api<JobEnvelope>(url, {
     method: 'POST',
     headers: {
       'Content-Type': recording.blob.type,
@@ -44,37 +46,32 @@ export function sendAudio(recording: Recording): Promise<Job> {
   }).then((reply) => reply.job)
 }
 
-export function sendText(text: string): Promise<Job> {
-  return api<JobEnvelope>('/api/jobs', {
+function postText(url: string, text: string): Promise<Job> {
+  return api<JobEnvelope>(url, {
     method: 'POST',
     headers: { 'X-Blurt-Timezone': deviceTimezone() },
     body: JSON.stringify({ text }),
   }).then((reply) => reply.job)
+}
+
+export function sendAudio(recording: Recording): Promise<Job> {
+  return postAudio('/api/jobs', recording)
+}
+
+export function sendText(text: string): Promise<Job> {
+  return postText('/api/jobs', text)
 }
 
 // The clarification reply is one more turn in the same conversation: the Job goes
 // back to the queue, so the thread keeps polling and the agent picks the answer up.
 export function replyToJob(jobId: number, text: string): Promise<Job> {
-  return api<JobEnvelope>(`/api/jobs/${jobId}/messages`, {
-    method: 'POST',
-    headers: { 'X-Blurt-Timezone': deviceTimezone() },
-    body: JSON.stringify({ text }),
-  }).then((reply) => reply.job)
+  return postText(`/api/jobs/${jobId}/messages`, text)
 }
 
-// replyWithAudio is the same turn spoken instead of typed. It is the capture's
-// own upload to a different URL, because the server takes one ingress for both:
-// a turn is a turn, whether it opened a conversation or continued one.
+// replyWithAudio is the same turn spoken instead of typed: the capture's own
+// upload, pointed at the conversation that already exists.
 export function replyWithAudio(jobId: number, recording: Recording): Promise<Job> {
-  return api<JobEnvelope>(`/api/jobs/${jobId}/messages`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': recording.blob.type,
-      'X-Blurt-Duration-Ms': String(Math.round(recording.durationMs)),
-      'X-Blurt-Timezone': deviceTimezone(),
-    },
-    body: recording.blob,
-  }).then((reply) => reply.job)
+  return postAudio(`/api/jobs/${jobId}/messages`, recording)
 }
 
 // deviceTimezone is the anchor the agent resolves a relative time against. A

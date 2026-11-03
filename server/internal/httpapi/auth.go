@@ -35,7 +35,7 @@ func (s *Server) requestPin(w http.ResponseWriter, r *http.Request) {
 	}
 	address, ok := parseEmail(body.Email)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid_email", "That email address does not look right.")
+		invalidEmail(w)
 		return
 	}
 	// Request a PIN only without a valid session.
@@ -87,7 +87,7 @@ func (s *Server) verifyPin(w http.ResponseWriter, r *http.Request) {
 	}
 	address, ok := parseEmail(body.Email)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid_email", "That email address does not look right.")
+		invalidEmail(w)
 		return
 	}
 	if strings.TrimSpace(body.Pin) == "" {
@@ -95,7 +95,7 @@ func (s *Server) verifyPin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !s.Pins.Verify(address, strings.TrimSpace(body.Pin)) {
-		writeError(w, http.StatusUnauthorized, "invalid_pin", "That PIN is wrong or expired.")
+		invalidPIN(w)
 		return
 	}
 
@@ -103,7 +103,7 @@ func (s *Server) verifyPin(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, store.ErrNotFound) {
 		// The row went away between the PIN and this call — a rejection, or a
 		// reset volume. Same answer as a wrong code, so nothing leaks.
-		writeError(w, http.StatusUnauthorized, "invalid_pin", "That PIN is wrong or expired.")
+		invalidPIN(w)
 		return
 	}
 	if err != nil {
@@ -142,7 +142,7 @@ func (s *Server) apply(w http.ResponseWriter, r *http.Request) {
 	}
 	address, ok := parseEmail(body.Email)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "invalid_email", "That email address does not look right.")
+		invalidEmail(w)
 		return
 	}
 	name := strings.TrimSpace(body.Name)
@@ -168,10 +168,7 @@ func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	http.SetCookie(w, &http.Cookie{
-		Name: cookieName, Value: "", Path: "/", MaxAge: -1,
-		HttpOnly: true, Secure: usesHTTPS(r), SameSite: http.SameSiteLaxMode,
-	})
+	http.SetCookie(w, sessionCookie(r, "", -1, time.Time{}))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -266,8 +263,20 @@ func sessionToken(r *http.Request) ([]byte, bool) {
 	return raw, true
 }
 
+// invalidPIN is the one answer for a code that did not work, whichever of the
+// two ways it did not: the row went away, or the digits are wrong.
+func invalidPIN(w http.ResponseWriter) {
+	writeError(w, http.StatusUnauthorized, "invalid_pin", "That PIN is wrong or expired.")
+}
+
 func unauthorized(w http.ResponseWriter) {
 	writeError(w, http.StatusUnauthorized, "unauthorized", "Session expired. Sign in again.")
+}
+
+// invalidEmail is the one answer for an address that does not parse: the
+// message is user-facing, so it is written once.
+func invalidEmail(w http.ResponseWriter) {
+	writeError(w, http.StatusBadRequest, "invalid_email", "That email address does not look right.")
 }
 
 func parseEmail(value string) (string, bool) {
@@ -283,17 +292,18 @@ func hashToken(token []byte) []byte {
 	return sum[:]
 }
 
+// sessionCookie is the one session cookie, signed in or signed out: every
+// attribute here is a security decision, so they live in one place.
+func sessionCookie(r *http.Request, value string, maxAge int, expires time.Time) *http.Cookie {
+	return &http.Cookie{
+		Name: cookieName, Value: value, Path: "/", MaxAge: maxAge, Expires: expires,
+		HttpOnly: true, Secure: usesHTTPS(r), SameSite: http.SameSiteLaxMode,
+	}
+}
+
 func setSessionCookie(w http.ResponseWriter, r *http.Request, token []byte, expires time.Time) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     cookieName,
-		Value:    base64.RawURLEncoding.EncodeToString(token),
-		Path:     "/",
-		MaxAge:   int(time.Until(expires).Seconds()),
-		Expires:  expires,
-		HttpOnly: true,
-		Secure:   usesHTTPS(r),
-		SameSite: http.SameSiteLaxMode,
-	})
+	value := base64.RawURLEncoding.EncodeToString(token)
+	http.SetCookie(w, sessionCookie(r, value, int(time.Until(expires).Seconds()), expires))
 }
 
 // usesHTTPS trusts nginx's forwarded scheme; locally that is plain http.

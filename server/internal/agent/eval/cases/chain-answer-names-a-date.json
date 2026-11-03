@@ -1,0 +1,37 @@
+{
+  "name": "chain-answer-names-a-date",
+  "source": "L3:feedback-loop — the question is answered with a named date, so the continuation supplies the day and the clock",
+  "layer": "L3",
+  "size": "small",
+  "now_local": "2026-10-24T18:30",
+  "current_tz": "Asia/Singapore",
+  "seed": {},
+  "steps": [
+    {
+      "capture": "remind me to renew the licence",
+      "expect": {
+        "kind": "question",
+        "reminders": [],
+        "memories": [],
+        "asks_for": ["when", "what time", "date", "time"]
+      }
+    },
+    {
+      "reply": "on 5 november at 9am",
+      "expect": {
+        "kind": "records",
+        "reminders": [
+          {
+            "text_contains": ["renew"],
+            "datetime": "2026-11-05T09:00",
+            "utc": "2026-11-05T01:00:00Z",
+            "zone": "Asia/Singapore",
+            "recurrence": "none",
+            "status": "resolved"
+          }
+        ],
+        "memories": []
+      }
+    }
+  ]
+}

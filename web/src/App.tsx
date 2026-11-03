@@ -66,6 +66,29 @@ function OwnerOnly({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// AppPage is every screen inside the app: the session, then the permission
+// gate, then the questionnaire version. The order is the product's, so it lives
+// here once instead of in each route.
+function AppPage({ children }: { children: React.ReactNode }) {
+  return (
+    <Protected>
+      <Gated>
+        <Fresh>{children}</Fresh>
+      </Gated>
+    </Protected>
+  )
+}
+
+// OwnerPage is the owner's tooling — the portal and the traces. It is not the
+// app, so it skips setup.
+function OwnerPage({ children }: { children: React.ReactNode }) {
+  return (
+    <Protected>
+      <OwnerOnly>{children}</OwnerOnly>
+    </Protected>
+  )
+}
+
 // CalendarAlias keeps the month someone already has in a link or a bookmark:
 // the calendar is Home now, so the old path forwards with its query intact.
 function CalendarAlias() {
@@ -82,16 +105,7 @@ export default function App() {
               marketing link should stay a marketing link. */}
           <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
-          <Route
-            path="/admin"
-            element={
-              <Protected>
-                <OwnerOnly>
-                  <Admin />
-                </OwnerOnly>
-              </Protected>
-            }
-          />
+          <Route path="/admin" element={<OwnerPage><Admin /></OwnerPage>} />
           <Route
             path="/permissions"
             element={
@@ -110,71 +124,21 @@ export default function App() {
               </Protected>
             }
           />
-          <Route
-            path="/home"
-            element={
-              <Protected>
-                <Gated>
-                  <Fresh>
-                    <Calendar />
-                  </Fresh>
-                </Gated>
-              </Protected>
-            }
-          />
-          <Route
-            path="/jobs/:jobId"
-            element={
-              <Protected>
-                <Gated>
-                  <Fresh>
-                    <Job />
-                  </Fresh>
-                </Gated>
-              </Protected>
-            }
-          />
+          <Route path="/home" element={<AppPage><Calendar /></AppPage>} />
+          <Route path="/jobs/:jobId" element={<AppPage><Job /></AppPage>} />
           {/* The boom for one Job's spoken reply. A route of its own, so the
               browser's back gesture is the way out of it. */}
-          <Route
-            path="/jobs/:jobId/reply"
-            element={
-              <Protected>
-                <Gated>
-                  <Fresh>
-                    <JobReply />
-                  </Fresh>
-                </Gated>
-              </Protected>
-            }
-          />
+          <Route path="/jobs/:jobId/reply" element={<AppPage><JobReply /></AppPage>} />
           {/* The calendar is Home now; the old path still works, month and all. */}
           <Route path="/calendar" element={<CalendarAlias />} />
           {/* The page a push opens: the Reminder itself, with feedback per submission. */}
           <Route
             path="/notifications/:reminderId"
-            element={
-              <Protected>
-                <Gated>
-                  <Fresh>
-                    <NotificationDetail />
-                  </Fresh>
-                </Gated>
-              </Protected>
-            }
+            element={<AppPage><NotificationDetail /></AppPage>}
           />
           {/* The debug page: one reminder's stage history, indented by job. It is
               part of the owner's tooling, alongside the access portal. */}
-          <Route
-            path="/traces"
-            element={
-              <Protected>
-                <OwnerOnly>
-                  <Traces />
-                </OwnerOnly>
-              </Protected>
-            }
-          />
+          <Route path="/traces" element={<OwnerPage><Traces /></OwnerPage>} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
         <Toaster />

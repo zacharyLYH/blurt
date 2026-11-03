@@ -56,13 +56,22 @@ function monthLabel(month: string): string {
   return parseMonth(month).toLocaleDateString(undefined, { month: 'long', year: 'numeric' })
 }
 
+// One formatter per zone: the month draws every entry through the same clock and
+// re-renders on the poll, so building a formatter per row was the expensive part.
+const clocks = new Map<string, Intl.DateTimeFormat>()
+
 function timeIn(instant: string, timezone: string): string {
-  return new Intl.DateTimeFormat(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-    timeZoneName: 'short',
-    timeZone: timezone,
-  }).format(new Date(instant))
+  let clock = clocks.get(timezone)
+  if (!clock) {
+    clock = new Intl.DateTimeFormat(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+      timeZoneName: 'short',
+      timeZone: timezone,
+    })
+    clocks.set(timezone, clock)
+  }
+  return clock.format(new Date(instant))
 }
 
 // ReminderDay is the only thing the page adds to a day cell: the number and a dot

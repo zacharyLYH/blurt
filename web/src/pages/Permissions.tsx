@@ -10,36 +10,35 @@ import { cn } from '@/lib/utils'
 type Step = PermissionState | 'checking'
 type Status = Step | PushSetup
 
-const stateLabel: Record<Status, string> = {
-  checking: 'Checking…',
-  granted: 'Allowed',
-  ready: 'Allowed',
-  prompt: 'Not asked yet',
-  pending: 'Not asked yet',
-  denied: 'Blocked',
-  unsupported: 'Unsupported in this browser',
+// The four tones a row wears: green is done, amber still needs a tap, red is a
+// browser-settings trip, grey is not applicable.
+const tone = {
+  good: 'border-emerald-500/30 text-emerald-300',
+  wait: 'border-amber-500/30 text-amber-300',
+  bad: 'border-destructive/40 text-destructive',
+  idle: 'border-border/60 text-muted-foreground',
 }
 
-// The dot and the pill carry the state without making the user read the row:
-// green is done, amber still needs a tap, red is a browser-settings trip.
-const stateTone: Record<Status, { dot: string; pill: string }> = {
-  checking: { dot: 'bg-primary animate-pulse', pill: 'border-border/60 text-muted-foreground' },
-  granted: { dot: 'bg-emerald-400', pill: 'border-emerald-500/30 text-emerald-300' },
-  ready: { dot: 'bg-emerald-400', pill: 'border-emerald-500/30 text-emerald-300' },
-  prompt: { dot: 'bg-amber-400', pill: 'border-amber-500/30 text-amber-300' },
-  pending: { dot: 'bg-amber-400', pill: 'border-amber-500/30 text-amber-300' },
-  denied: { dot: 'bg-destructive', pill: 'border-destructive/40 text-destructive' },
-  unsupported: { dot: 'bg-muted-foreground', pill: 'border-border/60 text-muted-foreground' },
+// One row of the table per state: the words, and the dot and pill that say the
+// same thing without them.
+const states: Record<Status, { label: string; dot: string; pill: string }> = {
+  checking: { label: 'Checking…', dot: 'bg-primary animate-pulse', pill: tone.idle },
+  granted: { label: 'Allowed', dot: 'bg-emerald-400', pill: tone.good },
+  ready: { label: 'Allowed', dot: 'bg-emerald-400', pill: tone.good },
+  prompt: { label: 'Not asked yet', dot: 'bg-amber-400', pill: tone.wait },
+  pending: { label: 'Not asked yet', dot: 'bg-amber-400', pill: tone.wait },
+  denied: { label: 'Blocked', dot: 'bg-destructive', pill: tone.bad },
+  unsupported: { label: 'Unsupported in this browser', dot: 'bg-muted-foreground', pill: tone.idle },
 }
 
 // StatePill is the dot and the words together: one glance says whether the row
 // is done, still needs a tap, or is a browser-settings trip.
-function StatePill({ state, label = stateLabel[state] }: { state: Status; label?: string }) {
-  const { dot, pill } = stateTone[state]
+function StatePill({ state, label }: { state: Status; label?: string }) {
+  const { dot, pill, label: text } = states[state]
   return (
     <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs', pill)}>
       <span className={cn('size-1.5 rounded-full', dot)} aria-hidden="true" />
-      {label}
+      {label ?? text}
     </span>
   )
 }
@@ -114,7 +113,7 @@ export default function Permissions() {
   const ready = (mic === 'granted' ? 1 : 0) + (push === 'ready' ? 1 : 0)
   // The notification row shows the busy state while the handoff runs.
   const shown: Status = pushBusy ? 'checking' : push
-  const shownLabel = pushBusy ? 'Setting up…' : stateLabel[push]
+  const shownLabel = pushBusy ? 'Setting up…' : states[push].label
 
   return (
     <main className="grid min-h-dvh place-items-center px-4 py-8">

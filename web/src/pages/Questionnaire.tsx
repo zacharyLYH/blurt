@@ -50,28 +50,24 @@ const definitions = questionnaire.items.map((item) => ({
   choices: item.choices?.map((choice) => ({ value: choice.value })),
 }))
 
-// Time inputs speak HH:MM. The answer sent to Memory is the sentence a reader
-// (and the planner) can use, not the raw control value.
-function rangeAnswer(item: Item, values: string[]): string {
-  const [start = '', end = ''] = values
-  if (!start || !end) return ''
-  if (item.id === 'waking') return `Wake ${start}, sleep ${end}`
-  if (item.id === 'quiet') return `Quiet from ${start} until ${end}`
-  return `${start}–${end}`
-}
-
-function choiceAnswer(item: Item, value: string): string {
+// answerOf turns one control's value into the sentence Memory stores: time
+// inputs speak HH:MM, and a reader (or the planner) needs the words around it.
+function answerOf(item: Item, form: FormData): string {
+  if (item.kind === 'timeRange') {
+    const [start = '', end = ''] = form.getAll(item.id).map(String)
+    if (!start || !end) return ''
+    if (item.id === 'waking') return `Wake ${start}, sleep ${end}`
+    if (item.id === 'quiet') return `Quiet from ${start} until ${end}`
+    return `${start}–${end}`
+  }
+  const value = String(form.get(item.id) ?? '')
+  if (item.kind !== 'choice') return value.trim()
   return item.choices?.find((choice) => choice.value === value)?.label ?? value
 }
 
 function readAnswers(form: FormData): { question: string; answer: string }[] {
   return questionnaire.items.flatMap((item) => {
-    const answer =
-      item.kind === 'timeRange'
-        ? rangeAnswer(item, form.getAll(item.id).map(String))
-        : item.kind === 'choice'
-          ? choiceAnswer(item, String(form.get(item.id) ?? ''))
-          : String(form.get(item.id) ?? '').trim()
+    const answer = answerOf(item, form)
     return answer ? [{ question: item.prompt, answer }] : []
   })
 }
