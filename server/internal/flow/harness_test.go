@@ -110,7 +110,7 @@ func newPumpOn(t *testing.T, transcription, agentStream queue.Stream, turns ...a
 	if err != nil {
 		t.Fatalf("open audio store: %v", err)
 	}
-	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureUser(
+	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureActive(
 		context.Background(), "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)

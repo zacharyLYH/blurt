@@ -70,8 +70,8 @@ func messagesURL(base string, jobID int64) string {
 // because answering a question should not cost a voice-first user the keyboard.
 // The clip belongs to the transcriber, so that is the stream it lands on.
 func TestAudioReplyResumesAClarifyingJob(t *testing.T) {
-	client, base, mailer, handle, queues := newQueueClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle, queues := newQueueClient(t)
+	login(t, client, base, "lam@example.com")
 	job := createTextJob(t, client, base, "buy glue")
 
 	ctx := context.Background()
@@ -103,8 +103,8 @@ func TestAudioReplyResumesAClarifyingJob(t *testing.T) {
 // A closed Job takes no clip at all, and the refusal must not leave the blob
 // behind: nothing would ever sweep a file no turn points at.
 func TestAudioReplyToAClosedJobIsRefused(t *testing.T) {
-	client, base, mailer, handle, _ := newQueueClient(t)
-	user := login(t, client, base, "lam@example.com", mailer)
+	client, base, handle, _ := newQueueClient(t)
+	user := login(t, client, base, "lam@example.com")
 	job := createTextJob(t, client, base, "buy glue")
 
 	ctx := context.Background()
@@ -136,8 +136,8 @@ func TestAudioReplyToAClosedJobIsRefused(t *testing.T) {
 // A capture carries the device's zone so the agent can anchor relative times,
 // and a zone Blurt cannot load is refused at the edge.
 func TestCaptureCarriesTheDeviceTimezone(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	cases := []struct {
 		name   string
@@ -168,8 +168,8 @@ func TestCaptureCarriesTheDeviceTimezone(t *testing.T) {
 // The clarification reply: one more turn in the same Conversation, and the Job goes
 // back to the queue with a fresh attempt budget so the model resumes on it.
 func TestReplyResumesAClarifyingJob(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	user := login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	user := login(t, client, base, "lam@example.com")
 	job := createTextJob(t, client, base, "buy glue")
 
 	// What the AgentLoop leaves behind when it cannot pin a time.
@@ -208,8 +208,8 @@ func TestReplyResumesAClarifyingJob(t *testing.T) {
 
 // A finished Job has nothing to attach a reply to, and a reply must not reopen it.
 func TestReplyToAFinishedJobIsRefused(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	user := login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	user := login(t, client, base, "lam@example.com")
 	job := createTextJob(t, client, base, "buy glue")
 	ctx := context.Background()
 	jobs := store.NewJobStore(handle.Write, handle.Read)
@@ -240,8 +240,8 @@ func TestReplyToAFinishedJobIsRefused(t *testing.T) {
 
 // A reply is scoped to its owner, the same way reading a Job is.
 func TestReplyToAForeignJobIsNotFound(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	owner := login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	owner := login(t, client, base, "lam@example.com")
 	job := createTextJob(t, client, base, "buy glue")
 	jobs := store.NewJobStore(handle.Write, handle.Read)
 	if _, err := jobs.CommitAgentStep(context.Background(), job.JobID, store.AgentStep{
@@ -257,7 +257,7 @@ func TestReplyToAForeignJobIsNotFound(t *testing.T) {
 	if status, body := call(t, client, http.MethodPost, base+"/api/auth/logout", nil); status != http.StatusNoContent {
 		t.Fatalf("logout status = %d: %s", status, body)
 	}
-	login(t, client, base, "sam@example.com", mailer)
+	login(t, client, base, "sam@example.com")
 	status, body := postJSON(t, client, messagesURL(base, job.JobID), map[string]string{"text": "at 6pm"}, nil)
 	if status != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", status, body)
@@ -271,8 +271,8 @@ func TestReplyToAForeignJobIsNotFound(t *testing.T) {
 // A failed Job is still open for recovery, and a typed answer is exactly that: the
 // user retyping what the clip could not deliver.
 func TestReplyRecoversAFailedJob(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	user := login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	user := login(t, client, base, "lam@example.com")
 	job := createTextJob(t, client, base, "buy glue")
 	ctx := context.Background()
 	jobs := store.NewJobStore(handle.Write, handle.Read)
@@ -297,8 +297,8 @@ func TestReplyRecoversAFailedJob(t *testing.T) {
 // A clarification reply goes back onto the agent stream, which is what lets the
 // AgentLoop resume the Job with the answer in hand instead of re-transcribing.
 func TestReplyResumesAClarifyingJobOnTheAgentStream(t *testing.T) {
-	client, base, mailer, handle, queues := newQueueClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle, queues := newQueueClient(t)
+	login(t, client, base, "lam@example.com")
 	job := createTextJob(t, client, base, "buy glue")
 
 	// Drain the capture's own first hop so the reply is the next message.

@@ -58,7 +58,7 @@ func TestTraceStoreReadsOneRemindersWholeHistory(t *testing.T) {
 	if err != nil || len(traced) != 1 || traced[0].ReminderID != reminderID {
 		t.Fatalf("traced = %+v (%v), want the one reminder", traced, err)
 	}
-	other, err := NewUserStore(handle.Write, handle.Read).EnsureUser(ctx, "Sam", "sam@example.com")
+	other, err := NewUserStore(handle.Write, handle.Read).EnsureActive(ctx, "Sam", "sam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}

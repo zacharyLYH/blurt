@@ -123,7 +123,7 @@ func newChainRun(t *testing.T, c Case, a chainArm) *chainRun {
 		t.Fatalf("open audio store: %v", err)
 	}
 	users := store.NewUserStore(handle.Write, handle.Read)
-	user, err := users.EnsureUser(ctx, evalName, evalEmail)
+	user, err := users.EnsureActive(ctx, evalName, evalEmail)
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}

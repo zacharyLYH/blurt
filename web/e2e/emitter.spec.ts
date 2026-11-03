@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { createReminder, signInRequest, subscribeRequest, waitForReminder } from './api'
+import { createReminder, signInRequest, subscribeDevice, waitForReminder } from './api'
 import { ciTimeout } from './env'
 import { uniqueEmail } from './helpers'
 import { decryptPush, deviceKeys } from './push-crypto'
@@ -20,12 +20,13 @@ test('a capture becomes a real push through the emitter', async ({ request }) =>
   await withRelay(201, async (endpoint, captured) => {
     const keys = deviceKeys()
     await signInRequest(request, uniqueEmail('emit'))
-    expect((await subscribeRequest(request, endpoint, keys)).status()).toBe(204)
-
+    await subscribeDevice(request, endpoint, keys, captured)
+    // A new device is answered once for the subscription itself, so the relay
+    // sees that confirmation before the reminder has anything to send.
     expect((await createReminder(request, 'buy glue soon')).status()).toBe(201)
 
-    await expect.poll(() => captured.length, { timeout: ciTimeout(45_000) }).toBe(1)
-    const payload = JSON.parse(decryptPush(captured[0].body, keys))
+    await expect.poll(() => captured.length, { timeout: ciTimeout(45_000) }).toBe(2)
+    const payload = JSON.parse(decryptPush(captured[1].body, keys))
     expect(payload.notification.title).toBe('buy glue')
     // The instant is rendered in the zone the reminder was scheduled in, with a label beside
     // it; the host's own tzdata decides whether that label reads "SGT" or "+08".
@@ -47,7 +48,9 @@ test('a reminder days out is scheduled, not sent', async ({ request }) => {
   await withRelay(201, async (endpoint, captured) => {
     const keys = deviceKeys()
     await signInRequest(request, uniqueEmail('later'))
-    expect((await subscribeRequest(request, endpoint, keys)).status()).toBe(204)
+    // The subscription is answered once; that confirmation is the only push this
+    // spec can ever see, because the reminder below is days out.
+    await subscribeDevice(request, endpoint, keys, captured)
     expect((await createReminder(request, 'take pills every day at 6pm')).status()).toBe(201)
 
     const scheduled = await waitForReminder(request, 'take pills', 'upcoming', ciTimeout(20_000))
@@ -59,7 +62,7 @@ test('a reminder days out is scheduled, not sent', async ({ request }) => {
 
     // The stack's clock runs 90s fast, so this holds unless a run lands in the last 90
     // seconds before the daily 18:00. The exhaustive horizon cases are Go tests.
-    expect(captured).toHaveLength(0)
+    expect(captured).toHaveLength(1)
   })
 })
 
@@ -68,15 +71,16 @@ test('a relay that refuses is recorded, and the reminder stays fired', async ({ 
   await withRelay(500, async (endpoint, captured) => {
     const keys = deviceKeys()
     await signInRequest(request, uniqueEmail('refused'))
-    expect((await subscribeRequest(request, endpoint, keys)).status()).toBe(204)
+    // The confirmation is refused like any other send.
+    await subscribeDevice(request, endpoint, keys, captured)
     expect((await createReminder(request, 'post letter soon')).status()).toBe(201)
 
-    // One attempt, then silence: the reminder fired either way, so the next sweep has nothing
-    // left to send. A retry is the duplicate the PRD ranks as its own failure mode.
-    await expect.poll(() => captured.length, { timeout: ciTimeout(45_000) }).toBe(1)
+    // One attempt for the reminder, then silence: it fired either way, so the next sweep
+    // has nothing left to send. A retry is the duplicate the PRD ranks as its own failure.
+    await expect.poll(() => captured.length, { timeout: ciTimeout(45_000) }).toBe(2)
     expect((await waitForReminder(request, 'post letter', 'past', ciTimeout(20_000))).status).toBe('fired')
     await new Promise((resolve) => setTimeout(resolve, ciTimeout(4_000)))
-    expect(captured).toHaveLength(1)
+    expect(captured).toHaveLength(2)
   })
 })
 
@@ -85,9 +89,10 @@ test('a dead endpoint is forgotten, and the firing still happens', async ({ requ
   await withRelay(410, async (endpoint, captured) => {
     const keys = deviceKeys()
     await signInRequest(request, uniqueEmail('dead'))
-    expect((await subscribeRequest(request, endpoint, keys)).status()).toBe(204)
+    // The confirmation is the send that finds the endpoint gone: the subscription
+    // is pruned on the spot, so the reminders below have nobody left to reach.
+    await subscribeDevice(request, endpoint, keys, captured)
     expect((await createReminder(request, 'post letter soon')).status()).toBe(201)
-    await expect.poll(() => captured.length, { timeout: ciTimeout(45_000) }).toBe(1)
     expect((await waitForReminder(request, 'post letter', 'past', ciTimeout(20_000))).status).toBe('fired')
 
     // The endpoint was pruned, so a second reminder fires with nobody to reach — and it is

@@ -4,6 +4,7 @@
 #   make env-init           # first run: generate .env with local secrets
 #   make start-no-reset     # start, keep existing data
 #   make start-reset-full   # wipe SQLite volume, start clean
+#   make start-reset-full-with-seed  # wipe, start clean, seed the owner's answers
 #   make e2e                # browser suite against the production stack
 #   make e2e-real           # opt-in: push through a real push service
 WEB_PORT ?= 9996
@@ -12,20 +13,32 @@ COMPOSE  ?= docker compose
 # already has one, so the same target works on both.
 XVFB     ?= $(shell command -v xvfb-run >/dev/null 2>&1 && echo xvfb-run -a)
 
-.PHONY: env-init start-no-reset start-reset-full stop logs e2e e2e-visual e2e-real test-redis
+.PHONY: env-init start-no-reset start-reset-full start-reset-full-with-seed stop logs e2e e2e-visual e2e-real test-redis
 
 env-init:
 	cd server && go run ./cmd/envgen
 	@echo "Now fill BLURT_SMTP_PASSWORD in .env. See README Developer section."
 
 start-no-reset:
-	BLURT_WEB_PORT=$(WEB_PORT) $(COMPOSE) up -d --build
+	BLURT_WEB_PORT=$(WEB_PORT) $(COMPOSE) up -d --build --wait
 	@echo "Blurt: http://localhost:$(WEB_PORT)"
+	$(COMPOSE) logs -f --tail=100
 
 start-reset-full:
 	BLURT_WEB_PORT=$(WEB_PORT) $(COMPOSE) down -v --remove-orphans
-	BLURT_WEB_PORT=$(WEB_PORT) $(COMPOSE) up -d --build
+	BLURT_WEB_PORT=$(WEB_PORT) $(COMPOSE) up -d --build --wait
 	@echo "Blurt: http://localhost:$(WEB_PORT) (fresh database)"
+	$(COMPOSE) logs -f --tail=100
+
+# Fresh database plus the owner's default questionnaire. The owner is created
+# active at boot from BLURT_SMTP_USERNAME — nobody can approve them — so this
+# only fills in the answers nobody wants to type by hand.
+start-reset-full-with-seed:
+	BLURT_WEB_PORT=$(WEB_PORT) $(COMPOSE) down -v --remove-orphans
+	BLURT_WEB_PORT=$(WEB_PORT) $(COMPOSE) up -d --build --wait
+	$(COMPOSE) exec -T server blurt seed
+	@echo "Blurt: http://localhost:$(WEB_PORT) (fresh database, owner seeded from BLURT_SMTP_USERNAME)"
+	$(COMPOSE) logs -f --tail=100
 
 stop:
 	$(COMPOSE) down

@@ -11,11 +11,11 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemTitle } from '@/components/ui/item'
 import { Skeleton } from '@/components/ui/skeleton'
-import questionnaire from '@/data/questionnaire/v1.json'
 import { api } from '@/lib/api'
 import { listJobs, sendAudio, sendText, type JobSummary } from '@/lib/jobs'
 import { listNotificationsForMonth, type NotificationMonth } from '@/lib/notifications'
-import { setupPush, type PushSetup } from '@/lib/push'
+import { setupPush, type PushStatus } from '@/lib/push'
+import { toast } from '@/lib/toast'
 import { useMicrophone, type MicStatus } from '@/lib/useMicrophone'
 import { MAX_RECORDING_MS, useRecorder } from '@/lib/useRecorder'
 import { useUser } from '@/lib/user'
@@ -28,6 +28,11 @@ const micCopy: Record<MicStatus, { label: string; dot: string }> = {
   unavailable: { label: 'No mic', dot: 'bg-muted-foreground' },
   unsupported: { label: 'Voice unsupported', dot: 'bg-muted-foreground' },
 }
+
+// How often Home re-asks the server for the month and the inbox. A capture is a
+// Job first and a Reminder a beat later, so the beat is what makes a new dot
+// appear without a reload; the composer counts these seconds down.
+const POLL_SECONDS = 5
 
 // Dates are the device's own calendar days: the month in the URL is what the user
 // calls "this month", not the server's UTC month. en-CA is the locale whose date
@@ -91,7 +96,7 @@ function ReminderDay({
 // opens a conversation.
 export default function Calendar() {
   const navigate = useNavigate()
-  const { user, setUser } = useUser()
+  const { setUser } = useUser()
   const [params, setParams] = useSearchParams()
   const month = params.get('month') ?? monthKey(new Date())
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -102,21 +107,18 @@ export default function Calendar() {
   // month stays the overview and the day gets the close-up.
   const [dayOpen, setDayOpen] = useState<Date | null>(null)
   const [inbox, setInbox] = useState<JobSummary[]>([])
-  const [push, setPush] = useState<PushSetup>('pending')
+  const [push, setPush] = useState<PushStatus>('checking')
   // Bumped after a capture, so the month refetches and a new dot appears without
   // the user reloading to look for proof.
   const [captures, setCaptures] = useState(0)
   // Loading is derived: a month the server has not answered for yet is loading.
   const loading = data?.month !== month
 
-  const { status: mic, note: micNote, session, retry: retryMic } = useMicrophone()
-
-  // Setup is not done until the current questionnaire version is finished.
-  useEffect(() => {
-    if (user && user.lastQuestionnaireVersion < questionnaire.version) {
-      navigate('/questionnaire', { replace: true })
-    }
-  }, [user, navigate])
+  // The boom is open on entry — a voice-first app should be one word from
+  // recording — and it is the only thing that holds the mic: closing it, by
+  // cancelling or by sending, releases the stream.
+  const [voiceOn, setVoiceOn] = useState(true)
+  const { status: mic, note: micNote, session, retry: retryMic } = useMicrophone(voiceOn)
 
   // Retry the push handoff on every load: the browser subscription may already
   // exist from a previous visit while the server was not ready.
@@ -133,30 +135,51 @@ export default function Calendar() {
   // The inbox is questions only: an open Job is still being worked on, and one
   // that closed has nothing to answer.
   const questions = inbox.filter((job) => job.status === 'clarifying')
-  const refreshInbox = useCallback(() => {
-    void listJobs()
-      .then(setInbox)
-      .catch((err: unknown) => console.warn('Blurt: inbox failed', err))
+  // Resolves once the list is stored, so a caller can wait for the screen to
+  // know about a capture before it stops saying it is sending.
+  const refreshInbox = useCallback(async () => {
+    try {
+      setInbox(await listJobs())
+    } catch (err) {
+      console.warn('Blurt: inbox failed', err)
+    }
   }, [])
 
   useEffect(() => {
-    refreshInbox()
+    // The mount fetch is the external system this effect exists to drive: the
+    // inbox lives on the server, and the state it lands in is the mirror.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshInbox()
   }, [refreshInbox])
 
-  // A capture lands as a working Job and only becomes a question a beat later,
-  // so while anything is still in flight the inbox is the one place that would
-  // notice. Poll until nothing is left in flight, then stop.
-  const working = inbox.some((job) => job.status === 'open')
+  // Home keeps itself current. A capture is a Job first and a Reminder a beat
+  // later — the Job closes before the Reminder is written — so no single event
+  // can tell the screen when to stop waiting. A five-second beat re-asks both
+  // halves of the page — the month for the reminder, the inbox for the question
+  // it may have asked instead — and the composer counts it down, so the wait is
+  // visible while it lasts.
+  const [tick, setTick] = useState(0)
   useEffect(() => {
-    if (!working) return
-    const timer = window.setInterval(refreshInbox, 2000)
+    const timer = window.setInterval(() => setTick((count) => count + 1), 1000)
     return () => window.clearInterval(timer)
-  }, [working, refreshInbox])
+  }, [])
 
-  // A capture may want an answer a beat later, so the inbox and the month both
-  // re-ask once the server has it.
-  function afterCapture() {
-    refreshInbox()
+  useEffect(() => {
+    if (tick === 0 || tick % POLL_SECONDS !== 0) return
+    // The countdown is the external clock this effect exists to follow; the
+    // refetch it triggers is the whole point of the tick.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void refreshInbox()
+    setCaptures((count) => count + 1)
+  }, [tick, refreshInbox])
+
+  // Seconds until the next beat, counting 5 → 1.
+  const pollIn = POLL_SECONDS - (tick % POLL_SECONDS)
+
+  // A capture may want an answer before the next beat, so both halves re-ask as
+  // soon as the server has it.
+  async function afterCapture() {
+    await refreshInbox()
     setCaptures((count) => count + 1)
   }
 
@@ -166,16 +189,21 @@ export default function Calendar() {
     session,
     async (recording) => {
       await sendAudio(recording)
-      afterCapture()
+      // The clip is the screen's whole job: once it is sent, the mic goes off
+      // with it rather than staying live behind the calendar.
+      setVoiceOn(false)
+      await afterCapture()
     },
-    true,
+    voiceOn,
   )
 
-  // The draft only leaves the composer once the server has the blurt.
+  // The draft only leaves the composer once the server has the blurt, and the
+  // toast is the receipt: the box clears, and the page says what happened to it.
   async function submitText(value: string): Promise<boolean> {
     try {
       await sendText(value)
-      afterCapture()
+      await afterCapture()
+      toast({ title: 'Sent to Blurt', description: 'Turning it into a reminder now.' })
       return true
     } catch (err) {
       recorder.fail(messageOf(err))
@@ -433,6 +461,11 @@ export default function Calendar() {
                     Try mic again
                   </Button>
                 )}
+                {/* The page refreshes itself, and this is the proof: the count
+                    runs down to the next time it asks. */}
+                <span data-testid="poll-countdown" className="shrink-0 tabular-nums">
+                  Updating in {pollIn}s
+                </span>
               </div>
               {micNote && (
                 <p data-testid="mic-note" className="truncate px-2 text-xs text-muted-foreground">
@@ -444,7 +477,17 @@ export default function Calendar() {
         </main>
       </AppShell>
 
-      <Halo onSpawn={recorder.start} disabled={!session || sending} />
+      <Halo
+        onSpawn={() => {
+          // Another clip: the mic reopens with the boom, and `reset` clears the
+          // opt-out that cancelling left behind.
+          recorder.reset()
+          setVoiceOn(true)
+        }}
+        // A door that cannot be honoured is not offered: a broken mic is the
+        // composer's problem, and it says so beside the text field.
+        disabled={sending || micBroken}
+      />
 
       {dayOpen && (
         <DayModal
@@ -460,7 +503,10 @@ export default function Calendar() {
           session={session}
           remainingMs={MAX_RECORDING_MS - recorder.recorded}
           onRecord={recorder.start}
-          onCancel={() => void recorder.cancel()}
+          onCancel={() => {
+            void recorder.cancel()
+            setVoiceOn(false)
+          }}
           onSend={() => void recorder.send()}
         />
       )}

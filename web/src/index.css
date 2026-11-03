@@ -22,6 +22,8 @@
   --input: oklch(0.32 0.03 295);
   --ring: oklch(0.78 0.14 75);
   --radius: 0.75rem;
+  /* The landing page's one loud colour. The product itself stays amber. */
+  --neon: oklch(0.88 0.23 142);
 }
 
 @theme inline {
@@ -40,6 +42,7 @@
   --color-accent: var(--accent);
   --color-accent-foreground: var(--accent-foreground);
   --color-destructive: var(--destructive);
+  --color-neon: var(--neon);
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
@@ -194,6 +197,85 @@
 @media (prefers-reduced-motion: reduce) {
   .voice-cue-pulse,
   .voice-cue-nudge {
+    animation: none;
+  }
+}
+
+/* The toast arrives from just above, so a confirmation reads as news rather than
+   as something that was always there. */
+@keyframes blurt-toast {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.blurt-toast {
+  animation: blurt-toast 260ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blurt-toast {
+    animation: none;
+  }
+}
+
+/* The landing page's path field: each curve carries a lit dash that travels
+   along it, so the hero moves without a JavaScript frame. */
+@keyframes blurt-path {
+  from {
+    stroke-dashoffset: 540;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+
+/* The phone in the hero breathes instead of sitting still. */
+@keyframes blurt-float {
+  0%,
+  100% {
+    transform: translateY(-8px) rotate(-3deg);
+  }
+  50% {
+    transform: translateY(8px) rotate(-3deg);
+  }
+}
+
+.blurt-float {
+  animation: blurt-float 9s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blurt-float,
+  .blurt-path {
+    animation: none;
+  }
+}
+
+/* The hero's rotating line: each phrase arrives from just below, so the swap
+   reads as a slide rather than a flicker. */
+@keyframes blurt-phrase {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.blurt-phrase {
+  animation: blurt-phrase 520ms cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blurt-phrase {
     animation: none;
   }
 }

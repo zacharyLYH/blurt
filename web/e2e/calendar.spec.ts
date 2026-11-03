@@ -80,6 +80,31 @@ test('a month shows its reminders, and changing month refetches', async ({ page 
   await expect(page.getByTestId('calendar-day-list')).toContainText('buy glue')
 })
 
+test('a typed blurt lands on the month without a reload', async ({ page }) => {
+  await signIn(page, { name: 'Calendar', email: uniqueEmail('calendar-live') })
+  await completeQuestionnaire(page)
+  await page.getByTestId('cancel-audio').click()
+
+  // A month of its own, so the arrival cannot be confused with anything the
+  // rest of the run left behind.
+  await page.goto('/home?month=2030-03')
+  await passPermissions(page)
+  const cancel = page.getByTestId('cancel-audio')
+  await cancel.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined)
+  if (await cancel.isVisible()) await cancel.click()
+  await expect(page.getByTestId('calendar-entry')).toHaveCount(0)
+
+  await page.getByTestId('capture-text').fill('buy stamps at 9am on 2030-03-05')
+  await page.getByTestId('send-text').click()
+
+  // The receipt is a toast, and the countdown to the next refresh is what
+  // brings the reminder in without the user touching the page.
+  await expect(page.getByTestId('toast')).toContainText('Sent to Blurt')
+  await expect(page.getByTestId('poll-countdown')).toContainText('Updating in')
+  await expect(page.getByTestId('calendar-entry')).toHaveCount(1, { timeout: ciTimeout(20_000) })
+  await expect(page.getByTestId('calendar-day-list')).toContainText('buy stamps')
+})
+
 test('an entry opens its reminder, which is the notification', async ({ page }) => {
   await openMonth(page)
   await page.getByTestId('calendar-entry').first().click()

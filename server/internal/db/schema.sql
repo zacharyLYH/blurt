@@ -7,6 +7,11 @@ CREATE TABLE IF NOT EXISTS User (
     UserId          INTEGER PRIMARY KEY,
     Name            TEXT    NOT NULL,
     Email           TEXT    NOT NULL UNIQUE COLLATE NOCASE,
+    -- Applying is open to anyone; only an owner-approved row can sign in. The
+    -- owner's own row is created active at boot, because there is nobody above
+    -- them to approve it. A rejection deletes the row instead of marking it.
+    Status          TEXT    NOT NULL DEFAULT 'pending'
+                            CHECK (Status IN ('pending','active')),
     -- Last questionnaire version this user finished; 0 means not started.
     LastQuestionnaireVersion INTEGER NOT NULL DEFAULT 0,
     CreatedAt       TEXT    NOT NULL

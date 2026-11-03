@@ -5,22 +5,43 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Item, ItemActions, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/item'
 import { markPermissionsChecked, requestMicrophone, type PermissionState } from '@/lib/permissions'
 import { setupPush, type PushSetup } from '@/lib/push'
+import { cn } from '@/lib/utils'
 
 type Step = PermissionState | 'checking'
+type Status = Step | PushSetup
 
-const stateLabel: Record<Step, string> = {
+const stateLabel: Record<Status, string> = {
   checking: 'Checking…',
   granted: 'Allowed',
+  ready: 'Allowed',
   prompt: 'Not asked yet',
+  pending: 'Not asked yet',
   denied: 'Blocked',
   unsupported: 'Unsupported in this browser',
 }
 
-const pushLabel: Record<PushSetup, string> = {
-  ready: 'Allowed',
-  pending: 'Not asked yet',
-  denied: 'Blocked',
-  unsupported: 'Unsupported in this browser',
+// The dot and the pill carry the state without making the user read the row:
+// green is done, amber still needs a tap, red is a browser-settings trip.
+const stateTone: Record<Status, { dot: string; pill: string }> = {
+  checking: { dot: 'bg-primary animate-pulse', pill: 'border-border/60 text-muted-foreground' },
+  granted: { dot: 'bg-emerald-400', pill: 'border-emerald-500/30 text-emerald-300' },
+  ready: { dot: 'bg-emerald-400', pill: 'border-emerald-500/30 text-emerald-300' },
+  prompt: { dot: 'bg-amber-400', pill: 'border-amber-500/30 text-amber-300' },
+  pending: { dot: 'bg-amber-400', pill: 'border-amber-500/30 text-amber-300' },
+  denied: { dot: 'bg-destructive', pill: 'border-destructive/40 text-destructive' },
+  unsupported: { dot: 'bg-muted-foreground', pill: 'border-border/60 text-muted-foreground' },
+}
+
+// StatePill is the dot and the words together: one glance says whether the row
+// is done, still needs a tap, or is a browser-settings trip.
+function StatePill({ state, label = stateLabel[state] }: { state: Status; label?: string }) {
+  const { dot, pill } = stateTone[state]
+  return (
+    <span className={cn('inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs', pill)}>
+      <span className={cn('size-1.5 rounded-full', dot)} aria-hidden="true" />
+      {label}
+    </span>
+  )
 }
 
 // Permissions is the gate the app runs on every entry, before the questionnaire.
@@ -32,7 +53,10 @@ export default function Permissions() {
   // lands here first: whatever path the user asked for is where Continue goes.
   const from = (useLocation().state as { from?: string } | null)?.from ?? '/home'
   const [mic, setMic] = useState<Step>('checking')
-  const [push, setPush] = useState<PushSetup>('pending')
+  // The mount check runs setupPush, which can take a moment on a cold start, so
+  // the row starts in the same "still working" state the microphone row uses.
+  const [push, setPush] = useState<Status>('checking')
+  const [pushBusy, setPushBusy] = useState(false)
 
   // Asked on mount: getUserMedia is the only call that can raise the browser's
   // microphone prompt, and on an already-granted permission it is silent.
@@ -72,12 +96,25 @@ export default function Permissions() {
     void requestMicrophone().then(setMic)
   }
 
+  // Turning on is a permission prompt, a key fetch and a subscription. The row
+  // says so while it runs, and the button cannot be fired twice.
+  function askPush() {
+    setPushBusy(true)
+    void setupPush({ prompt: true })
+      .then(setPush)
+      .finally(() => setPushBusy(false))
+  }
+
   function continueOn() {
     markPermissionsChecked()
     navigate(from, { replace: true })
   }
 
   const micBlocked = mic === 'denied'
+  const ready = (mic === 'granted' ? 1 : 0) + (push === 'ready' ? 1 : 0)
+  // The notification row shows the busy state while the handoff runs.
+  const shown: Status = pushBusy ? 'checking' : push
+  const shownLabel = pushBusy ? 'Setting up…' : stateLabel[push]
 
   return (
     <main className="grid min-h-dvh place-items-center px-4 py-8">
@@ -85,14 +122,34 @@ export default function Permissions() {
         <CardHeader className="items-start gap-2">
           <CardTitle className="text-2xl tracking-tight">Two things to allow</CardTitle>
           <CardDescription>
-            Blurt is voice-first and sends its questions as notifications. Both stay on this device.
+            Blurt starts with your voice and sends its follow-ups as notifications. Both stay on this
+            device.
           </CardDescription>
         </CardHeader>
 
         <CardContent className="flex flex-col gap-4">
+          {/* One glance is enough: the bar fills as each permission lands. */}
+          <div className="flex items-center gap-3" aria-live="polite">
+            <div className="flex flex-1 gap-1" aria-hidden="true">
+              <span
+                className={cn(
+                  'h-1.5 flex-1 rounded-full transition-colors',
+                  mic === 'granted' ? 'bg-emerald-400' : 'bg-muted',
+                )}
+              />
+              <span
+                className={cn(
+                  'h-1.5 flex-1 rounded-full transition-colors',
+                  push === 'ready' ? 'bg-emerald-400' : 'bg-muted',
+                )}
+              />
+            </div>
+            <span className="text-xs tabular-nums text-muted-foreground">{ready} of 2 ready</span>
+          </div>
+
           <Item
             data-testid="permissions-mic"
-            variant="outline"
+            variant={mic === 'granted' ? 'muted' : 'outline'}
             size="sm"
             className="items-start justify-between gap-3 p-3"
           >
@@ -104,10 +161,16 @@ export default function Permissions() {
                   : 'So you can blurt without typing.'}
               </ItemDescription>
             </ItemContent>
-            <ItemActions className="shrink-0">
-              <span className="text-xs text-muted-foreground">{stateLabel[mic]}</span>
+            <ItemActions className="shrink-0 flex-wrap justify-end">
+              <StatePill state={mic} />
               {(micBlocked || mic === 'prompt') && (
-                <Button type="button" variant="ghost" size="sm" data-testid="permissions-mic-retry" onClick={askMic}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  data-testid="permissions-mic-retry"
+                  onClick={askMic}
+                >
                   Try again
                 </Button>
               )}
@@ -116,7 +179,7 @@ export default function Permissions() {
 
           <Item
             data-testid="permissions-notifications"
-            variant="outline"
+            variant={push === 'ready' ? 'muted' : 'outline'}
             size="sm"
             className="items-start justify-between gap-3 p-3"
           >
@@ -128,17 +191,18 @@ export default function Permissions() {
                   : 'So Blurt can nudge you at the right time.'}
               </ItemDescription>
             </ItemContent>
-            <ItemActions className="shrink-0">
-              <span className="text-xs text-muted-foreground">{pushLabel[push]}</span>
+            <ItemActions className="shrink-0 flex-wrap justify-end">
+              <StatePill state={shown} label={shownLabel} />
               {(push === 'pending' || push === 'denied') && (
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
                   data-testid="permissions-notify-enable"
-                  onClick={() => void setupPush({ prompt: true }).then(setPush)}
+                  disabled={pushBusy}
+                  onClick={askPush}
                 >
-                  Turn on
+                  {pushBusy ? 'Turning on…' : 'Turn on'}
                 </Button>
               )}
             </ItemActions>
@@ -148,7 +212,7 @@ export default function Permissions() {
             Continue
           </Button>
           <p className="text-xs text-muted-foreground">
-            You can continue without them; Blurt falls back to typing and keeps its answers in the app.
+            You can change both later in your browser settings. Blurt will ask again when you return.
           </p>
         </CardContent>
       </Card>

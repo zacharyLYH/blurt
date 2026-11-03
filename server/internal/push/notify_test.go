@@ -115,7 +115,7 @@ func fanOutStack(t *testing.T) (*db.DB, *store.SessionStore, int64) {
 
 func ensureUser(t *testing.T, handle *db.DB, name, email string) int64 {
 	t.Helper()
-	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureUser(context.Background(), name, email)
+	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureActive(context.Background(), name, email)
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}
@@ -138,7 +138,7 @@ func subscribedDevice(t *testing.T, sessions *store.SessionStore, userID int64, 
 	if err != nil {
 		t.Fatalf("marshal subscription: %v", err)
 	}
-	if err := sessions.SetPushSubscription(context.Background(), token, raw); err != nil {
+	if _, err := sessions.SetPushSubscription(context.Background(), token, raw); err != nil {
 		t.Fatalf("store subscription: %v", err)
 	}
 	return token

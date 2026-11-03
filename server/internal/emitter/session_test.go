@@ -68,7 +68,7 @@ func TestFanoutSkipsASignedOutUserAndResumesOnRelogin(t *testing.T) {
 		if err := sessions.Create(ctx, s.userID, token, time.Now().Add(time.Hour)); err != nil {
 			t.Fatalf("create session: %v", err)
 		}
-		if err := sessions.SetPushSubscription(ctx, token, subscription); err != nil {
+		if _, err := sessions.SetPushSubscription(ctx, token, subscription); err != nil {
 			t.Fatalf("store subscription: %v", err)
 		}
 	}

@@ -8,6 +8,11 @@ import { api } from './api'
 
 export type PushSetup = 'ready' | 'pending' | 'denied' | 'unsupported'
 
+// PushStatus adds the moment before the first answer. The handoff below is a
+// permission prompt, a key fetch and a subscription, so a surface that starts
+// at "pending" would read as "off" while the app is still working on it.
+export type PushStatus = PushSetup | 'checking'
+
 interface PushSubscriptionJSON {
   endpoint: string
   keys: { p256dh: string; auth: string }

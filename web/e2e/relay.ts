@@ -12,15 +12,18 @@ export interface Captured {
   body: Buffer
 }
 
-// startRelay answers every push with one status and records what arrived.
+// startRelay answers every push with one status and records what arrived. The
+// answer can change mid-test, so a spec can let a healthy send through and then
+// make the same endpoint go away.
 export async function startRelay(status: number) {
   const captured: Captured[] = []
+  let answer = status
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = []
     req.on('data', (chunk: Buffer) => chunks.push(chunk))
     req.on('end', () => {
       captured.push({ headers: req.headers, body: Buffer.concat(chunks) })
-      res.writeHead(status).end()
+      res.writeHead(answer).end()
     })
   })
   await new Promise<void>((resolve) => server.listen(0, '0.0.0.0', resolve))
@@ -28,6 +31,9 @@ export async function startRelay(status: number) {
   return {
     endpoint: `http://host.docker.internal:${port}/push`,
     captured,
+    answer: (next: number) => {
+      answer = next
+    },
     close: () =>
       new Promise<void>((resolve) => {
         // The sender keeps connections alive, so close() alone would wait.
@@ -38,11 +44,15 @@ export async function startRelay(status: number) {
 }
 
 // withRelay runs a test body against a relay that answers every push with one status, and
-// always shuts it down: a body cannot forget the teardown.
-export async function withRelay(status: number, run: (endpoint: string, captured: Captured[]) => Promise<void>) {
+// always shuts it down: a body cannot forget the teardown. `answer` changes the status
+// mid-test, for the specs that need a healthy send before a dead one.
+export async function withRelay(
+  status: number,
+  run: (endpoint: string, captured: Captured[], answer: (next: number) => void) => Promise<void>,
+) {
   const relay = await startRelay(status)
   try {
-    await run(relay.endpoint, relay.captured)
+    await run(relay.endpoint, relay.captured, relay.answer)
   } finally {
     await relay.close()
   }

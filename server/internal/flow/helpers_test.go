@@ -303,7 +303,7 @@ func (p *pump) age(t *testing.T, jobID int64, old time.Time) {
 // user ensures a second account, so a flow can run two people's Jobs at once.
 func (p *pump) user(t *testing.T, name, email string) int64 {
 	t.Helper()
-	user, err := store.NewUserStore(p.handle.Write, p.handle.Read).EnsureUser(context.Background(), name, email)
+	user, err := store.NewUserStore(p.handle.Write, p.handle.Read).EnsureActive(context.Background(), name, email)
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}

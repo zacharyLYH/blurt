@@ -38,8 +38,8 @@ func notificationURL(base string, reminderID int64) string {
 }
 
 func TestNotificationDetailReadsTheRemindersWords(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 	userID := userIDByEmail(t, handle, "lam@example.com")
 	reminderID := seedReminder(t, handle, userID, "Buy glue", "2026-11-20T10:00:00Z", "fired")
 
@@ -60,7 +60,7 @@ func TestNotificationDetailReadsTheRemindersWords(t *testing.T) {
 	}
 
 	// A guessed id, including somebody else's real one, is a 404 with no body to read.
-	newUserClient(t, base, "other@example.com", mailer)
+	newUserClient(t, base, "other@example.com")
 	otherID := userIDByEmail(t, handle, "other@example.com")
 	foreignID := seedReminder(t, handle, otherID, "Their glue", "2026-11-20T11:00:00Z", "fired")
 	for name, id := range map[string]int64{
@@ -84,8 +84,8 @@ func TestNotificationDetailReadsTheRemindersWords(t *testing.T) {
 }
 
 func TestNotificationFeedbackIsANewRowPerSubmission(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 	userID := userIDByEmail(t, handle, "lam@example.com")
 	reminderID := seedReminder(t, handle, userID, "Take pills", "2026-11-20T10:00:00Z", "resolved")
 	path := notificationURL(base, reminderID) + "/feedback"
@@ -142,14 +142,14 @@ func TestNotificationFeedbackIsANewRowPerSubmission(t *testing.T) {
 }
 
 func TestNotificationsForMonthAreScopedToUserAndMonth(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 	userID := userIDByEmail(t, handle, "lam@example.com")
 
 	// An 18:00 Singapore reminder is 10:00Z: inside November in the user's zone.
 	inMonth := seedReminder(t, handle, userID, "Buy glue", "2026-11-20T10:00:00Z", "fired")
 	seedReminder(t, handle, userID, "December thing", "2026-12-02T10:00:00Z", "resolved")
-	newUserClient(t, base, "other@example.com", mailer)
+	newUserClient(t, base, "other@example.com")
 	otherID := userIDByEmail(t, handle, "other@example.com")
 	seedReminder(t, handle, otherID, "Their glue", "2026-11-20T11:00:00Z", "fired")
 
@@ -189,8 +189,8 @@ func TestNotificationsForMonthAreScopedToUserAndMonth(t *testing.T) {
 // Trace is diagnostics: the product's own paths must keep working when the table is
 // gone, and the detail's words must come from the Reminder, never a Trace Detail.
 func TestNotificationPathsWorkWithTraceDropped(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 	userID := userIDByEmail(t, handle, "lam@example.com")
 	reminderID := seedReminder(t, handle, userID, "Buy glue", "2026-11-20T10:00:00Z", "fired")
 

@@ -16,7 +16,7 @@ func newStack(t *testing.T) (*store.JobStore, *db.DB, int64) {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { handle.Close() })
-	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureUser(
+	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureActive(
 		context.Background(), "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)

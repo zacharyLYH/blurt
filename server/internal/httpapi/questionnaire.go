@@ -41,5 +41,5 @@ func (s *Server) submitQuestionnaire(w http.ResponseWriter, r *http.Request, use
 		s.fail(w, "save questionnaire", err)
 		return
 	}
-	writeJSON(w, http.StatusOK, userEnvelope{User: updated})
+	writeJSON(w, http.StatusOK, userEnvelope{User: s.view(updated)})
 }

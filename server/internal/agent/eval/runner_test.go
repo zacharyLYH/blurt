@@ -36,7 +36,7 @@ func newCaseRun(t *testing.T, c Case, model agent.Model, modelName string) *case
 	}
 	t.Cleanup(func() { handle.Close() })
 
-	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureUser(ctx, "Eval", "eval@example.com")
+	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureActive(ctx, "Eval", "eval@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}

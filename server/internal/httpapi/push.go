@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,8 +27,11 @@ func (s *Server) pushKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // subscribePush stores the device's subscription on its session row. A
-// re-subscribe replaces the old endpoint, matching browser rotation.
-func (s *Server) subscribePush(w http.ResponseWriter, r *http.Request, _ store.User) {
+// re-subscribe replaces the old endpoint, matching browser rotation. A device
+// that just subscribed is sent one notification back: it is the only proof the
+// user gets that the whole chain — permission, subscription, relay, worker —
+// actually reaches this phone.
+func (s *Server) subscribePush(w http.ResponseWriter, r *http.Request, user store.User) {
 	var body push.Subscription
 	if !decodeJSON(w, r, &body) {
 		return
@@ -52,9 +56,22 @@ func (s *Server) subscribePush(w http.ResponseWriter, r *http.Request, _ store.U
 		s.fail(w, "encode push subscription", err)
 		return
 	}
-	if err := s.Sessions.SetPushSubscription(r.Context(), hashToken(raw), stored); err != nil {
+	changed, err := s.Sessions.SetPushSubscription(r.Context(), hashToken(raw), stored)
+	if err != nil {
 		s.fail(w, "store push subscription", err)
 		return
+	}
+	// The subscription is stored; the confirmation is a courtesy. A relay that
+	// refuses it must not turn a working device into a failed request, so the
+	// error is logged and the answer stays 204.
+	if changed && s.Pusher != nil {
+		if _, err := s.Pusher.NotifyUser(r.Context(), user.UserID, push.Message{
+			Title: "Blurt can reach you",
+			Body:  "Notifications are on. This is what a reminder will look like.",
+			Tag:   "push-ready",
+		}); err != nil {
+			slog.Error("push confirmation", "err", err, "user_id", user.UserID)
+		}
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

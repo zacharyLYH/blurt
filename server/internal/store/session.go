@@ -74,16 +74,21 @@ func (s *SessionStore) Resolve(ctx context.Context, tokenHash []byte, nowTime, r
 
 // SetPushSubscription records the browser subscription for one device. A
 // re-subscribe overwrites the previous endpoint, which is the usual rotation
-// path.
-func (s *SessionStore) SetPushSubscription(ctx context.Context, tokenHash, subscription []byte) error {
-	_, err := s.write.ExecContext(ctx, `
+// path; `changed` is false when the same endpoint is stored again, so a caller
+// can tell a new device from a page load that merely repeated the handoff.
+func (s *SessionStore) SetPushSubscription(ctx context.Context, tokenHash, subscription []byte) (bool, error) {
+	res, err := s.write.ExecContext(ctx, `
 		UPDATE Session SET PushSubscription = ?
-		WHERE TokenHash = ?`,
-		string(subscription), tokenHash)
+		WHERE TokenHash = ? AND (PushSubscription IS NULL OR PushSubscription <> ?)`,
+		string(subscription), tokenHash, string(subscription))
 	if err != nil {
-		return fmt.Errorf("set push subscription: %w", err)
+		return false, fmt.Errorf("set push subscription: %w", err)
 	}
-	return nil
+	changed, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("set push subscription: %w", err)
+	}
+	return changed > 0, nil
 }
 
 // HasLiveSession reports whether the user still has at least one unexpired session.

@@ -44,7 +44,7 @@ func newFixture(t *testing.T, mode string) *fixture {
 	t.Cleanup(func() { handle.Close() })
 
 	ctx := context.Background()
-	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureUser(ctx, "Lam", "lam@example.com")
+	user, err := store.NewUserStore(handle.Write, handle.Read).EnsureActive(ctx, "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}

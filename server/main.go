@@ -6,10 +6,12 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -24,12 +26,23 @@ import (
 	"blurt/internal/mail"
 	"blurt/internal/push"
 	"blurt/internal/queue"
+	"blurt/internal/seed"
 	"blurt/internal/store"
 	"blurt/internal/stt"
 )
 
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo})))
+
+	// `blurt seed` is a one-shot admin tool: it reuses the container's binary
+	// and data volume, so no separate image or host Go toolchain is needed.
+	if len(os.Args) > 1 && os.Args[1] == "seed" {
+		if err := runSeed(os.Args[2:]); err != nil {
+			slog.Error("seed failed", "err", err)
+			os.Exit(1)
+		}
+		return
+	}
 
 	cfg, err := config.Load()
 	if err != nil {
@@ -63,17 +76,34 @@ func main() {
 	// BLURT_FAKE_PIN is the dev way to sign in without a mailbox: the PIN is
 	// fixed, so nothing is mailed and no SMTP settings are needed at all.
 	fixedPIN := ""
-	mailer := (httpapi.PINMailer)(nil)
+	mailer := (httpapi.Mailer)(nil)
 	if cfg.FakePIN {
 		slog.Warn("BLURT_FAKE_PIN is on: login accepts the fixed dev PIN and no mail is sent — never do this on a public host")
 		fixedPIN = auth.DevPIN
 	} else {
-		sender, err := mail.New(cfg.SMTP)
+		// The first public origin is the one an approval mail links back to.
+		sender, err := mail.New(cfg.SMTP, cfg.PublicOrigins[0])
 		if err != nil {
 			panic(err)
 		}
 		mailer = sender
 	}
+
+	users := store.NewUserStore(handle.Write, handle.Read)
+
+	// The owner is deployment configuration, not a row somebody created: they
+	// cannot approve themselves, so boot makes them active. Without an address
+	// there is no owner and nobody can approve anyone, so the deploy is dead on
+	// arrival — say so now instead of at the first application.
+	owner := strings.ToLower(strings.TrimSpace(cfg.SMTP.Username))
+	if owner == "" {
+		panic("BLURT_SMTP_USERNAME is required: it names the app's owner, the only account that approves applications")
+	}
+	seeded, err := seed.Owner(context.Background(), users, owner, "")
+	if err != nil {
+		panic(err)
+	}
+	slog.Info("owner ready", "user_id", seeded.UserID, "email", seeded.Email)
 
 	sessions := store.NewSessionStore(handle.Write, handle.Read)
 	notifier := &push.Fanout{Sessions: sessions, Sender: push.NewSender(cfg.VAPID)}
@@ -81,7 +111,6 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	users := store.NewUserStore(handle.Write, handle.Read)
 	jobs := store.NewJobStore(handle.Write, handle.Read)
 	// The emitter reads the same Reminders the AgentLoop plans against, and the
 	// firing transition is the one write that is its own.
@@ -166,7 +195,7 @@ func main() {
 		},
 		Loop: loop, STT: transcriber, STTModel: cfg.STT.Model,
 		Pins:   auth.NewPinStore(5*time.Minute, fixedPIN),
-		Mailer: mailer, Pusher: notifier, Emitter: emit,
+		Mailer: mailer, Owner: owner, Pusher: notifier, Emitter: emit,
 		VAPIDPublicKey: cfg.VAPID.PublicKey,
 		AllowedOrigins: cfg.PublicOrigins,
 	})
@@ -200,4 +229,38 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown", "err", err)
 	}
+}
+
+// runSeed fills the owner's questionnaire. The owner themselves is created at
+// boot from BLURT_SMTP_USERNAME, so this only has to find that row and give it
+// the default answers a local stack should not have to type.
+func runSeed(args []string) error {
+	dataDir := os.Getenv("BLURT_DATA_DIR")
+	if dataDir == "" {
+		dataDir = "/data"
+	}
+	owner := strings.ToLower(strings.TrimSpace(os.Getenv("BLURT_SMTP_USERNAME")))
+	flags := flag.NewFlagSet("seed", flag.ContinueOnError)
+	email := flags.String("email", owner, "owner email (default: BLURT_SMTP_USERNAME)")
+	name := flags.String("name", "", "display name (default: email local part)")
+	dir := flags.String("data-dir", dataDir, "directory holding blurt.db")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if *email == "" {
+		return errors.New("seed: BLURT_SMTP_USERNAME is empty, so there is no owner to seed")
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	user, err := seed.Run(ctx, *dir, *email, *name)
+	if err != nil {
+		return err
+	}
+	slog.Info("seeded owner questionnaire",
+		"user_id", user.UserID,
+		"email", user.Email,
+		"questionnaire_version", user.LastQuestionnaireVersion,
+	)
+	return nil
 }

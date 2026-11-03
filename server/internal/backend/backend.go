@@ -41,8 +41,12 @@ type Deps struct {
 	// STTModel is the id the transcription Trace reports.
 	STTModel string
 	Pins     *auth.PinStore
-	// Mailer may be nil: dev mode issues a fixed PIN and sends nothing.
-	Mailer httpapi.PINMailer
+	// Mailer may be nil: dev mode issues a fixed PIN and sends nothing. The
+	// owner approves applications in the portal either way.
+	Mailer httpapi.Mailer
+	// Owner is the address BLURT_SMTP_USERNAME names: the one account that
+	// approves everyone else.
+	Owner  string
 	Pusher push.Notifier
 	// Emitter may be nil: a caller that does not want reminders firing under it omits it.
 	Emitter *emitter.Emitter
@@ -88,6 +92,7 @@ func (b *Backend) Handler() http.Handler {
 		Sessions:       b.Sessions,
 		Pins:           b.Pins,
 		Mailer:         b.Mailer,
+		Owner:          b.Owner,
 		Pusher:         b.Pusher,
 		Jobs:           b.Jobs,
 		Audio:          b.Audio,

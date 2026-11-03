@@ -31,11 +31,13 @@ type sentPin struct {
 	pin string
 }
 
-// fakeMailer stands in for SMTP so the test can read the emailed PIN while
-// the rest of the path (PIN store, session cookie, handlers) stays real.
+// fakeMailer stands in for SMTP so the test can read what was sent while the
+// rest of the path (PIN store, session cookie, handlers) stays real.
 type fakeMailer struct {
-	mu   sync.Mutex
-	sent []sentPin
+	mu       sync.Mutex
+	sent     []sentPin
+	approved []string
+	rejected []string
 }
 
 func (m *fakeMailer) SendPIN(to, pin string) error {
@@ -43,6 +45,26 @@ func (m *fakeMailer) SendPIN(to, pin string) error {
 	defer m.mu.Unlock()
 	m.sent = append(m.sent, sentPin{to: to, pin: pin})
 	return nil
+}
+
+func (m *fakeMailer) SendApproved(to, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.approved = append(m.approved, to)
+	return nil
+}
+
+func (m *fakeMailer) SendRejected(to, _ string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rejected = append(m.rejected, to)
+	return nil
+}
+
+func (m *fakeMailer) count() int {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return len(m.sent)
 }
 
 func (m *fakeMailer) last(t *testing.T) sentPin {
@@ -101,33 +123,51 @@ type envelope struct {
 // requests that arrive without an allowed Origin.
 const testOrigin = "http://blurt.test"
 
+// testOwner is the address the test stack names as owner: the one account that
+// may approve or reject everyone else.
+const testOwner = "owner@example.com"
+
+// testHandle is the database the current stack booted on. Signing in never
+// creates a row, so the login helper approves an applicant the way the owner
+// would; the approval API itself is exercised in admin_test.go.
+var testHandle *db.DB
+
+// approve gives the address the row an approved applicant would have.
+func approve(t *testing.T, email string) {
+	t.Helper()
+	if _, err := store.NewUserStore(testHandle.Write, testHandle.Read).
+		EnsureActive(context.Background(), "Lam", email); err != nil {
+		t.Fatalf("approve %s: %v", email, err)
+	}
+}
+
 // A real P-256 public point (65 bytes, base64url) so the key endpoint has a
 // realistic value to hand out.
 const testVAPIDPublicKey = "BPCRZS3Lfu-TYCCcyqO99WCNWKGt_JCnjO1U67-6qVHrPWnRjs1IGxle6v7Vv2RK89T3Dwj_itMGWtCv-up64XQ"
 
-func newClient(t *testing.T) (*http.Client, string, *fakeMailer, *db.DB) {
+// newClient boots the dev stack: no mailer, so the PIN is fixed and login is
+// the same path the browser takes locally. One way in, for every test.
+func newClient(t *testing.T) (*http.Client, string, *db.DB) {
 	t.Helper()
-	mailer := &fakeMailer{}
-	client, base, handle, _ := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, nil)
-	return client, base, mailer, handle
+	client, base, handle, _ := newTestStack(t, auth.NewPinStore(time.Minute, auth.DevPIN), nil, nil)
+	return client, base, handle
 }
 
 // newPushClient is newClient plus a recording pusher, so the send endpoint can
 // be driven without a relay.
-func newPushClient(t *testing.T) (*http.Client, string, *fakeMailer, *fakePusher, *db.DB) {
+func newPushClient(t *testing.T) (*http.Client, string, *fakePusher, *db.DB) {
 	t.Helper()
-	mailer, pusher := &fakeMailer{}, &fakePusher{}
-	client, base, handle, _ := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, pusher)
-	return client, base, mailer, pusher, handle
+	pusher := &fakePusher{}
+	client, base, handle, _ := newTestStack(t, auth.NewPinStore(time.Minute, auth.DevPIN), nil, pusher)
+	return client, base, pusher, handle
 }
 
 // newQueueClient is newClient plus the queues the handlers publish to, so a test
 // can see which stream a capture was routed to.
-func newQueueClient(t *testing.T) (*http.Client, string, *fakeMailer, *db.DB, *queue.Queues) {
+func newQueueClient(t *testing.T) (*http.Client, string, *db.DB, *queue.Queues) {
 	t.Helper()
-	mailer := &fakeMailer{}
-	client, base, handle, queues := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, nil)
-	return client, base, mailer, handle, queues
+	client, base, handle, queues := newTestStack(t, auth.NewPinStore(time.Minute, auth.DevPIN), nil, nil)
+	return client, base, handle, queues
 }
 
 // consume takes the next message off a stage stream.
@@ -140,15 +180,18 @@ func consume(t *testing.T, stream queue.Stream) (int64, int) {
 	return jobID, attempt
 }
 
-// newTestStack boots the API on a throwaway database. A nil mailer is the
-// BLURT_FAKE_PIN path: PINs are fixed and nothing is sent.
-func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, pusher push.Notifier) (*http.Client, string, *db.DB, *queue.Queues) {
+// newTestStack boots the API on a throwaway database. A nil mailer is the dev
+// path (BLURT_FAKE_PIN): fixed PIN, no mail. A mailer is production: only an
+// approved row gets a PIN, and it is mailed. Either way signing in never
+// creates an account.
+func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.Mailer, pusher push.Notifier) (*http.Client, string, *db.DB, *queue.Queues) {
 	t.Helper()
 	handle, err := db.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
 	t.Cleanup(func() { handle.Close() })
+	testHandle = handle
 	audio, err := capture.NewStore(t.TempDir())
 	if err != nil {
 		t.Fatalf("open audio store: %v", err)
@@ -161,6 +204,7 @@ func newTestStack(t *testing.T, pins *auth.PinStore, mailer httpapi.PINMailer, p
 		Sessions:       store.NewSessionStore(handle.Write, handle.Read),
 		Pins:           pins,
 		Mailer:         mailer,
+		Owner:          testOwner,
 		Pusher:         pusher,
 		Jobs:           store.NewJobStore(handle.Write, handle.Read),
 		Audio:          audio,
@@ -215,24 +259,23 @@ func call(t *testing.T, client *http.Client, method, url string, body any) (int,
 	return res.StatusCode, reply
 }
 
-func requestPin(t *testing.T, client *http.Client, base, email string, mailer *fakeMailer) string {
+// requestPin asks for a PIN on the dev stack, where the code is fixed and
+// nothing is mailed.
+func requestPin(t *testing.T, client *http.Client, base, email string) string {
 	t.Helper()
 	status, body := call(t, client, http.MethodPost, base+"/api/auth/request-pin", map[string]string{"email": email})
 	if status != http.StatusOK {
 		t.Fatalf("request-pin status = %d: %s", status, body)
 	}
-	sent := mailer.last(t)
-	if sent.to != email {
-		t.Fatalf("PIN sent to %q, want %q", sent.to, email)
-	}
-	return sent.pin
+	return auth.DevPIN
 }
 
-func login(t *testing.T, client *http.Client, base, email string, mailer *fakeMailer) store.User {
+func login(t *testing.T, client *http.Client, base, email string) store.User {
 	t.Helper()
-	pin := requestPin(t, client, base, email, mailer)
+	approve(t, email)
+	pin := requestPin(t, client, base, email)
 	status, body := call(t, client, http.MethodPost, base+"/api/auth/verify-pin", map[string]string{
-		"name": "Lam", "email": email, "pin": pin,
+		"email": email, "pin": pin,
 	})
 	if status != http.StatusOK {
 		t.Fatalf("verify-pin status = %d: %s", status, body)
@@ -245,14 +288,14 @@ func login(t *testing.T, client *http.Client, base, email string, mailer *fakeMa
 }
 
 // newUserClient opens a second browser session, signed in as someone else.
-func newUserClient(t *testing.T, base, email string, mailer *fakeMailer) *http.Client {
+func newUserClient(t *testing.T, base, email string) *http.Client {
 	t.Helper()
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		t.Fatalf("cookie jar: %v", err)
 	}
 	client := &http.Client{Jar: jar}
-	login(t, client, base, email, mailer)
+	login(t, client, base, email)
 	return client
 }
 
@@ -282,7 +325,7 @@ func expireSessions(t *testing.T, handle *db.DB) {
 }
 
 func TestUserRequiresSession(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 	status, body := call(t, client, http.MethodGet, base+"/api/user", nil)
 	if status != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401: %s", status, body)
@@ -290,11 +333,12 @@ func TestUserRequiresSession(t *testing.T) {
 }
 
 func TestPinFlowIssuesSession(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	pin := requestPin(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	approve(t, "lam@example.com")
+	pin := requestPin(t, client, base, "lam@example.com")
 
 	status, body := call(t, client, http.MethodPost, base+"/api/auth/verify-pin", map[string]string{
-		"name": "Lam", "email": "lam@example.com", "pin": "000000",
+		"email": "lam@example.com", "pin": "000000",
 	})
 	if pin == "000000" {
 		t.Fatalf("fake PIN collided with the wrong-PIN probe")
@@ -304,7 +348,7 @@ func TestPinFlowIssuesSession(t *testing.T) {
 	}
 
 	status, body = call(t, client, http.MethodPost, base+"/api/auth/verify-pin", map[string]string{
-		"name": "Lam", "email": "lam@example.com", "pin": pin,
+		"email": "lam@example.com", "pin": pin,
 	})
 	if status != http.StatusOK {
 		t.Fatalf("verify-pin status = %d: %s", status, body)
@@ -323,15 +367,15 @@ func TestPinFlowIssuesSession(t *testing.T) {
 	}
 	// Single use: replaying the same PIN fails.
 	if status, _ := call(t, client, http.MethodPost, base+"/api/auth/verify-pin", map[string]string{
-		"name": "Lam", "email": "lam@example.com", "pin": pin,
+		"email": "lam@example.com", "pin": pin,
 	}); status != http.StatusUnauthorized {
 		t.Fatalf("replayed PIN status = %d, want 401", status)
 	}
 }
 
 func TestSignedInUserCannotRequestPin(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	status, body := call(t, client, http.MethodPost, base+"/api/auth/request-pin", map[string]string{"email": "lam@example.com"})
 	if status != http.StatusConflict {
@@ -343,6 +387,7 @@ func TestSignedInUserCannotRequestPin(t *testing.T) {
 // with no mailbox sign in.
 func TestFakePINModeSkipsMail(t *testing.T) {
 	client, base, _, _ := newTestStack(t, auth.NewPinStore(time.Minute, auth.DevPIN), nil, nil)
+	approve(t, "dev@example.com")
 
 	status, body := call(t, client, http.MethodPost, base+"/api/auth/request-pin", map[string]string{"email": "dev@example.com"})
 	if status != http.StatusOK {
@@ -359,9 +404,118 @@ func TestFakePINModeSkipsMail(t *testing.T) {
 	}
 }
 
+// Production remembers an email before it can sign in: an admin creates the
+// User row. Unknown addresses get the same 200 as a known one, but no PIN and
+// no row. A seeded row signs in with the name the admin chose.
+func TestSignupClosedRequiresExistingUser(t *testing.T) {
+	mailer := &fakeMailer{}
+	client, base, handle, _ := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, nil)
+
+	status, body := call(t, client, http.MethodPost, base+"/api/auth/request-pin", map[string]string{
+		"email": "stranger@example.com",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("unknown request-pin status = %d, want 200: %s", status, body)
+	}
+	if mailer.count() != 0 {
+		t.Fatalf("PIN emails = %d, want 0", mailer.count())
+	}
+	var users int
+	if err := handle.Read.QueryRow(`SELECT count(*) FROM User`).Scan(&users); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if users != 0 {
+		t.Fatalf("users = %d, want 0: an unknown email must not create one", users)
+	}
+
+	// A guessed code cannot create the missing row either.
+	status, body = call(t, client, http.MethodPost, base+"/api/auth/verify-pin", map[string]string{
+		"name": "Stranger", "email": "stranger@example.com", "pin": "000000",
+	})
+	if status != http.StatusUnauthorized {
+		t.Fatalf("unknown verify-pin status = %d, want 401: %s", status, body)
+	}
+
+	// The admin's row is the guest list. Its name wins over the login form.
+	if _, err := handle.Write.Exec(
+		`INSERT INTO User (Name, Email, Status, CreatedAt) VALUES (?, ?, 'active', ?)`,
+		"Lam", "lam@example.com", time.Now().UTC().Format(time.RFC3339),
+	); err != nil {
+		t.Fatalf("seed user: %v", err)
+	}
+	status, body = call(t, client, http.MethodPost, base+"/api/auth/request-pin", map[string]string{
+		"email": "lam@example.com",
+	})
+	if status != http.StatusOK {
+		t.Fatalf("seeded request-pin status = %d: %s", status, body)
+	}
+	sent := mailer.last(t)
+	if sent.to != "lam@example.com" {
+		t.Fatalf("PIN sent to %q, want lam@example.com", sent.to)
+	}
+	status, body = call(t, client, http.MethodPost, base+"/api/auth/verify-pin", map[string]string{
+		"name": "Imposter", "email": "lam@example.com", "pin": sent.pin,
+	})
+	if status != http.StatusOK {
+		t.Fatalf("seeded verify-pin status = %d: %s", status, body)
+	}
+	var reply envelope
+	if err := json.Unmarshal(body, &reply); err != nil {
+		t.Fatalf("decode verify-pin: %v", err)
+	}
+	if reply.User.Name != "Lam" {
+		t.Fatalf("name = %q, want the seeded Lam", reply.User.Name)
+	}
+	if err := handle.Read.QueryRow(`SELECT count(*) FROM User`).Scan(&users); err != nil {
+		t.Fatalf("count users after login: %v", err)
+	}
+	if users != 1 {
+		t.Fatalf("users = %d, want 1", users)
+	}
+}
+
+// An address nobody seeded cannot get in, however the login is attempted: the
+// request answers 200 but mints nothing, so every code — the fixed dev one
+// included — is refused, and no session or User row is left behind.
+func TestLoginWithUnseededEmailFails(t *testing.T) {
+	mailer := &fakeMailer{}
+	client, base, handle, _ := newTestStack(t, auth.NewPinStore(time.Minute, ""), mailer, nil)
+
+	if status, body := call(t, client, http.MethodPost, base+"/api/auth/request-pin", map[string]string{
+		"email": "stranger@example.com",
+	}); status != http.StatusOK {
+		t.Fatalf("request-pin status = %d, want 200: %s", status, body)
+	}
+	if mailer.count() != 0 {
+		t.Fatalf("PIN emails = %d, want 0", mailer.count())
+	}
+
+	// Nothing was minted, so nothing verifies: not a guess, not the dev PIN.
+	for _, pin := range []string{"000000", auth.DevPIN} {
+		status, body := call(t, client, http.MethodPost, base+"/api/auth/verify-pin", map[string]string{
+			"name": "Stranger", "email": "stranger@example.com", "pin": pin,
+		})
+		if status != http.StatusUnauthorized {
+			t.Fatalf("verify-pin %q status = %d, want 401: %s", pin, status, body)
+		}
+	}
+
+	// A failed login leaves nothing behind: no session, no row.
+	if status, body := call(t, client, http.MethodGet, base+"/api/user", nil); status != http.StatusUnauthorized {
+		t.Fatalf("GET /api/user status = %d, want 401: %s", status, body)
+	}
+	var users int
+	if err := handle.Read.QueryRow(`SELECT count(*) FROM User`).Scan(&users); err != nil {
+		t.Fatalf("count users: %v", err)
+	}
+	if users != 0 {
+		t.Fatalf("users = %d, want 0: a failed login must not create one", users)
+	}
+}
+
 func TestQuestionnaireStoresMemoryAndVersion(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	status, body := call(t, client, http.MethodPost, base+"/api/questionnaire", map[string]any{
 		"version": 1,
@@ -420,8 +574,8 @@ func countQuestionnaireMemory(t *testing.T, handle *db.DB) int {
 }
 
 func TestQuestionnaireRejectsBadInput(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	for name, payload := range map[string]any{
 		"zero version": map[string]any{"version": 0, "answers": []map[string]string{{"question": "q", "answer": "a"}}},
@@ -436,7 +590,7 @@ func TestQuestionnaireRejectsBadInput(t *testing.T) {
 }
 
 func TestUnsafeRequestsNeedAllowedOrigin(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 	payload := map[string]string{"email": "lam@example.com"}
 
 	if res := do(t, client, http.MethodPost, base+"/api/auth/request-pin", payload, ""); res.StatusCode != http.StatusForbidden {
@@ -451,10 +605,11 @@ func TestUnsafeRequestsNeedAllowedOrigin(t *testing.T) {
 }
 
 func TestSecureCookieBehindHTTPSProxy(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	pin := requestPin(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	approve(t, "lam@example.com")
+	pin := requestPin(t, client, base, "lam@example.com")
 
-	payload, err := json.Marshal(map[string]string{"name": "Lam", "email": "lam@example.com", "pin": pin})
+	payload, err := json.Marshal(map[string]string{"email": "lam@example.com", "pin": pin})
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -477,7 +632,7 @@ func TestSecureCookieBehindHTTPSProxy(t *testing.T) {
 }
 
 func TestRejectsOversizedBody(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 	status, _ := call(t, client, http.MethodPost, base+"/api/auth/request-pin", map[string]string{
 		"email": "lam@example.com",
 		"pad":   strings.Repeat("x", 2<<20),
@@ -488,11 +643,12 @@ func TestRejectsOversizedBody(t *testing.T) {
 }
 
 func TestSessionCookieIsHardened(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	pin := requestPin(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	approve(t, "lam@example.com")
+	pin := requestPin(t, client, base, "lam@example.com")
 
 	res := do(t, client, http.MethodPost, base+"/api/auth/verify-pin", map[string]string{
-		"name": "Lam", "email": "lam@example.com", "pin": pin,
+		"email": "lam@example.com", "pin": pin,
 	}, testOrigin)
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("verify-pin status = %d", res.StatusCode)
@@ -534,8 +690,8 @@ func TestSessionCookieIsHardened(t *testing.T) {
 
 // A probe that cannot refresh the browser cookie must not slide the store row.
 func TestRequestPinProbeDoesNotSlideSession(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	before := sessionExpiry(t, handle)
 	res := do(t, client, http.MethodPost, base+"/api/auth/request-pin",
@@ -554,8 +710,8 @@ func TestRequestPinProbeDoesNotSlideSession(t *testing.T) {
 // An expired row is dead: the request is rejected, nothing is refreshed, and
 // the user can start a fresh login instead of being told they are signed in.
 func TestExpiredSessionIsRejectedNotRevived(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 	expireSessions(t, handle)
 	expired := sessionExpiry(t, handle)
 
@@ -575,16 +731,13 @@ func TestExpiredSessionIsRejectedNotRevived(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("request-pin status = %d, want 200: %s", status, body)
 	}
-	if got := mailer.last(t).to; got != "lam@example.com" {
-		t.Fatalf("PIN sent to %q, want lam@example.com", got)
-	}
 }
 
 // Renewal must move the store row and the browser cookie to the same instant,
 // otherwise they drift apart and one expires before the other.
 func TestSessionRenewalAlignsCookieAndStore(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	// Shrink the stored session so a successful renewal is unambiguous.
 	near := time.Now().Add(10 * time.Minute).UTC().Format(time.RFC3339)
@@ -617,7 +770,7 @@ func TestSessionRenewalAlignsCookieAndStore(t *testing.T) {
 
 // A cookie that is not even valid base64 must behave like no cookie at all.
 func TestMalformedSessionCookieIsUnauthorized(t *testing.T) {
-	_, base, _, _ := newClient(t)
+	_, base, _ := newClient(t)
 	req, err := http.NewRequest(http.MethodGet, base+"/api/user", nil)
 	if err != nil {
 		t.Fatalf("build request: %v", err)
@@ -634,7 +787,7 @@ func TestMalformedSessionCookieIsUnauthorized(t *testing.T) {
 }
 
 func TestPushKeyReturnsConfiguredKey(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 
 	status, body := call(t, client, http.MethodGet, base+"/api/push/key", nil)
 	if status != http.StatusOK {
@@ -652,8 +805,8 @@ func TestPushKeyReturnsConfiguredKey(t *testing.T) {
 }
 
 func TestPushSubscribeStoresAndReplacesSubscription(t *testing.T) {
-	client, base, mailer, handle := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, handle := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	subscription := func(endpoint string) map[string]any {
 		return map[string]any{"endpoint": endpoint, "keys": testPushKeys(t)}
@@ -685,9 +838,47 @@ func TestPushSubscribeStoresAndReplacesSubscription(t *testing.T) {
 	}
 }
 
+// A device that just subscribed gets one notification back: it is the only proof
+// the user has that the whole chain — permission, subscription, relay, worker —
+// reaches this phone. The handoff repeats on every page load, so the same
+// subscription must not turn into a notification every page load.
+func TestPushSubscribeConfirmsOnce(t *testing.T) {
+	client, base, pusher, _ := newPushClient(t)
+	login(t, client, base, "lam@example.com")
+	pusher.result = push.Result{Sent: 1}
+
+	subscription := map[string]any{"endpoint": "https://fcm.googleapis.com/first", "keys": testPushKeys(t)}
+	if status, body := call(t, client, http.MethodPost, base+"/api/push/subscribe", subscription); status != http.StatusNoContent {
+		t.Fatalf("subscribe status = %d: %s", status, body)
+	}
+	if pusher.calls != 1 {
+		t.Fatalf("confirmation pushes = %d, want 1", pusher.calls)
+	}
+	if pusher.message.Tag != "push-ready" || pusher.message.Title == "" || pusher.message.Body == "" {
+		t.Fatalf("confirmation = %+v, want a titled, tagged message", pusher.message)
+	}
+
+	// The very same subscription again: nothing new to confirm.
+	if status, body := call(t, client, http.MethodPost, base+"/api/push/subscribe", subscription); status != http.StatusNoContent {
+		t.Fatalf("re-subscribe status = %d: %s", status, body)
+	}
+	if pusher.calls != 1 {
+		t.Fatalf("confirmation pushes after a repeat = %d, want 1", pusher.calls)
+	}
+
+	// A rotated endpoint is a new device as far as the user is concerned.
+	if status, body := call(t, client, http.MethodPost, base+"/api/push/subscribe",
+		map[string]any{"endpoint": "https://fcm.googleapis.com/second", "keys": testPushKeys(t)}); status != http.StatusNoContent {
+		t.Fatalf("rotated subscribe status = %d: %s", status, body)
+	}
+	if pusher.calls != 2 {
+		t.Fatalf("confirmation pushes after a rotation = %d, want 2", pusher.calls)
+	}
+}
+
 func TestPushSubscribeValidatesPayload(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	validKeys := testPushKeys(t)
 	for name, payload := range map[string]any{
@@ -707,7 +898,7 @@ func TestPushSubscribeValidatesPayload(t *testing.T) {
 }
 
 func TestPushSubscribeRequiresSession(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 
 	status, body := call(t, client, http.MethodPost, base+"/api/push/subscribe", map[string]any{
 		"endpoint": "https://fcm.googleapis.com/x",
@@ -721,8 +912,8 @@ func TestPushSubscribeRequiresSession(t *testing.T) {
 // The send endpoint is scoped to the caller's own devices: blurt serves many
 // users, so an open send would be a way to notify somebody else's phone.
 func TestPushSendFansOutToCallerDevices(t *testing.T) {
-	client, base, mailer, pusher, handle := newPushClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, pusher, handle := newPushClient(t)
+	login(t, client, base, "lam@example.com")
 	pusher.result = push.Result{Sent: 1}
 
 	status, body := call(t, client, http.MethodPost, base+"/api/push", map[string]any{
@@ -787,8 +978,8 @@ func TestPushSendFansOutToCallerDevices(t *testing.T) {
 }
 
 func TestPushSendValidatesPayload(t *testing.T) {
-	client, base, mailer, pusher, _ := newPushClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, pusher, _ := newPushClient(t)
+	login(t, client, base, "lam@example.com")
 
 	for name, payload := range map[string]any{
 		"no title":          map[string]any{"body": "b"},
@@ -811,7 +1002,7 @@ func TestPushSendValidatesPayload(t *testing.T) {
 }
 
 func TestPushSendRequiresSession(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 
 	status, body := call(t, client, http.MethodPost, base+"/api/push", map[string]any{"title": "t", "body": "b"})
 	if status != http.StatusUnauthorized {
@@ -822,8 +1013,8 @@ func TestPushSendRequiresSession(t *testing.T) {
 // A relay that refuses our identity is a deploy problem, so it is reported
 // apart from a dead device.
 func TestPushSendReportsVAPIDRejection(t *testing.T) {
-	client, base, mailer, pusher, _ := newPushClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, pusher, _ := newPushClient(t)
+	login(t, client, base, "lam@example.com")
 	pusher.result, pusher.err = push.Result{Failed: 1}, push.ErrVAPID
 
 	status, body := call(t, client, http.MethodPost, base+"/api/push", map[string]any{"title": "t", "body": "b"})
@@ -837,8 +1028,8 @@ func TestPushSendReportsVAPIDRejection(t *testing.T) {
 
 // Without a sender configured the endpoint says so instead of pretending.
 func TestPushSendWithoutPusher(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	status, body := call(t, client, http.MethodPost, base+"/api/push", map[string]any{"title": "t", "body": "b"})
 	if status != http.StatusNotImplemented {
@@ -847,7 +1038,7 @@ func TestPushSendWithoutPusher(t *testing.T) {
 }
 
 func TestKnownPathRejectsWrongMethod(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 
 	res := do(t, client, http.MethodPost, base+"/api/user", nil, testOrigin)
 	if res.StatusCode != http.StatusMethodNotAllowed {
@@ -869,7 +1060,7 @@ func TestKnownPathRejectsWrongMethod(t *testing.T) {
 }
 
 func TestDecodeJSONRejectsTrailingData(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 
 	req, err := http.NewRequest(http.MethodPost, base+"/api/auth/request-pin",
 		strings.NewReader(`{"email":"a@example.com"}{"email":"b@example.com"}`))
@@ -889,7 +1080,7 @@ func TestDecodeJSONRejectsTrailingData(t *testing.T) {
 }
 
 func TestDecodeJSONRejectsNonJSONContentType(t *testing.T) {
-	client, base, _, _ := newClient(t)
+	client, base, _ := newClient(t)
 
 	req, err := http.NewRequest(http.MethodPost, base+"/api/auth/request-pin",
 		strings.NewReader(`{"email":"a@example.com"}`))
@@ -909,8 +1100,8 @@ func TestDecodeJSONRejectsNonJSONContentType(t *testing.T) {
 }
 
 func TestLogoutRevokesSession(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	if status, body := call(t, client, http.MethodPost, base+"/api/auth/logout", nil); status != http.StatusNoContent {
 		t.Fatalf("logout status = %d: %s", status, body)

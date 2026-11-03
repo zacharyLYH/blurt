@@ -12,11 +12,14 @@ services:
       BLURT_DATA_DIR: /data
       BLURT_REDIS_URL: redis://redis:6379/0
       BLURT_BIND: ":8080"
-      BLURT_PUBLIC_ORIGINS: http://localhost:9977
+      # Both test stacks: the shared one on 9977 and the clock spec's own on
+      # 9978, so the e2e helpers' fixed Origin is trusted by either.
+      BLURT_PUBLIC_ORIGINS: http://localhost:9977,http://localhost:9978
       BLURT_SESSION_SECRET: e2e-session-secret-0123456789abcdef
-      # Dev login: the PIN is fixed (123456) and nothing is mailed, so the
-      # stack needs no mailbox at all. The dev .env is still loaded, so blank
-      # its real App Password instead of carrying it into a test container.
+      # Dev login is the one test path: the PIN is fixed (123456), nothing is
+      # mailed, and the first verified PIN creates the user, so a spec can sign
+      # in a fresh address. The dev .env is still loaded, so blank its real App
+      # Password instead of carrying it into a test container.
       BLURT_FAKE_PIN: "true"
       # phonon is a network dependency; e2e uses the deterministic fake so the
       # capture path can be exercised without the gateway. The planner is
@@ -27,6 +30,9 @@ services:
       # that is a minute out come due without waiting for it. e2e/emitter-clock.spec.ts
       # overrides it past a day to make a long-horizon reminder fire for real.
       BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT: "${BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT:-90s}"
+      # The app's owner. Boot seeds this address active, and it is the one
+      # account that can approve everyone else in the portal.
+      BLURT_SMTP_USERNAME: "owner@example.com"
       BLURT_SMTP_PASSWORD: ""
       BLURT_VAPID_PUBLIC_KEY: BPCRZS3Lfu-TYCCcyqO99WCNWKGt_JCnjO1U67-6qVHrPWnRjs1IGxle6v7Vv2RK89T3Dwj_itMGWtCv-up64XQ
       BLURT_VAPID_PRIVATE_KEY: m6UconuCpzkrbd1fui1DQb_GXOEGCjue8mhRAzVvak0

@@ -5,7 +5,10 @@ export interface User {
   userId: number
   name: string
   email: string
+  status: 'pending' | 'active'
   lastQuestionnaireVersion: number
+  // owner is the one address the deployment names: it approves everyone else.
+  owner: boolean
 }
 
 export interface UserEnvelope {

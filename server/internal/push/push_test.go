@@ -59,19 +59,30 @@ func TestValidateSubscription(t *testing.T) {
 	if err := ValidateSubscription(valid); err != nil {
 		t.Fatalf("valid subscription rejected: %v", err)
 	}
+	// FCM's region hosts are what an unbranded Chromium mints; the path is
+	// what makes a google.com host the same service.
+	for _, endpoint := range []string{
+		"https://jmt17.google.com/fcm/send/x",
+		"https://www.google.com/fcm/send/x",
+	} {
+		if err := ValidateSubscription(Subscription{Endpoint: endpoint, Keys: keys}); err != nil {
+			t.Errorf("%s: rejected: %v", endpoint, err)
+		}
+	}
 	// A local relay is the one place plain http is allowed.
 	if err := ValidateSubscription(Subscription{Endpoint: "http://host.docker.internal:9/push", Keys: keys}); err != nil {
 		t.Fatalf("local relay rejected: %v", err)
 	}
 
 	for name, sub := range map[string]Subscription{
-		"plain http":      {Endpoint: "http://fcm.googleapis.com/x", Keys: keys},
-		"empty host":      {Endpoint: "https://", Keys: keys},
-		"unknown host":    {Endpoint: "https://evil.example/x", Keys: keys},
-		"truncated point": {Endpoint: valid.Endpoint, Keys: Keys{P256DH: "AAAAAA", Auth: keys.Auth}},
-		"short auth":      {Endpoint: valid.Endpoint, Keys: Keys{P256DH: keys.P256DH, Auth: "AAAAAA"}},
-		"missing auth":    {Endpoint: valid.Endpoint, Keys: Keys{P256DH: keys.P256DH}},
-		"missing point":   {Endpoint: valid.Endpoint, Keys: Keys{Auth: keys.Auth}},
+		"plain http":           {Endpoint: "http://fcm.googleapis.com/x", Keys: keys},
+		"empty host":           {Endpoint: "https://", Keys: keys},
+		"unknown host":         {Endpoint: "https://evil.example/x", Keys: keys},
+		"google host, not fcm": {Endpoint: "https://www.google.com/search?q=x", Keys: keys},
+		"truncated point":      {Endpoint: valid.Endpoint, Keys: Keys{P256DH: "AAAAAA", Auth: keys.Auth}},
+		"short auth":           {Endpoint: valid.Endpoint, Keys: Keys{P256DH: keys.P256DH, Auth: "AAAAAA"}},
+		"missing auth":         {Endpoint: valid.Endpoint, Keys: Keys{P256DH: keys.P256DH}},
+		"missing point":        {Endpoint: valid.Endpoint, Keys: Keys{Auth: keys.Auth}},
 	} {
 		if err := ValidateSubscription(sub); err == nil {
 			t.Errorf("%s: want an error", name)

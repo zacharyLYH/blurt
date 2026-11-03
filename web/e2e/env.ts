@@ -6,6 +6,12 @@ export const COMPOSE_PROJECT = 'blurt-e2e'
 export const WEB_PORT = 9977
 export const BASE_URL = `http://localhost:${WEB_PORT}`
 
+// The clock spec restarts its server to move the emitter's clock, so it runs a
+// stack of its own on its own port, beside the suite rather than ahead of it.
+export const CLOCK_PROJECT = 'blurt-e2e-clock'
+export const CLOCK_PORT = 9978
+export const CLOCK_URL = `http://localhost:${CLOCK_PORT}`
+
 // CI runners (shared GitHub hosts) are slower than a dev Mac, so every timeout
 // budget is scaled there and stays tight locally, where failures should
 // surface fast. Wrap test, webServer, and explicit wait budgets with it.

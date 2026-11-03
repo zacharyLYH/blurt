@@ -19,7 +19,7 @@ func TestSaveQuestionnaireRollsBackOnFailure(t *testing.T) {
 	ctx := context.Background()
 
 	users := NewUserStore(handle.Write, handle.Read)
-	user, err := users.EnsureUser(ctx, "Lam", "lam@example.com")
+	user, err := users.EnsureActive(ctx, "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}

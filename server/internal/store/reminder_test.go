@@ -65,7 +65,7 @@ func TestSearchCarriesARecurringRemindersRule(t *testing.T) {
 func TestReminderSearchReadsByTextInsideTheOwner(t *testing.T) {
 	_, handle, userID := newJobStack(t)
 	ctx := context.Background()
-	sam, err := NewUserStore(handle.Write, handle.Read).EnsureUser(ctx, "Sam", "sam@example.com")
+	sam, err := NewUserStore(handle.Write, handle.Read).EnsureActive(ctx, "Sam", "sam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}
@@ -543,7 +543,7 @@ func TestCancelCallsOffWithoutDeleting(t *testing.T) {
 	if again, err := reminders.Cancel(ctx, userID, id); err != nil || again {
 		t.Fatalf("second cancel = %v (%v), want a no-op", again, err)
 	}
-	other, err := NewUserStore(handle.Write, handle.Read).EnsureUser(ctx, "Other", "other@example.com")
+	other, err := NewUserStore(handle.Write, handle.Read).EnsureActive(ctx, "Other", "other@example.com")
 	if err != nil {
 		t.Fatalf("ensure other: %v", err)
 	}

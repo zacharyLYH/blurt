@@ -11,7 +11,7 @@ test('questionnaire gates home, saves answers, and remembers completion', async 
 
   // Unfinished setup cannot reach home.
   await expect(page).toHaveURL(/\/questionnaire$/)
-  await expect(page.getByText('What time zone are you usually in?')).toBeVisible()
+  await expect(page.getByText('When do you usually wake up and go to sleep?')).toBeVisible()
   await page.goto('/home')
   // A full page load is a new entry, so the gate runs again.
   await passPermissions(page)
@@ -21,7 +21,7 @@ test('questionnaire gates home, saves answers, and remembers completion', async 
   await expect(page.getByTestId('calendar-month')).toBeVisible()
 
   const me = await (await page.request.get('/api/user')).json()
-  expect(me.user.lastQuestionnaireVersion).toBe(1)
+  expect(me.user.lastQuestionnaireVersion).toBe(2)
 
   // Completion is server state: a reload keeps the gate open.
   await page.reload()
@@ -38,7 +38,30 @@ test('questionnaire gates home, saves answers, and remembers completion', async 
   await expect(page).toHaveURL(/\/home$/)
 
   const again = await (await page.request.get('/api/user')).json()
-  expect(again.user.lastQuestionnaireVersion).toBe(1)
+  expect(again.user.lastQuestionnaireVersion).toBe(2)
+})
+
+// A direct link is not a way around setup: the version gate wraps every inside
+// route, so even a Job link asks an unfinished user to finish first. (/traces is
+// not the example any more: it is the owner's tooling, not a user's route.)
+test('questionnaire freshness gates direct routes, not just home', async ({ page }) => {
+  await signIn(page, { name: 'Q3', email: uniqueEmail('direct') })
+  await passPermissions(page)
+  await expect(page).toHaveURL(/\/questionnaire$/)
+
+  await page.goto('/jobs/1')
+  await passPermissions(page)
+  await expect(page).toHaveURL(/\/questionnaire$/)
+
+  await completeQuestionnaire(page)
+  await page.goto('/jobs/1')
+  await passPermissions(page)
+  await expect(page).toHaveURL(/\/jobs\/1$/)
+
+  // A current questionnaire sends the setup route back to Home.
+  await page.goto('/questionnaire')
+  await passPermissions(page)
+  await expect(page).toHaveURL(/\/home$/)
 })
 
 // A missing cookie is not the same as an expired row (the Go tests cover real

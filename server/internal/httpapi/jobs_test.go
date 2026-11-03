@@ -54,8 +54,8 @@ func upload(t *testing.T, client *http.Client, url, contentType, duration string
 }
 
 func TestAudioJobStoresClipAndReturnsJob(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	status, body := upload(t, client, base+"/api/jobs", "audio/wav", "800", wavBytes(16000, 1))
 	if status != http.StatusCreated {
@@ -87,8 +87,8 @@ func TestAudioJobStoresClipAndReturnsJob(t *testing.T) {
 // The recorder is the only writer: a non-mono 16 kHz WAV, a stale Opus client,
 // or a duration outside the spend guard is a client bug and is refused here.
 func TestAudioJobRejectsBadInput(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	cases := []struct {
 		name        string
@@ -119,8 +119,8 @@ func TestAudioJobRejectsBadInput(t *testing.T) {
 }
 
 func TestTextJobSkipsTranscription(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	status, body := call(t, client, http.MethodPost, base+"/api/jobs",
 		map[string]string{"text": "  Remind me to buy glue.  "})
@@ -138,14 +138,14 @@ func TestTextJobSkipsTranscription(t *testing.T) {
 }
 
 func TestJobIsScopedToItsOwner(t *testing.T) {
-	first, base, mailer, _ := newClient(t)
-	login(t, first, base, "lam@example.com", mailer)
+	first, base, _ := newClient(t)
+	login(t, first, base, "lam@example.com")
 	status, body := call(t, first, http.MethodPost, base+"/api/jobs", map[string]string{"text": "Mine."})
 	if status != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", status, body)
 	}
 	job := decodeJob(t, body)
-	other := newUserClient(t, base, "other@example.com", mailer)
+	other := newUserClient(t, base, "other@example.com")
 	status, body = call(t, other, http.MethodGet,
 		base+"/api/jobs/"+strconv.FormatInt(job.JobID, 10), nil)
 	if status != http.StatusNotFound {
@@ -156,8 +156,8 @@ func TestJobIsScopedToItsOwner(t *testing.T) {
 // The sidebar lists what is still open, newest first, so a capture stays
 // reachable after the user moves on.
 func TestListOpenJobsNewestFirst(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	for _, text := range []string{"Buy glue.", "Book the flight."} {
 		if status, body := call(t, client, http.MethodPost, base+"/api/jobs",
@@ -192,8 +192,8 @@ func TestListOpenJobsNewestFirst(t *testing.T) {
 // An untranscribed clip has no words yet, so its row carries an empty preview
 // and the client falls back to its own copy.
 func TestListOpenJobsHasNoPreviewBeforeTranscription(t *testing.T) {
-	client, base, mailer, _ := newClient(t)
-	login(t, client, base, "lam@example.com", mailer)
+	client, base, _ := newClient(t)
+	login(t, client, base, "lam@example.com")
 
 	if status, body := upload(t, client, base+"/api/jobs", "audio/wav", "800", wavBytes(16000, 1)); status != http.StatusCreated {
 		t.Fatalf("upload status = %d: %s", status, body)
@@ -217,14 +217,14 @@ func TestListOpenJobsHasNoPreviewBeforeTranscription(t *testing.T) {
 // An empty sidebar is [] rather than null, so the client can map over it, and
 // one user never sees another's Jobs.
 func TestListOpenJobsIsEmptyAndScoped(t *testing.T) {
-	first, base, mailer, _ := newClient(t)
-	login(t, first, base, "lam@example.com", mailer)
+	first, base, _ := newClient(t)
+	login(t, first, base, "lam@example.com")
 	if status, body := call(t, first, http.MethodPost, base+"/api/jobs",
 		map[string]string{"text": "Mine."}); status != http.StatusCreated {
 		t.Fatalf("create status = %d: %s", status, body)
 	}
 
-	other := newUserClient(t, base, "other@example.com", mailer)
+	other := newUserClient(t, base, "other@example.com")
 	status, body := call(t, other, http.MethodGet, base+"/api/jobs", nil)
 	if status != http.StatusOK {
 		t.Fatalf("list status = %d: %s", status, body)

@@ -11,10 +11,18 @@ Prereqs: Docker (compose v2), Go 1.26+ (`env-init`), Node 24+ (frontend only). R
 make env-init          # .env.example -> .env, plus generated session secret and VAPID pair
 # fill BLURT_SMTP_PASSWORD, BLURT_STT_{URL,API_KEY}, BLURT_AGENT_{MODEL,API_KEY},
 # BLURT_{PRESCREEN,TAGS}_MODEL
-make start-reset-full  # or: start-no-reset | stop | logs
+make start-reset-full  # or: start-no-reset | start-reset-full-with-seed | stop | logs
 ```
 
 App: <http://localhost:9996>. nginx proxies `/api` and `/health`; the Go server has no host port.
+
+The app is invite-only. `/` is the landing page, `/login` asks whether you already have an account, and a stranger applies there with a name and an email. The application lands as `pending` and cannot sign in; the owner — the one address `BLURT_SMTP_USERNAME` names, created active at boot — approves or rejects it in the portal at `/admin`. Approving mails the applicant a link back to `/login`; rejecting deletes the row.
+
+`make start-reset-full-with-seed` seeds the owner's default questionnaire and then follows the logs. The owner row itself comes from `BLURT_SMTP_USERNAME`, so there is no email to type.
+
+Upgrading is `git pull` then `docker compose up -d --build` (or `make start-no-reset`): `up` rebuilds the images and never touches the `blurt-data` volume. The schema is applied on boot and there is no migration step — while the app has no accounts, a schema change lands by wiping the volume with `make start-reset-full`. Only those reset targets run `down -v`.
+
+> Reset Microphone and Notification settings here: `chrome://settings/content`
 
 ## Configure
 
@@ -25,10 +33,10 @@ Boot panics on any gap. Every `BLURT_FAKE_*` switch is local/e2e only: never set
 | `BLURT_STT_URL` `_API_KEY` `_MODEL` | phonon transcription route. Not OpenAI-shaped: base64 WAV data URI in, `{"output":{"text":"…"}}` out. `_MODEL` must be `phonon`; a wrong key gets a 401 that Blurt treats as permanent. |
 | `BLURT_PRESCREEN_MODEL` `BLURT_TAGS_MODEL` | the two cheap stages: prescreen and memory tagger. Same gateway as STT, so URL and key default to `BLURT_STT_*`; `BLURT_AUX_URL` / `BLURT_AUX_API_KEY` override. |
 | `BLURT_AGENT_MODEL` `BLURT_AGENT_API_KEY` | the one core planner every user plans on. `BLURT_AGENT_URL` overrides the OpenRouter default. Required unless the fake is on. |
-| `BLURT_SMTP_*` | login-PIN mail. Gmail App Password (2FA required); nothing else to configure. |
+| `BLURT_SMTP_*` | login-PIN mail. Gmail App Password (2FA required); nothing else to configure. `_USERNAME` is also the app's owner: that one account approves everyone else. |
 | `BLURT_PUBLIC_ORIGINS` | comma-separated CSRF allowlist. Empty = localhost:9996 + :5173 (dev only). Set it and localhost is no longer trusted unless listed. |
 | `BLURT_REDIS_URL` | queue transport. Default `redis://redis:6379/0`. |
-| `BLURT_FAKE_PIN` | fixed PIN `123456`, no mail. |
+| `BLURT_FAKE_PIN` | fixed PIN `123456`, no mail. Signing in still needs an approved account. |
 | `BLURT_FAKE_STT` | deterministic transcriber, no gateway. |
 | `BLURT_FAKE_AGENT` | scripted model, no provider (how e2e runs). |
 | `BLURT_FAKE_CLOCK` | emitter clock offset, e.g. `90s` (e2e clock spec). |
@@ -92,4 +100,13 @@ Output: a per-case scorecard on stdout (pass rate, calls, faults, latency — sh
 
 ## Deploy
 
+```sh
+git pull
+docker compose up -d --build
+```
+
+That is the whole production start — no other command is needed. nginx serves the built PWA and proxies `/api` and `/health` to the Go server, and both containers are `restart: unless-stopped`, so a reboot brings the stack back on its own. `--build` is what picks up the new commit; without it compose reuses the images it already has. Add `--wait` when a script should block until the stack is healthy and fail loudly when it is not.
+
 Point the host at nginx `127.0.0.1:9996` (`BLURT_WEB_PORT` overrides). Cloudflare Tunnel or any reverse proxy works.
+
+The `make` targets are dev-laptop wrappers: `make start-no-reset` is the same command plus log tailing, and the `start-reset-*` targets drop the SQLite volume — never run them on a host that has accounts.

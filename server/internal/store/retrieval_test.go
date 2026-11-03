@@ -20,7 +20,7 @@ func TestMemorySearchFindsQuestionnaireMemory(t *testing.T) {
 	ctx := context.Background()
 
 	users := NewUserStore(handle.Write, handle.Read)
-	user, err := users.EnsureUser(ctx, "Lam", "lam@example.com")
+	user, err := users.EnsureActive(ctx, "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}
@@ -54,7 +54,7 @@ func TestMemorySearchSurvivesFTS5Syntax(t *testing.T) {
 	ctx := context.Background()
 
 	users := NewUserStore(handle.Write, handle.Read)
-	user, err := users.EnsureUser(ctx, "Lam", "lam@example.com")
+	user, err := users.EnsureActive(ctx, "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}
@@ -85,11 +85,11 @@ func TestMemorySearchIsScopedToOwner(t *testing.T) {
 	ctx := context.Background()
 
 	users := NewUserStore(handle.Write, handle.Read)
-	owner, err := users.EnsureUser(ctx, "Lam", "lam@example.com")
+	owner, err := users.EnsureActive(ctx, "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure owner: %v", err)
 	}
-	other, err := users.EnsureUser(ctx, "Sam", "sam@example.com")
+	other, err := users.EnsureActive(ctx, "Sam", "sam@example.com")
 	if err != nil {
 		t.Fatalf("ensure other: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestMemorySearchPrefersTagMatches(t *testing.T) {
 	ctx := context.Background()
 
 	users := NewUserStore(handle.Write, handle.Read)
-	user, err := users.EnsureUser(ctx, "Lam", "lam@example.com")
+	user, err := users.EnsureActive(ctx, "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestMemorySearchStemsInflections(t *testing.T) {
 	ctx := context.Background()
 
 	users := NewUserStore(handle.Write, handle.Read)
-	user, err := users.EnsureUser(ctx, "Lam", "lam@example.com")
+	user, err := users.EnsureActive(ctx, "Lam", "lam@example.com")
 	if err != nil {
 		t.Fatalf("ensure user: %v", err)
 	}

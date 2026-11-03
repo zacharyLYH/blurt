@@ -201,7 +201,7 @@ func ValidateSubscription(sub Subscription) error {
 	if endpoint.Scheme != "https" && !(local && endpoint.Scheme == "http") {
 		return errors.New("Push endpoint must be an https URL.")
 	}
-	if !local && !knownRelay(host) {
+	if !local && !knownRelay(endpoint) {
 		return errors.New("Push endpoint is not a known push service.")
 	}
 	// Browsers mint both keys as unpadded base64url. ecdh is what proves the
@@ -228,13 +228,20 @@ func isLocalHost(host string) bool {
 }
 
 // knownRelay is the allowlist of services browsers actually subscribe with.
-func knownRelay(host string) bool {
+// FCM's region hosts (jmt17.google.com) are what an unbranded Chromium build
+// registers against instead of fcm.googleapis.com, so a google.com host counts
+// only under the /fcm/send path that names the service.
+func knownRelay(endpoint *url.URL) bool {
+	host := strings.ToLower(endpoint.Hostname())
 	for _, suffix := range []string{
 		"googleapis.com", "push.apple.com", "mozilla.com", "mozaws.net", "notify.windows.com",
 	} {
 		if host == suffix || strings.HasSuffix(host, "."+suffix) {
 			return true
 		}
+	}
+	if host == "google.com" || strings.HasSuffix(host, ".google.com") {
+		return strings.HasPrefix(endpoint.Path, "/fcm/send/")
 	}
 	return false
 }

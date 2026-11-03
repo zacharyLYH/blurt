@@ -1,12 +1,16 @@
 import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import Admin from './pages/Admin'
 import Calendar from './pages/Calendar'
 import Job from './pages/Job'
 import JobReply from './pages/JobReply'
+import Landing from './pages/Landing'
 import Login from './pages/Login'
 import NotificationDetail from './pages/NotificationDetail'
 import Permissions from './pages/Permissions'
 import Questionnaire from './pages/Questionnaire'
+import questionnaire from './data/questionnaire/v1.json'
 import Traces from './pages/Traces'
+import { Toaster } from './components/ui/toast'
 import { permissionsChecked } from './lib/permissions'
 import { UserProvider, useUser } from './lib/user'
 
@@ -34,6 +38,34 @@ function Gated({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+// Fresh checks the questionnaire version on every inside route, not just Home.
+// Direct links and notification taps therefore cannot skip setup.
+function Fresh({ children }: { children: React.ReactNode }) {
+  const { user } = useUser()
+  if (user && user.lastQuestionnaireVersion < questionnaire.version) {
+    return <Navigate to="/questionnaire" replace />
+  }
+  return <>{children}</>
+}
+
+// Already current: setup is done, so the form forwards to Home instead of
+// asking the same questions again. Corrections happen through a blurt.
+function QuestionnaireEntry() {
+  const { user } = useUser()
+  if (user && user.lastQuestionnaireVersion >= questionnaire.version) {
+    return <Navigate to="/home" replace />
+  }
+  return <Questionnaire />
+}
+
+// OwnerOnly is the portal's gate. The server is the real check — it answers 403
+// to anyone else — so this only keeps a non-owner off a page that would fail.
+function OwnerOnly({ children }: { children: React.ReactNode }) {
+  const { user } = useUser()
+  if (!user?.owner) return <Navigate to="/home" replace />
+  return <>{children}</>
+}
+
 // CalendarAlias keeps the month someone already has in a link or a bookmark:
 // the calendar is Home now, so the old path forwards with its query intact.
 function CalendarAlias() {
@@ -46,7 +78,20 @@ export default function App() {
     <UserProvider>
       <BrowserRouter>
         <Routes>
+          {/* The one public page. It never redirects a signed-in visitor: a
+              marketing link should stay a marketing link. */}
+          <Route path="/" element={<Landing />} />
           <Route path="/login" element={<Login />} />
+          <Route
+            path="/admin"
+            element={
+              <Protected>
+                <OwnerOnly>
+                  <Admin />
+                </OwnerOnly>
+              </Protected>
+            }
+          />
           <Route
             path="/permissions"
             element={
@@ -60,7 +105,7 @@ export default function App() {
             element={
               <Protected>
                 <Gated>
-                  <Questionnaire />
+                  <QuestionnaireEntry />
                 </Gated>
               </Protected>
             }
@@ -70,23 +115,69 @@ export default function App() {
             element={
               <Protected>
                 <Gated>
-                  <Calendar />
+                  <Fresh>
+                    <Calendar />
+                  </Fresh>
                 </Gated>
               </Protected>
             }
           />
-          <Route path="/jobs/:jobId" element={<Protected><Gated><Job /></Gated></Protected>} />
+          <Route
+            path="/jobs/:jobId"
+            element={
+              <Protected>
+                <Gated>
+                  <Fresh>
+                    <Job />
+                  </Fresh>
+                </Gated>
+              </Protected>
+            }
+          />
           {/* The boom for one Job's spoken reply. A route of its own, so the
               browser's back gesture is the way out of it. */}
-          <Route path="/jobs/:jobId/reply" element={<Protected><Gated><JobReply /></Gated></Protected>} />
+          <Route
+            path="/jobs/:jobId/reply"
+            element={
+              <Protected>
+                <Gated>
+                  <Fresh>
+                    <JobReply />
+                  </Fresh>
+                </Gated>
+              </Protected>
+            }
+          />
           {/* The calendar is Home now; the old path still works, month and all. */}
           <Route path="/calendar" element={<CalendarAlias />} />
           {/* The page a push opens: the Reminder itself, with feedback per submission. */}
-          <Route path="/notifications/:reminderId" element={<Protected><Gated><NotificationDetail /></Gated></Protected>} />
-          {/* The debug page: one reminder's stage history, indented by job. */}
-          <Route path="/traces" element={<Protected><Gated><Traces /></Gated></Protected>} />
-          <Route path="*" element={<Navigate to="/home" replace />} />
+          <Route
+            path="/notifications/:reminderId"
+            element={
+              <Protected>
+                <Gated>
+                  <Fresh>
+                    <NotificationDetail />
+                  </Fresh>
+                </Gated>
+              </Protected>
+            }
+          />
+          {/* The debug page: one reminder's stage history, indented by job. It is
+              part of the owner's tooling, alongside the access portal. */}
+          <Route
+            path="/traces"
+            element={
+              <Protected>
+                <OwnerOnly>
+                  <Traces />
+                </OwnerOnly>
+              </Protected>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        <Toaster />
       </BrowserRouter>
     </UserProvider>
   )

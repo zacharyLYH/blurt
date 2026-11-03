@@ -2,9 +2,10 @@
 // session, the Job, the Reminder and the push are all real; only the model and the relay
 // are ours (see helpers.ts and relay.ts).
 import { expect, type APIRequestContext } from '@playwright/test'
-import { BASE_URL } from './env'
-import { DEV_PIN } from './helpers'
+import { BASE_URL, ciTimeout } from './env'
+import { DEV_PIN, createAccount } from './helpers'
 import { subscription, type DeviceKeys } from './push-crypto'
+import type { Captured } from './relay'
 
 // Unsafe requests need an allowed origin: the stack guards against CSRF.
 const CREDENTIALS = { Origin: BASE_URL }
@@ -14,12 +15,14 @@ const CREDENTIALS = { Origin: BASE_URL }
 const TIMEZONE = 'Asia/Singapore'
 
 // signInRequest runs the real login endpoints; the request context keeps the session
-// cookie, so everything after this is the caller's own.
+// cookie, so everything after this is the caller's own. The account has to exist
+// first: signing in never creates one, so it goes through apply and approval.
 export async function signInRequest(request: APIRequestContext, email: string, name = 'Blurt'): Promise<void> {
+  await createAccount(name, email)
   const sent = await request.post('/api/auth/request-pin', { data: { email }, headers: CREDENTIALS })
   expect(sent.ok()).toBeTruthy()
   const verified = await request.post('/api/auth/verify-pin', {
-    data: { email, name, pin: DEV_PIN },
+    data: { email, pin: DEV_PIN },
     headers: CREDENTIALS,
   })
   expect(verified.ok()).toBeTruthy()
@@ -28,6 +31,19 @@ export async function signInRequest(request: APIRequestContext, email: string, n
 // subscribeRequest registers one device, so the emitter has somewhere to send.
 export function subscribeRequest(request: APIRequestContext, endpoint: string, keys: DeviceKeys) {
   return request.post('/api/push/subscribe', { data: subscription(keys, endpoint), headers: CREDENTIALS })
+}
+
+// subscribeDevice subscribes and waits out the confirmation push a new device
+// earns, so the caller's relay is left watching for its own message as the next
+// thing that arrives.
+export async function subscribeDevice(
+  request: APIRequestContext,
+  endpoint: string,
+  keys: DeviceKeys,
+  captured: Captured[],
+): Promise<void> {
+  expect((await subscribeRequest(request, endpoint, keys)).status()).toBe(204)
+  await expect.poll(() => captured.length, { timeout: ciTimeout(15_000) }).toBe(1)
 }
 
 // createReminder captures a text blurt. It returns once the Job is durable; the agent turns

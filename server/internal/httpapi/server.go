@@ -21,11 +21,14 @@ import (
 	"blurt/internal/store"
 )
 
-// PINMailer delivers login PINs. An interface so tests can read the code
-// without an SMTP server. Nil is valid: dev mode (BLURT_FAKE_PIN) issues a
-// fixed PIN and deliberately sends nothing.
-type PINMailer interface {
+// Mailer delivers the two emails Blurt sends: login PINs, and the verdict on an
+// application. An interface so tests can read the message without an SMTP
+// server. Nil is valid: dev mode (BLURT_FAKE_PIN) issues a fixed PIN, mails
+// nothing, and the owner approves by hand in the portal.
+type Mailer interface {
 	SendPIN(to, pin string) error
+	SendApproved(to, name string) error
+	SendRejected(to, name string) error
 }
 
 // Deps is everything the handlers need.
@@ -34,7 +37,12 @@ type Deps struct {
 	Users    *store.UserStore
 	Sessions *store.SessionStore
 	Pins     *auth.PinStore
-	Mailer   PINMailer
+	// Mailer delivers login PINs and application verdicts. Nil is dev mode
+	// (BLURT_FAKE_PIN): the PIN is fixed and nothing is mailed.
+	Mailer Mailer
+	// Owner is the address BLURT_SMTP_USERNAME names. That one account approves
+	// everyone else, and there is no role column to drift from it.
+	Owner string
 	// Pusher sends notifications to the user's devices. Nil is valid: the send
 	// endpoint then reports that sending is not configured.
 	Pusher push.Notifier
@@ -71,8 +79,18 @@ func New(deps Deps) http.Handler {
 	mux.HandleFunc("GET /health", s.health)
 	mux.HandleFunc("POST /api/auth/request-pin", s.requestPin)
 	mux.HandleFunc("POST /api/auth/verify-pin", s.verifyPin)
+	// Applying is public: it is the only way in for someone with no account,
+	// and the owner answers it in the portal.
+	mux.HandleFunc("POST /api/auth/apply", s.apply)
 	mux.HandleFunc("POST /api/auth/logout", s.logout)
 	mux.HandleFunc("GET /api/user", s.requireUser(s.getUser))
+	// Account management is the owner's alone: they are the gate everyone else
+	// waits behind.
+	mux.HandleFunc("GET /api/admin/users", s.requireOwner(s.listApplicants))
+	mux.HandleFunc("POST /api/admin/users/{userId}/approve", s.requireOwner(s.approveApplicant))
+	mux.HandleFunc("POST /api/admin/users/{userId}/reject", s.requireOwner(s.rejectApplicant))
+	mux.HandleFunc("/api/admin/users/{userId}/approve", methodNotAllowed(http.MethodPost))
+	mux.HandleFunc("/api/admin/users/{userId}/reject", methodNotAllowed(http.MethodPost))
 	mux.HandleFunc("POST /api/questionnaire", s.requireUser(s.submitQuestionnaire))
 	mux.HandleFunc("GET /api/push/key", s.pushKey)
 	mux.HandleFunc("POST /api/push/subscribe", s.requireUser(s.subscribePush))
@@ -114,9 +132,11 @@ func New(deps Deps) http.Handler {
 var knownRoutes = map[string]string{
 	"/api/auth/request-pin": http.MethodPost,
 	"/api/auth/verify-pin":  http.MethodPost,
+	"/api/auth/apply":       http.MethodPost,
 	"/api/auth/logout":      http.MethodPost,
 	"/api/user":             http.MethodGet,
 	"/api/questionnaire":    http.MethodPost,
+	"/api/admin/users":      http.MethodGet,
 	"/api/push/key":         http.MethodGet,
 	"/api/push/subscribe":   http.MethodPost,
 	"/api/push":             http.MethodPost,

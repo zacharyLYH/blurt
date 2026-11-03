@@ -1,8 +1,8 @@
 import { expect, test, type BrowserContext, type Page } from '@playwright/test'
 import { BASE_URL, ciTimeout, visualProofs } from './env'
 import { deliverPush, clickNotification } from './fake-relay'
-import { passPermissions, signIn, uniqueEmail } from './helpers'
-import { createReminder, subscribeRequest, waitForReminder } from './api'
+import { completeQuestionnaire, passPermissions, signIn, uniqueEmail } from './helpers'
+import { createReminder, subscribeDevice, waitForReminder } from './api'
 import { decryptPush, deviceKeys } from './push-crypto'
 import { withRelay } from './relay'
 
@@ -21,16 +21,19 @@ async function pushOpenNotification(page: Page, context: BrowserContext): Promis
     // the one the emitter uses. page.request bypasses page routes, so it still lands.
     await page.route('**/api/push/subscribe', (route) => route.abort())
     await signIn(page, { name: 'Feedback', email: uniqueEmail('feedback-push') })
-    await passPermissions(page)
+    // Setup comes before any inside route, a notification deep link included.
+    await completeQuestionnaire(page)
     await expect
       .poll(() => page.evaluate(() => navigator.serviceWorker.getRegistration().then((reg) => reg?.active?.state ?? null)))
       .toBe('activated')
 
-    expect((await subscribeRequest(page.request, endpoint, keys)).status()).toBe(204)
+    // The subscription itself is answered once, so the relay already holds that
+    // confirmation when the reminder below comes due.
+    await subscribeDevice(page.request, endpoint, keys, captured)
     expect((await createReminder(page.request, 'buy glue soon')).status()).toBe(201)
 
-    await expect.poll(() => captured.length, { timeout: ciTimeout(45_000) }).toBe(1)
-    const payload = JSON.parse(decryptPush(captured[0].body, keys)) as {
+    await expect.poll(() => captured.length, { timeout: ciTimeout(45_000) }).toBe(2)
+    const payload = JSON.parse(decryptPush(captured[1].body, keys)) as {
       notification: { title: string; body: string; navigate: string }
       reminderId: number
     }
@@ -57,7 +60,7 @@ async function pushOpenNotification(page: Page, context: BrowserContext): Promis
 // "Scheduled" line static. The push pipeline itself is covered above.
 async function openNotification(page: Page, capture: string, text: string): Promise<number> {
   await signIn(page, { name: 'Feedback', email: uniqueEmail('feedback') })
-  await passPermissions(page)
+  await completeQuestionnaire(page)
   expect((await createReminder(page.request, capture)).status()).toBe(201)
   const reminder = await waitForReminder(page.request, text, 'upcoming', ciTimeout(45_000))
   await page.goto(`/notifications/${reminder.reminderId}`)
@@ -100,7 +103,7 @@ test('feedback submitted from the real push path is stored, and a revisit offers
 
 test('a missing or foreign notification has no form', async ({ page }) => {
   await signIn(page, { name: 'Gone', email: uniqueEmail('gone') })
-  await passPermissions(page)
+  await completeQuestionnaire(page)
   await page.goto('/notifications/9999999')
   await passPermissions(page)
 

@@ -66,3 +66,34 @@ test('opens the boom with a tap', async ({ page }) => {
   await page.getByTestId('cancel-audio').click()
   await expect(page.getByTestId('job-thread')).toBeVisible()
 })
+
+// A live stream is a live microphone: the browser says so in the tab, and a
+// phone says so at the top of the screen. Dismissing the capture screen has to
+// release it — a stream held open behind the calendar is a bug the user sees.
+test('releases the microphone when the capture screen closes', async ({ page }) => {
+  await page.addInitScript(() => {
+    const held: MediaStream[] = []
+    const open = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices)
+    navigator.mediaDevices.getUserMedia = async (constraints?: MediaStreamConstraints) => {
+      const stream = await open(constraints)
+      held.push(stream)
+      ;(window as unknown as { __micStreams: MediaStream[] }).__micStreams = held
+      return stream
+    }
+  })
+  await signIn(page, { name: 'Lam', email: uniqueEmail('voice-release') })
+  await completeQuestionnaire(page)
+  // The boom opens on entry and records, so the mic is live before the cancel.
+  await expect(page.getByTestId('voice-screen')).toBeVisible()
+
+  await page.getByTestId('cancel-audio').click()
+  await expect(page.getByTestId('voice-screen')).toBeHidden()
+
+  const live = await page.evaluate(() => {
+    const held = (window as unknown as { __micStreams?: MediaStream[] }).__micStreams ?? []
+    return held
+      .flatMap((stream) => stream.getTracks())
+      .filter((track) => track.readyState === 'live').length
+  })
+  expect(live).toBe(0)
+})

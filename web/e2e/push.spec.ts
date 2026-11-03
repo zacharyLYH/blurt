@@ -3,7 +3,7 @@ import { createECDH, randomBytes } from 'node:crypto'
 import { expect, test, type APIRequestContext } from '@playwright/test'
 
 import { BASE_URL, ciTimeout } from './env'
-import { DEV_PIN, uniqueEmail } from './helpers'
+import { DEV_PIN, createAccount, uniqueEmail } from './helpers'
 import { withRelay } from './relay'
 
 // Real backend, real store, real sender. Only the relay is ours: the Go container POSTs to
@@ -25,21 +25,23 @@ function clientKeys() {
 }
 
 // signIn runs the real login endpoints; the request context keeps the session
-// cookie, so the push endpoints can be driven without a browser.
+// cookie, so the push endpoints can be driven without a browser. The account is
+// created and approved first: signing in never creates one.
 async function signIn(request: APIRequestContext, email: string) {
+  await createAccount('Push', email)
   const headers = { Origin: BASE_URL }
   const sent = await request.post('/api/auth/request-pin', { data: { email }, headers })
   expect(sent.ok()).toBeTruthy()
   const verified = await request.post('/api/auth/verify-pin', {
-    data: { email, name: 'Push', pin: DEV_PIN },
+    data: { email, pin: DEV_PIN },
     headers,
   })
   expect(verified.ok()).toBeTruthy()
 }
 
-async function subscribe(request: APIRequestContext, endpoint: string) {
+async function subscribe(request: APIRequestContext, endpoint: string, keys = clientKeys()) {
   return request.post('/api/push/subscribe', {
-    data: { endpoint, keys: clientKeys() },
+    data: { endpoint, keys },
     headers: { Origin: BASE_URL },
   })
 }
@@ -53,8 +55,9 @@ test('the real sender encrypts and signs a push for a subscribed device', async 
   await withRelay(201, async (endpoint, captured) => {
     await signIn(request, uniqueEmail('push'))
     expect((await subscribe(request, endpoint)).status()).toBe(204)
-    // Subscribing stores an endpoint; it must not send anything by itself.
-    expect(captured).toHaveLength(0)
+    // Subscribing answers the device with one confirmation of its own; the
+    // reminder below is the second thing the relay ever sees.
+    await expect.poll(() => captured.length, { timeout: ciTimeout(20_000) }).toBe(1)
 
     const sent = await send(request, {
       title: 'Buy glue',
@@ -65,8 +68,8 @@ test('the real sender encrypts and signs a push for a subscribed device', async 
     expect(sent.status()).toBe(200)
     expect(await sent.json()).toEqual({ sent: 1, failed: 0, pruned: 0 })
 
-    await expect.poll(() => captured.length, { timeout: ciTimeout(20_000) }).toBe(1)
-    const push = captured[0]
+    await expect.poll(() => captured.length, { timeout: ciTimeout(20_000) }).toBe(2)
+    const push = captured[1]
     // The relay only ever sees ciphertext: a VAPID credential, an aes128gcm
     // record, and a body far larger than the plaintext.
     expect(String(push.headers.authorization)).toMatch(/^vapid /)
@@ -75,18 +78,48 @@ test('the real sender encrypts and signs a push for a subscribed device', async 
   })
 })
 
+// Turning notifications on has to prove itself: the device that just subscribed
+// is sent one notification, encrypted like any other, without the app asking.
+// The handoff repeats on every page load, so the same subscription must not
+// become a notification every page load.
+test('a new subscription is confirmed once, and only for a new device', async ({ request }) => {
+  test.setTimeout(ciTimeout(60_000))
+  await withRelay(201, async (endpoint, captured) => {
+    await signIn(request, uniqueEmail('confirm'))
+    const keys = clientKeys()
+
+    expect((await subscribe(request, endpoint, keys)).status()).toBe(204)
+    await expect.poll(() => captured.length, { timeout: ciTimeout(20_000) }).toBe(1)
+    expect(String(captured[0].headers.authorization)).toMatch(/^vapid /)
+    expect(captured[0].headers['content-encoding']).toBe('aes128gcm')
+
+    // The identical handoff again: stored, but nothing new to announce.
+    expect((await subscribe(request, endpoint, keys)).status()).toBe(204)
+    await new Promise((resolve) => setTimeout(resolve, 500))
+    expect(captured).toHaveLength(1)
+
+    // A rotated key pair is a new device as far as the user is concerned.
+    expect((await subscribe(request, endpoint)).status()).toBe(204)
+    await expect.poll(() => captured.length, { timeout: ciTimeout(20_000) }).toBe(2)
+  })
+})
+
 test('a relay that reports the endpoint gone prunes it, never the session', async ({ request }) => {
-  await withRelay(410, async (endpoint, captured) => {
+  await withRelay(201, async (endpoint, captured, answer) => {
     await signIn(request, uniqueEmail('gone'))
     expect((await subscribe(request, endpoint)).status()).toBe(204)
+    // The subscription is confirmed first, while the endpoint is still healthy.
+    await expect.poll(() => captured.length, { timeout: ciTimeout(20_000) }).toBe(1)
 
+    // Now the endpoint is gone, and the next send is the one that finds out.
+    answer(410)
     const first = await send(request, { title: 't', body: 'b' })
     expect(await first.json()).toEqual({ sent: 0, failed: 0, pruned: 1 })
 
     // The dead endpoint is forgotten, so the second send has nobody to contact.
     const second = await send(request, { title: 't', body: 'b' })
     expect(await second.json()).toEqual({ sent: 0, failed: 0, pruned: 0 })
-    expect(captured).toHaveLength(1)
+    expect(captured).toHaveLength(2)
     // Cleaning up push must not sign the user out.
     expect((await request.get('/api/user')).status()).toBe(200)
   })

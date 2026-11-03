@@ -56,9 +56,12 @@ func Open(dataDir string) (*DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := migrate(write); err != nil {
+	// The schema is the whole story: there is no migration step, because there
+	// are no accounts to carry forward. A schema change lands by wiping the
+	// volume, not by patching a table in place.
+	if _, err := write.Exec(schema); err != nil {
 		write.Close()
-		return nil, err
+		return nil, fmt.Errorf("apply schema: %w", err)
 	}
 
 	// WAL is stored in the file, so the reader inherits it from the writer.
@@ -83,29 +86,4 @@ func openFile(dsn string, maxConns int) (*sql.DB, error) {
 		return nil, fmt.Errorf("ping sqlite: %w", err)
 	}
 	return handle, nil
-}
-
-func migrate(handle *sql.DB) error {
-	if _, err := handle.Exec(schema); err != nil {
-		return fmt.Errorf("apply schema: %w", err)
-	}
-	// CREATE TABLE IF NOT EXISTS cannot add columns to a volume that already
-	// has the table, so new columns get one explicit step each.
-	return addColumnIfMissing(handle, "User", "LastQuestionnaireVersion",
-		"LastQuestionnaireVersion INTEGER NOT NULL DEFAULT 0")
-}
-
-func addColumnIfMissing(handle *sql.DB, table, column, definition string) error {
-	var present int
-	query := fmt.Sprintf("SELECT count(*) FROM pragma_table_info('%s') WHERE name = ?", table)
-	if err := handle.QueryRow(query, column).Scan(&present); err != nil {
-		return fmt.Errorf("inspect %s.%s: %w", table, column, err)
-	}
-	if present > 0 {
-		return nil
-	}
-	if _, err := handle.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s", table, definition)); err != nil {
-		return fmt.Errorf("add %s.%s: %w", table, column, err)
-	}
-	return nil
 }

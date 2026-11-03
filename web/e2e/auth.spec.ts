@@ -1,12 +1,14 @@
 import { expect, test } from '@playwright/test'
 import { BASE_URL } from './env'
-import { DEV_PIN, completeQuestionnaire, passPermissions, signIn, uniqueEmail } from './helpers'
+import { DEV_PIN, completeQuestionnaire, createAccount, passPermissions, signIn, uniqueEmail } from './helpers'
 
 // Real backend, no mail: BLURT_FAKE_PIN fixes the code, so this proves the
 // server's CSRF guard, cookie flags, and PIN rules against the real stack.
 test('request-pin mints a PIN and the session is CSRF-safe', async ({ page, request }) => {
   const email = uniqueEmail('auth')
   const origin = { Origin: BASE_URL }
+  // Only an approved account can be mailed a PIN, so the account exists first.
+  await createAccount('Auth', email)
 
   // No Origin, and a foreign Origin, are rejected before a PIN is minted.
   expect((await request.post('/api/auth/request-pin', { data: { email } })).status()).toBe(403)
@@ -21,7 +23,7 @@ test('request-pin mints a PIN and the session is CSRF-safe', async ({ page, requ
   expect((await request.post('/api/auth/verify-pin', { data: { email, pin: '000000' }, headers: origin })).status()).toBe(401)
 
   const signedIn = await request.post('/api/auth/verify-pin', {
-    data: { email, name: 'Auth', pin: DEV_PIN },
+    data: { email, pin: DEV_PIN },
     headers: origin,
   })
   expect(signedIn.status()).toBe(200)
@@ -45,9 +47,12 @@ test('request-pin mints a PIN and the session is CSRF-safe', async ({ page, requ
 
 // The UI path: a wrong code surfaces the server's message and stays on the step.
 test('a wrong PIN shows the server message and stays on the PIN step', async ({ page }) => {
+  const email = uniqueEmail('wrongpin')
+  await createAccount('Auth', email)
+
   await page.goto('/login')
-  await page.getByTestId('login-name').fill('Auth')
-  await page.getByTestId('login-email').fill(uniqueEmail('wrongpin'))
+  await page.getByTestId('login-have-account').click()
+  await page.getByTestId('login-email').fill(email)
   await page.getByTestId('login-submit').click()
 
   await expect(page.getByTestId('login-pin')).toBeVisible()

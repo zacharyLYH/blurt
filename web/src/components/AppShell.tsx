@@ -8,10 +8,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import type { JobSummary } from '@/lib/jobs'
-import type { PushSetup } from '@/lib/push'
+import type { PushStatus } from '@/lib/push'
+import { useUser } from '@/lib/user'
 import { cn } from '@/lib/utils'
 
-const pushCopy: Record<PushSetup, { label: string; dot: string }> = {
+const pushCopy: Record<PushStatus, { label: string; dot: string }> = {
+  checking: { label: 'Setting up…', dot: 'bg-primary animate-pulse' },
   ready: { label: 'Notifications on', dot: 'bg-emerald-400' },
   pending: { label: 'Notifications pending', dot: 'bg-primary' },
   denied: { label: 'Notifications blocked', dot: 'bg-destructive' },
@@ -25,11 +27,53 @@ function timezoneLabel(zone: string): string {
   return parts.find((part) => part.type === 'timeZoneName')?.value ?? zone
 }
 
+// IconButton is one glyph in the header. The strokes are drawn once here so
+// every button is the same size and the SVG boilerplate stays in one place.
+function IconButton({
+  label,
+  testId,
+  strokeWidth = 1.8,
+  onClick,
+  children,
+}: {
+  label: string
+  testId?: string
+  strokeWidth?: number
+  onClick: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      size="icon"
+      aria-label={label}
+      title={label}
+      data-testid={testId}
+      onClick={onClick}
+      className="size-8 shrink-0"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        className="size-4"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth={strokeWidth}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        {children}
+      </svg>
+    </Button>
+  )
+}
+
 interface AppShellProps {
   // inbox is every thread that wants an answer. A conversation is reachable only
   // through its row, so this list never promises to hold every chat.
   inbox: JobSummary[]
-  push: PushSetup
+  push: PushStatus
   onSignOut: () => void
   // Opening the inbox is the moment to re-ask.
   onOpenInbox: () => void
@@ -40,6 +84,8 @@ interface AppShellProps {
 // reminder list, and the way out.
 export function AppShell({ inbox, push, onSignOut, onOpenInbox, children }: AppShellProps) {
   const navigate = useNavigate()
+  const { user } = useUser()
+  const owner = user?.owner === true
   const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
   const { label: pushLabel, dot: pushDot } = pushCopy[push]
 
@@ -151,54 +197,27 @@ export function AppShell({ inbox, push, onSignOut, onOpenInbox, children }: AppS
           {timezoneLabel(zone)}
         </Badge>
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Traces"
-          title="Traces"
-          onClick={() => navigate('/traces')}
-          className="size-8 shrink-0"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            className="size-4"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
+        {owner && (
+          <IconButton label="Traces" testId="shell-traces" onClick={() => navigate('/traces')}>
             <circle cx="6" cy="6" r="2.5" />
             <circle cx="6" cy="18" r="2.5" />
             <circle cx="18" cy="12" r="2.5" />
             <path d="M8.5 6h4a3 3 0 0 1 3 3v.5M8.5 18h4a3 3 0 0 0 3-3v-.5" />
-          </svg>
-        </Button>
+          </IconButton>
+        )}
 
-        <Button
-          type="button"
-          variant="ghost"
-          size="icon"
-          aria-label="Sign out"
-          title="Sign out"
-          onClick={onSignOut}
-          className="size-8 shrink-0"
-        >
-          <svg
-            viewBox="0 0 24 24"
-            className="size-4"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            aria-hidden="true"
-          >
-            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
-          </svg>
-        </Button>
+        {/* The portal is the owner's: approving people is what they are for. */}
+        {owner && (
+          <IconButton label="Access requests" testId="shell-admin" onClick={() => navigate('/admin')}>
+            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+            <circle cx="9" cy="7" r="4" />
+            <path d="M19 8v6M22 11h-6" />
+          </IconButton>
+        )}
+
+        <IconButton label="Sign out" strokeWidth={2} onClick={onSignOut}>
+          <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9" />
+        </IconButton>
       </header>
 
       {children}

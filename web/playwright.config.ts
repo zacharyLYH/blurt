@@ -8,9 +8,22 @@ import { BASE_URL, COMPOSE_PROJECT, ciTimeout } from './e2e/env'
 // the service-worker spec delivers a payload straight into the worker.
 export default defineConfig({
   testDir: './e2e',
-  workers: 1,
+  // Specs are independent — each signs in its own user — so files run side by
+  // side instead of one at a time.
+  fullyParallel: true,
+  workers: process.env.CI ? 2 : 4,
   timeout: ciTimeout(60_000),
   outputDir: 'test-results',
+  // One owner session for the whole run: see e2e/setup.ts.
+  globalSetup: './e2e/setup.ts',
+  // Home re-asks the server on a five-second beat, so an assertion that waits for
+  // a row to appear has to outlast a beat: the default five seconds is exactly
+  // one, which turns the app's own cadence into a flaky test.
+  expect: { timeout: 15_000 },
+  // The visual baselines are one set per platform, not one per project: the file
+  // name says what the shot is. Without this the named projects below would add
+  // "-e2e" to every snapshot path and orphan the checked-in shots.
+  snapshotPathTemplate: '{testDir}/{testFilePath}-snapshots/{arg}{-snapshotSuffix}{ext}',
   globalTeardown: './e2e/teardown.ts',
   use: {
     baseURL: BASE_URL,
@@ -24,6 +37,19 @@ export default defineConfig({
       args: ['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'],
     },
   },
+  projects: [
+    // This spec restarts its own stack with a shifted clock (e2e/clock-stack.ts),
+    // so it needs no ordering against the specs on the shared one.
+    { name: 'clock', testMatch: /emitter-clock\.spec\.ts/ },
+    {
+      name: 'e2e',
+      testIgnore: /emitter-clock\.spec\.ts|visual\.spec\.ts/,
+    },
+    // The pixel proofs read state the whole run shares — the owner's access
+    // queue — so they run on their own, after every behaviour spec has finished
+    // and the applications those specs made are decided.
+    { name: 'visual', testMatch: /visual\.spec\.ts/, dependencies: ['e2e'] },
+  ],
   webServer: {
     command:
       `docker compose -f ../docker-compose.yml -f ../docker-compose.e2e.yml ` +
