@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"blurt/internal/config"
 	"blurt/internal/db"
 	"blurt/internal/push"
 	"blurt/internal/store"
@@ -361,8 +362,8 @@ func TestFiringIsRecordedWithNoDeviceSubscribed(t *testing.T) {
 		t.Fatalf("status = %q, want fired", stored.Status)
 	}
 	traces := s.traces(t, "Buy glue")
-	if len(traces) != 2 || traces[1]["outcome"] != "sent" || traces[1]["sent"] != float64(0) {
-		t.Fatalf("traces = %+v, want a delivery row reporting nothing sent", traces)
+	if len(traces) != 2 || traces[1]["outcome"] != "skipped_no_device" || traces[1]["sent"] != float64(0) {
+		t.Fatalf("traces = %+v, want a delivery row reporting no device", traces)
 	}
 }
 
@@ -412,27 +413,31 @@ func TestSweepFiresEveryDueReminderConcurrently(t *testing.T) {
 	}
 }
 
-// A signed-out user has no device worth waking. With sessions wired in, the firing is
-// still claimed and recorded, but the push is skipped and the delivery row says why.
-func TestSweepSkipsThePushWhenNoSessionIsLive(t *testing.T) {
+// A user with no subscribed device has nothing to wake. The fan-out reports an
+// empty result, and the firing is still claimed and recorded, but the delivery row
+// says why.
+func TestSweepSkipsThePushWhenNoDeviceIsSubscribed(t *testing.T) {
 	s := newStack(t)
 	s.commit(t, oneOff("Buy glue"))
 	e := &Emitter{
-		Reminders: s.reminders, Pusher: s.relay,
-		Sessions: store.NewSessionStore(s.handle.Write, s.handle.Read),
-		Now:      s.at.now,
+		Reminders: s.reminders,
+		Pusher: &push.Fanout{
+			Sessions: store.NewSessionStore(s.handle.Write, s.handle.Read),
+			Sender: push.NewSender(config.VAPID{
+				PublicKey: testVAPIDPublic, PrivateKey: testVAPIDPrivate,
+				Subject: "mailto:e2e@example.com",
+			}),
+		},
+		Now: s.at.now,
 	}
 	e.sweep(context.Background())
 
-	if sent, _ := s.relay.sent(); len(sent) != 0 {
-		t.Fatalf("sent = %+v, want no push without a live session", sent)
-	}
 	if stored := s.stored(t, "Buy glue"); stored.Status != store.ReminderFired {
 		t.Fatalf("status = %q, want the reminder to still fire", stored.Status)
 	}
 	traces := s.traces(t, "Buy glue")
-	if len(traces) != 2 || traces[1]["outcome"] != "skipped_no_session" || traces[1]["sentAt"] == "" {
-		t.Fatalf("traces = %+v, want an attempt then a no-session skip at send time", traces)
+	if len(traces) != 2 || traces[1]["outcome"] != "skipped_no_device" || traces[1]["sentAt"] == "" {
+		t.Fatalf("traces = %+v, want an attempt then a no-device skip at send time", traces)
 	}
 }
 

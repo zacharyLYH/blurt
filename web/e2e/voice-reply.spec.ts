@@ -8,14 +8,10 @@ const FAKE_TRANSCRIPT = 'Remind me to buy glue on the way home.'
 // A question the fake agent asks about: a capture with no time words of its own
 // is the branch it cannot pin.
 //
-// The microphone is live in this spec, so the app has already opened the boom and
-// started recording on entry — the text composer is deliberately out of reach while
-// it records. Cancelling is the app's own way back to typing, so the spec takes it
-// rather than racing the recorder for the send button.
+// Entry belongs to the composer: typing is how this spec opens a question.
 async function askAQuestion(page: Page, email: string) {
   await signIn(page, { name: 'Lam', email })
   await completeQuestionnaire(page)
-  await page.getByTestId('cancel-audio').click()
   await page.getByTestId('capture-text').fill('buy glue when I am home')
   await page.getByTestId('send-text').click()
   // The question is answered in its thread, and the thread is only reachable
@@ -83,7 +79,8 @@ test('releases the microphone when the capture screen closes', async ({ page }) 
   })
   await signIn(page, { name: 'Lam', email: uniqueEmail('voice-release') })
   await completeQuestionnaire(page)
-  // The boom opens on entry and records, so the mic is live before the cancel.
+  // The halo opens the boom, so the mic is live before the cancel.
+  await page.getByTestId('halo').click()
   await expect(page.getByTestId('voice-screen')).toBeVisible()
 
   await page.getByTestId('cancel-audio').click()

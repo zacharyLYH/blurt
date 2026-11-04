@@ -29,11 +29,9 @@ const (
 // wiring; the rest has a default, so a caller sets only what it wants to change.
 type Emitter struct {
 	Reminders *store.ReminderStore
-	Pusher    push.Notifier
-	// Sessions gates the push: firing is the Reminder's lifecycle, but a user with
-	// no live session has no device worth waking. Nil skips the check (tests that
-	// exercise firing alone).
-	Sessions *store.SessionStore
+	// Pusher owns device selection: an empty result means nobody is subscribed,
+	// which is recorded as a skip rather than a failed delivery.
+	Pusher push.Notifier
 	// Poll is how often due Reminders are looked for; zero means defaultPoll.
 	Poll time.Duration
 	// Now is the clock the sweep reads. Nil means time.Now.
@@ -97,39 +95,30 @@ func (e *Emitter) fire(ctx context.Context, reminder store.Reminder) {
 
 	sentAt := e.now().UTC().Format(time.RFC3339)
 
-	// A user who is signed out has no device to notify. Check the session before the
-	// fan-out rather than trusting whatever subscription row was left behind; the
-	// Reminder still fires, so its lifecycle does not depend on being signed in.
-	if e.Sessions != nil {
-		live, err := e.Sessions.HasLiveSession(ctx, reminder.UserID, e.now())
-		switch {
-		case err != nil:
-			slog.Error("emitter session check", "reminder_id", reminder.ReminderID, "err", err)
-		case !live:
-			if err := e.Reminders.RecordDelivery(ctx, reminder, map[string]any{
-				"outcome": "skipped_no_session", "sentAt": sentAt,
-				"sent": 0, "failed": 0, "pruned": 0,
-			}); err != nil {
-				slog.Error("emitter delivery trace", "reminder_id", reminder.ReminderID, "err", err)
-			}
-			slog.Info("emitter skipped push: no live session", "reminder_id", reminder.ReminderID,
-				"user_id", reminder.UserID)
-			return
-		}
-	}
-
+	// The fan-out owns device selection. A zero result means nobody is
+	// subscribed: the Reminder still fires, so its lifecycle does not depend on
+	// being signed in. A subscription outlives its login cookie; explicit logout
+	// deletes the row that owns it.
 	result, err := e.Pusher.NotifyUser(ctx, reminder.UserID, message(reminder))
 	detail := map[string]any{
 		"outcome": "sent", "sentAt": sentAt,
 		"sent": result.Sent, "failed": result.Failed, "pruned": result.Pruned,
 	}
-	if err != nil {
+	switch {
+	case err != nil:
 		// Best effort by design: a relay that refused leaves the Reminder fired, which
 		// is the PRD's own call — a stale delivery is worse than a miss.
 		detail["outcome"], detail["error"] = "failed", err.Error()
+	case result == (push.Result{}):
+		detail["outcome"] = "skipped_no_device"
 	}
 	if err := e.Reminders.RecordDelivery(ctx, reminder, detail); err != nil {
 		slog.Error("emitter delivery trace", "reminder_id", reminder.ReminderID, "err", err)
+	}
+	if detail["outcome"] == "skipped_no_device" {
+		slog.Info("emitter skipped push: no subscribed device", "reminder_id", reminder.ReminderID,
+			"user_id", reminder.UserID)
+		return
 	}
 	slog.Info("emitter fired", "reminder_id", reminder.ReminderID, "user_id", reminder.UserID,
 		"sent", result.Sent, "failed", result.Failed, "pruned", result.Pruned)

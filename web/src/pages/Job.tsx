@@ -57,7 +57,7 @@ export default function Job() {
 
   return (
     <div className="flex h-dvh flex-col">
-      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-black/20 px-3 py-2">
+      <header className="flex shrink-0 items-center gap-2 border-b border-border/60 bg-black/20 px-3 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <Button
           type="button"
           variant="outline"

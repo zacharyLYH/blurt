@@ -91,24 +91,6 @@ func (s *SessionStore) SetPushSubscription(ctx context.Context, tokenHash, subsc
 	return changed > 0, nil
 }
 
-// HasLiveSession reports whether the user still has at least one unexpired session.
-// The push path checks it before fanning out: a signed-out user has no device to
-// reach, and a notification must not be attempted on the strength of a stale
-// subscription row.
-func (s *SessionStore) HasLiveSession(ctx context.Context, userID int64, at time.Time) (bool, error) {
-	var live int
-	err := s.read.QueryRowContext(ctx,
-		`SELECT 1 FROM Session WHERE UserId = ? AND ExpiresAt > ? LIMIT 1`,
-		userID, timestamp(at)).Scan(&live)
-	if errors.Is(err, sql.ErrNoRows) {
-		return false, nil
-	}
-	if err != nil {
-		return false, fmt.Errorf("check live session: %w", err)
-	}
-	return true, nil
-}
-
 // PushDevice is one device's stored subscription. Only the session id and the
 // subscription leave the store, so the sender never sees an identity.
 type PushDevice struct {
@@ -116,15 +98,17 @@ type PushDevice struct {
 	Subscription []byte
 }
 
-// ListPushSubscriptions returns every live device of this user that has a
-// subscription. Expired sessions are skipped: their cookie is already gone,
-// so a push into them would just be noise to clean up later.
-func (s *SessionStore) ListPushSubscriptions(ctx context.Context, userID int64, nowTime time.Time) ([]PushDevice, error) {
+// ListPushSubscriptions returns every device of this user that has a
+// subscription, whether or not its login cookie has expired. Push is opted into
+// per device; only an explicit logout deletes the row that owns it. Newest rows
+// come first so a rotated subscription wins over an older copy of the same
+// endpoint.
+func (s *SessionStore) ListPushSubscriptions(ctx context.Context, userID int64) ([]PushDevice, error) {
 	rows, err := s.read.QueryContext(ctx, `
 		SELECT SessionId, PushSubscription FROM Session
-		WHERE UserId = ? AND PushSubscription IS NOT NULL AND ExpiresAt > ?
-		ORDER BY SessionId`,
-		userID, timestamp(nowTime))
+		WHERE UserId = ? AND PushSubscription IS NOT NULL
+		ORDER BY SessionId DESC`,
+		userID)
 	if err != nil {
 		return nil, fmt.Errorf("list push subscriptions: %w", err)
 	}

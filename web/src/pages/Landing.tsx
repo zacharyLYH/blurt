@@ -44,7 +44,7 @@ export default function Landing() {
     <main className="relative isolate flex min-h-dvh flex-col overflow-hidden" data-testid="landing">
       <BackgroundPaths />
 
-      <header className="relative z-10 flex items-center justify-between px-5 py-5 sm:px-8">
+      <header className="relative z-10 flex items-center justify-between px-5 pb-5 pt-[max(1.25rem,env(safe-area-inset-top))] sm:px-8">
         <div className="flex items-center gap-2.5">
           <Mark className="size-8" />
           <span className="text-lg font-semibold tracking-tight">Blurt</span>

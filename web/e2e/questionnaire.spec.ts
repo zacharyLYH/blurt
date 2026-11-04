@@ -29,7 +29,6 @@ test('questionnaire gates home, saves answers, and remembers completion', async 
   await expect(page).toHaveURL(/\/home$/)
 
   // A brand new session for the same email also skips the questionnaire.
-  await page.getByTestId('cancel-audio').click()
   await page.getByRole('button', { name: 'Sign out' }).click()
   await expect(page).toHaveURL(/\/login$/)
   await signIn(page, { name: 'Q', email })

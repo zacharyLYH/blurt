@@ -72,5 +72,8 @@ test('surfaces a revoked microphone on the next entry', async ({ page }) => {
   // let the user through without trapping them.
   await page.getByTestId('permissions-continue').click()
   await expect(page).toHaveURL(/\/home$/)
+  // The app does not open the mic on entry; the denial surfaces when the halo
+  // asks for it.
+  await page.getByTestId('halo').click()
   await expect(page.getByTestId('mic-status')).toHaveText('Mic blocked')
 })

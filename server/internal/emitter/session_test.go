@@ -25,11 +25,11 @@ const (
 	testVAPIDPrivate = "m6UconuCpzkrbd1fui1DQb_GXOEGCjue8mhRAzVvak0"
 )
 
-// TestFanoutSkipsASignedOutUserAndResumesOnRelogin is the session rule end to end
-// with real SQLite: the emitter fires whether or not anyone is signed in, but the
-// fan-out only reaches devices of live sessions. Logging out therefore stops push
-// without stopping the Reminder's lifecycle, and signing back in brings it back.
-func TestFanoutSkipsASignedOutUserAndResumesOnRelogin(t *testing.T) {
+// TestPushOutlivesSessionExpiryAndStopsOnLogout is the session rule end to end
+// with real SQLite: a subscription belongs to a device, not to a login cookie, so
+// an expired session still receives reminders. Only explicit logout deletes the
+// row that owns the subscription. The Reminder's lifecycle never depends on it.
+func TestPushOutlivesSessionExpiryAndStopsOnLogout(t *testing.T) {
 	ctx := context.Background()
 	s := newStack(t)
 	sessions := store.NewSessionStore(s.handle.Write, s.handle.Read)
@@ -81,8 +81,7 @@ func TestFanoutSkipsASignedOutUserAndResumesOnRelogin(t *testing.T) {
 			Sessions: sessions,
 			Sender:   push.NewSender(config.VAPID{PublicKey: testVAPIDPublic, PrivateKey: testVAPIDPrivate, Subject: "mailto:e2e@example.com"}),
 		},
-		Sessions: sessions,
-		Now:      func() time.Time { return at },
+		Now: func() time.Time { return at },
 	}
 	due := func(text string) {
 		t.Helper()
@@ -99,20 +98,32 @@ func TestFanoutSkipsASignedOutUserAndResumesOnRelogin(t *testing.T) {
 		t.Fatalf("delivered = %d, want the live session's push", got)
 	}
 
-	// Logout deletes the session row. The emitter still fires what came due, but there
-	// is nobody to push to.
+	// The login cookie expires, but the device subscription does not. The next
+	// firing still reaches the phone.
+	if _, err := s.handle.Write.Exec(
+		`UPDATE Session SET ExpiresAt = ? WHERE TokenHash = ?`,
+		"2026-10-24T10:00:00Z", token); err != nil {
+		t.Fatalf("expire session: %v", err)
+	}
+	due("Post letter")
+	if got := delivered.Load(); got != 2 {
+		t.Fatalf("delivered = %d, want push after session expiry", got)
+	}
+
+	// Logout deletes the session row, subscription and all. The emitter still fires
+	// what came due, but there is nobody to push to.
 	if err := sessions.Delete(ctx, token); err != nil {
 		t.Fatalf("delete session: %v", err)
 	}
-	due("Post letter")
-	if got := delivered.Load(); got != 1 {
+	due("Water plants")
+	if got := delivered.Load(); got != 2 {
 		t.Fatalf("delivered = %d, want nothing after logout", got)
 	}
 
 	// Signing back in re-registers a device, and the next firing reaches it.
 	signIn()
-	due("Water plants")
-	if got := delivered.Load(); got != 2 {
+	due("Take out trash")
+	if got := delivered.Load(); got != 3 {
 		t.Fatalf("delivered = %d, want the new session's push", got)
 	}
 
@@ -122,17 +133,17 @@ func TestFanoutSkipsASignedOutUserAndResumesOnRelogin(t *testing.T) {
 		`SELECT count(*) FROM Reminder WHERE SourceJobId IS NOT NULL`).Scan(&firedReminders); err != nil {
 		t.Fatalf("count reminders: %v", err)
 	}
-	if firedReminders != 3 {
+	if firedReminders != 4 {
 		t.Fatalf("reminders = %d, want one row per firing", firedReminders)
 	}
 	var skipped int
 	if err := s.handle.Read.QueryRow(`
 		SELECT count(*) FROM Trace
-		WHERE Stage = ? AND json_extract(Detail, '$.outcome') = 'skipped_no_session'`,
+		WHERE Stage = ? AND json_extract(Detail, '$.outcome') = 'skipped_no_device'`,
 		store.NotificationStage).Scan(&skipped); err != nil && err != sql.ErrNoRows {
 		t.Fatalf("count skipped deliveries: %v", err)
 	}
 	if skipped != 1 {
-		t.Fatalf("skipped delivery traces = %d, want the signed-out firing recorded", skipped)
+		t.Fatalf("skipped delivery traces = %d, want the logged-out firing recorded", skipped)
 	}
 }

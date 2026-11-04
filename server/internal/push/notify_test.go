@@ -30,17 +30,18 @@ func relay(t *testing.T, status int) (endpoint string, calls func() int32) {
 	return server.URL + "/push", count.Load
 }
 
-// NotifyUser fans a message out to every session of one user. The test runs a
-// real database and real relays, because which rows and which endpoints the
-// fan-out touches is the whole point.
-func TestNotifyUserFansOutToLiveDevices(t *testing.T) {
+// NotifyUser fans a message out to every subscribed device of one user. The
+// test runs a real database and real relays, because which rows and which
+// endpoints the fan-out touches is the whole point.
+func TestNotifyUserFansOutToSubscribedDevices(t *testing.T) {
 	handle, sessions, userID := fanOutStack(t)
 	live, liveCalls := relay(t, http.StatusCreated)
+	lapsed, lapsedCalls := relay(t, http.StatusCreated)
 	gone, goneCalls := relay(t, http.StatusGone)
 
 	dead := subscribedDevice(t, sessions, userID, gone, time.Hour)
 	subscribedDevice(t, sessions, userID, live, time.Hour)
-	expired := subscribedDevice(t, sessions, userID, live, -time.Hour)
+	expired := subscribedDevice(t, sessions, userID, lapsed, -time.Hour)
 	otherUser := ensureUser(t, handle, "Someone Else", "other@example.com")
 	foreign := subscribedDevice(t, sessions, otherUser, live, time.Hour)
 
@@ -49,13 +50,14 @@ func TestNotifyUserFansOutToLiveDevices(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NotifyUser: %v", err)
 	}
-	if res.Sent != 1 || res.Pruned != 1 || res.Failed != 0 {
-		t.Fatalf("result = %+v, want one sent and one pruned", res)
+	if res.Sent != 2 || res.Pruned != 1 || res.Failed != 0 {
+		t.Fatalf("result = %+v, want two sent and one pruned", res)
 	}
-	// The traffic is the assertion: the expired session and the other user's
-	// device were never contacted.
-	if liveCalls() != 1 || goneCalls() != 1 {
-		t.Fatalf("relays saw %d live and %d gone requests, want one each", liveCalls(), goneCalls())
+	// The traffic is the assertion: a lapsed login still has a subscribed
+	// device, while the other user's device is never contacted.
+	if liveCalls() != 1 || lapsedCalls() != 1 || goneCalls() != 1 {
+		t.Fatalf("relays saw %d live, %d lapsed and %d gone requests, want one each",
+			liveCalls(), lapsedCalls(), goneCalls())
 	}
 	// A dead endpoint loses its subscription, never its session.
 	if got := storedSubscription(t, handle, dead); got != "" {
@@ -65,6 +67,34 @@ func TestNotifyUserFansOutToLiveDevices(t *testing.T) {
 		t.Fatalf("pruning push removed %d session rows, want 1 kept", count)
 	}
 	for name, token := range map[string][]byte{"expired session": expired, "other user's device": foreign} {
+		if storedSubscription(t, handle, token) == "" {
+			t.Fatalf("%s lost its subscription", name)
+		}
+	}
+}
+
+// A browser that loses its cookie and signs in again can leave two session rows
+// pointing at the same endpoint. The fan-out must notify that phone once, not
+// once per row.
+func TestNotifyUserDeduplicatesEndpoints(t *testing.T) {
+	handle, sessions, userID := fanOutStack(t)
+	live, liveCalls := relay(t, http.StatusCreated)
+
+	first := subscribedDevice(t, sessions, userID, live, -time.Hour)
+	second := subscribedDevice(t, sessions, userID, live, time.Hour)
+
+	notifier := &Fanout{Sessions: sessions, Sender: NewSender(testVAPID(t))}
+	res, err := notifier.NotifyUser(context.Background(), userID, Message{Title: "Buy glue", Body: "6:00 PM"})
+	if err != nil {
+		t.Fatalf("NotifyUser: %v", err)
+	}
+	if res.Sent != 1 || res.Failed != 0 || res.Pruned != 0 {
+		t.Fatalf("result = %+v, want one sent", res)
+	}
+	if liveCalls() != 1 {
+		t.Fatalf("relay saw %d requests, want one for two rows sharing an endpoint", liveCalls())
+	}
+	for name, token := range map[string][]byte{"older session": first, "newer session": second} {
 		if storedSubscription(t, handle, token) == "" {
 			t.Fatalf("%s lost its subscription", name)
 		}

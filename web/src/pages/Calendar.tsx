@@ -123,10 +123,10 @@ export default function Calendar() {
   // Loading is derived: a month the server has not answered for yet is loading.
   const loading = data?.month !== month
 
-  // The boom is open on entry — a voice-first app should be one word from
-  // recording — and it is the only thing that holds the mic: closing it, by
-  // cancelling or by sending, releases the stream.
-  const [voiceOn, setVoiceOn] = useState(true)
+  // The mic waits for a tap. iOS will not open one on a cold PWA start, and a
+  // text box that is already focused is the door that always works; the halo
+  // still opens the boom in one tap.
+  const [voiceOn, setVoiceOn] = useState(false)
   const { status: mic, note: micNote, session, retry: retryMic } = useMicrophone(voiceOn)
 
   // Retry the push handoff on every load: the browser subscription may already
@@ -192,8 +192,8 @@ export default function Calendar() {
     setCaptures((count) => count + 1)
   }
 
-  // The boom opens by itself on entry: a voice-first app should be one word from
-  // recording. Cancelling opts out until the halo asks again.
+  // The recorder is armed only after the halo asks for it. Cancelling opts out
+  // until the halo asks again.
   const recorder = useRecorder(
     session,
     async (recording) => {
@@ -285,6 +285,9 @@ export default function Calendar() {
   // Every other mic state needs the retry beside the composer, because typing
   // is then the whole voice path.
   const micBroken = mic === 'denied' || mic === 'unavailable' || mic === 'unsupported'
+  // Before the halo asks, the mic has not been opened at all: saying "checking"
+  // forever would be a lie, so the row invites the tap instead.
+  const micLabel = !voiceOn && mic === 'starting' ? 'Tap the halo to talk' : micCopy[mic].label
 
   return (
     <>
@@ -446,7 +449,9 @@ export default function Calendar() {
               )}
               <TextComposer
                 disabled={sending}
-                focus={recorder.landed}
+                // Typing is the fallback when the mic cannot start, so the box
+                // takes the caret on entry and again after a capture lands.
+                focus={recorder.landed || !voiceOn}
                 onSend={submitText}
               />
               <div className="flex items-center justify-between gap-2 px-2 text-xs text-muted-foreground">
@@ -458,7 +463,7 @@ export default function Calendar() {
                     className={cn('size-2 shrink-0 rounded-full', micCopy[mic].dot)}
                     aria-hidden="true"
                   />
-                  <span className="truncate">{micCopy[mic].label}</span>
+                  <span className="truncate">{micLabel}</span>
                 </span>
                 {micBroken && (
                   <Button

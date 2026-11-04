@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { BackgroundPaths } from '@/components/BackgroundPaths'
 import { Button } from '@/components/ui/button'
@@ -53,6 +53,10 @@ const installNote = (
 export default function Login() {
   const navigate = useNavigate()
   const { user, setUser } = useUser()
+  // A notification deep link that arrived with an expired session resumes
+  // here instead of dropping the user on Home.
+  const raw = (useLocation().state as { from?: string } | null)?.from
+  const from = raw?.startsWith('/') && !raw.startsWith('//') ? raw : '/home'
   const [step, setStep] = useState<Step>('choice')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -62,8 +66,8 @@ export default function Login() {
 
   // Already signed in (session cookie still valid): skip the form.
   useEffect(() => {
-    if (user) navigate('/home', { replace: true })
-  }, [user, navigate])
+    if (user) navigate(from, { replace: true })
+  }, [user, navigate, from])
 
   function go(next: Step) {
     setError(null)
@@ -108,7 +112,7 @@ export default function Login() {
     setUser(signedIn.user)
     // The permission gate (App.tsx) takes over from here and runs ahead of the
     // questionnaire, so signing in and asking for permissions stay separate.
-    navigate('/home', { replace: true })
+    navigate(from, { replace: true })
   }
 
   async function apply(event: FormEvent) {
@@ -144,7 +148,7 @@ export default function Login() {
     )
 
   return (
-    <main className="relative isolate flex min-h-dvh flex-col px-5 py-6 sm:px-8">
+    <main className="relative isolate flex min-h-dvh flex-col px-5 pb-6 pt-[max(1.5rem,env(safe-area-inset-top))] sm:px-8">
       <BackgroundPaths scrim={false} />
       <div className="relative mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-8 py-8">
         <Link to="/" className="flex items-center gap-2.5 self-start" data-testid="login-home">

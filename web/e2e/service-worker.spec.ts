@@ -22,7 +22,9 @@ test.describe('service worker', () => {
     await expect.poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller))).toBe(true)
 
     const manifest = await (await request.get('/manifest.webmanifest')).json()
-    expect(manifest.start_url).toBe('/')
+    // Home, not the marketing page: an install or a cold notification tap lands
+    // inside the app.
+    expect(manifest.start_url).toBe('/home')
     expect(manifest.icons.length).toBeGreaterThan(0)
     for (const icon of manifest.icons as { src: string }[]) {
       expect((await request.get(icon.src)).status()).toBe(200)
@@ -35,9 +37,10 @@ test.describe('service worker', () => {
 
     await expect(page.getByTestId('calendar-month')).toBeVisible()
     await expect(page.getByTestId('push-status')).toBeVisible()
-    // No model configuration step: the first recording starts right after setup.
-    await expect(page.getByTestId('mic-status')).toHaveText('Mic ready')
-    await expect(page.getByTestId('boom-countdown')).toBeVisible()
+    // The mic waits for a tap: entry belongs to the text box, which is what a
+    // cold PWA start can focus without user activation.
+    await expect(page.getByTestId('capture-text')).toBeFocused()
+    await expect(page.getByTestId('boom-countdown')).toHaveCount(0)
 
     await expect
       .poll(() => page.evaluate(() => navigator.serviceWorker.getRegistration().then((reg) => reg?.active?.state ?? null)))

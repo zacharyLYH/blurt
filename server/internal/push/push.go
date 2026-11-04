@@ -24,9 +24,9 @@ import (
 const (
 	// webPushVersion marks the payload shape the service worker understands.
 	webPushVersion = 8030
-	// ttlSeconds keeps an undelivered message for a minute: Blurt sends
-	// reminders, not news, so a stale delivery is worse than a miss.
-	ttlSeconds = 60
+	// ttlSeconds keeps an undelivered message for an hour. iOS can defer a push
+	// while the phone is asleep; a minute was short enough to drop reminders.
+	ttlSeconds = 3600
 	// sendTimeout bounds one device so a slow relay cannot stall the fan-out.
 	sendTimeout = 10 * time.Second
 	// retryAfterCap bounds the pause before the single rate-limit retry.

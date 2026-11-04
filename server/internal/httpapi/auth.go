@@ -15,7 +15,11 @@ import (
 
 const (
 	cookieName = "blurt_session"
-	sessionTTL = 30 * 24 * time.Hour
+	// Sessions slide on every authenticated request and are meant to last until
+	// an explicit logout. A year of inactivity is the backstop, not the plan.
+	// Push subscriptions are not tied to this expiry, so a lapsed login does not
+	// silently stop reminders.
+	sessionTTL = 365 * 24 * time.Hour
 )
 
 type userEnvelope struct {

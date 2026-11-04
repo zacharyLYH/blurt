@@ -31,19 +31,33 @@ export function UserProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let live = true
-    api<UserEnvelope>('/api/user')
-      .then((reply) => {
-        if (live) setUser(reply.user)
-      })
-      .catch((err) => {
-        if (!live) return
-        setUser(null)
-        // A missing session is expected on first visit.
-        if (!(err instanceof ApiError && err.status === 401)) console.warn('Blurt: could not load user', err)
-      })
-      .finally(() => {
-        if (live) setLoading(false)
-      })
+    void (async () => {
+      // A PWA can be woken from a notification before the network is ready. A
+      // failed request is not a signed-out user: only a 401 is. Retrying the
+      // transient answers is what stops a cold start from bouncing to login.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          const reply = await api<UserEnvelope>('/api/user')
+          if (live) setUser(reply.user)
+          break
+        } catch (err) {
+          if (!live) return
+          // A missing session is expected on first visit.
+          if (err instanceof ApiError && err.status === 401) {
+            setUser(null)
+            break
+          }
+          if (attempt >= 2) {
+            setUser(null)
+            console.warn('Blurt: could not load user', err)
+            break
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 400 * (attempt + 1)))
+          if (!live) return
+        }
+      }
+      if (live) setLoading(false)
+    })()
     return () => {
       live = false
     }

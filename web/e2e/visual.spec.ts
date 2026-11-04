@@ -47,6 +47,9 @@ async function signInFresh(page: Page, context: BrowserContext, suffix: string):
 async function captureEverydayScreens(page: Page, context: BrowserContext, suffix: string): Promise<void> {
   await signInFresh(page, context, suffix)
 
+  // The mic waits for the halo, so the recording screen is one tap in.
+  await expect(page.getByTestId('capture-text')).toBeFocused()
+  await page.getByTestId('halo').click()
   await expect(page.getByTestId('mic-status')).toHaveText('Mic ready')
   await expect(page.getByTestId('boom-countdown')).toBeVisible()
   await pauseBoom(page)

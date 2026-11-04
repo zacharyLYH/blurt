@@ -16,10 +16,15 @@ import { UserProvider, useUser } from './lib/user'
 
 function Protected({ children }: { children: React.ReactNode }) {
   const { user, loading } = useUser()
+  const location = useLocation()
   if (loading) {
     return <main className="grid min-h-dvh place-items-center text-sm text-muted-foreground">Loading…</main>
   }
-  if (!user) return <Navigate to="/login" replace />
+  // Keep the deep link through the login round-trip: a notification can wake
+  // the app after its session expired, and signing in should land on it.
+  if (!user) {
+    return <Navigate to="/login" replace state={{ from: location.pathname + location.search }} />
+  }
   return <>{children}</>
 }
 

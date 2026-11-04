@@ -24,11 +24,6 @@ async function openMonth(page: Page) {
 
   await page.goto('/calendar?month=2030-03')
   await passPermissions(page)
-  // A full load opens the boom again; the month grid is what these specs are
-  // about, so step out of the recording first.
-  const cancel = page.getByTestId('cancel-audio')
-  await cancel.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined)
-  if (await cancel.isVisible()) await cancel.click()
 }
 
 // seedSecondMoment adds a second time to the day the fixtures already use, so the
@@ -38,9 +33,6 @@ async function seedSecondMoment(page: Page) {
   await waitForReminder(page.request, 'call mum', 'upcoming', ciTimeout(45_000))
   await page.goto('/home?month=2030-03')
   await passPermissions(page)
-  const cancel = page.getByTestId('cancel-audio')
-  await cancel.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined)
-  if (await cancel.isVisible()) await cancel.click()
   await expect(page.getByTestId('calendar-entry')).toHaveCount(2)
 }
 
@@ -83,15 +75,11 @@ test('a month shows its reminders, and changing month refetches', async ({ page 
 test('a typed blurt lands on the month without a reload', async ({ page }) => {
   await signIn(page, { name: 'Calendar', email: uniqueEmail('calendar-live') })
   await completeQuestionnaire(page)
-  await page.getByTestId('cancel-audio').click()
 
   // A month of its own, so the arrival cannot be confused with anything the
   // rest of the run left behind.
   await page.goto('/home?month=2030-03')
   await passPermissions(page)
-  const cancel = page.getByTestId('cancel-audio')
-  await cancel.waitFor({ state: 'visible', timeout: 5_000 }).catch(() => undefined)
-  if (await cancel.isVisible()) await cancel.click()
   await expect(page.getByTestId('calendar-entry')).toHaveCount(0)
 
   await page.getByTestId('capture-text').fill('buy stamps at 9am on 2030-03-05')

@@ -2,9 +2,9 @@ package push
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
-	"time"
 
 	"blurt/internal/store"
 )
@@ -17,7 +17,7 @@ type Notifier interface {
 	NotifyUser(ctx context.Context, userID int64, msg Message) (Result, error)
 }
 
-// Fanout fans one message out to every device a user is signed in on. Best
+// Fanout fans one message out to every device a user has subscribed. Best
 // effort by design: a device that fails never stops the rest, and a dead
 // endpoint only costs its own subscription.
 type Fanout struct {
@@ -25,19 +25,29 @@ type Fanout struct {
 	Sender   *Sender
 }
 
-// NotifyUser sends to every live session of this user and reports what
+// NotifyUser sends to every subscribed device of this user and reports what
 // happened. A VAPID rejection is returned after the loop because it is a
 // deployment problem worth surfacing; single-device failures are counted and
 // logged instead.
 func (n *Fanout) NotifyUser(ctx context.Context, userID int64, msg Message) (Result, error) {
-	devices, err := n.Sessions.ListPushSubscriptions(ctx, userID, time.Now())
+	devices, err := n.Sessions.ListPushSubscriptions(ctx, userID)
 	if err != nil {
 		return Result{}, err
 	}
 
 	var res Result
 	var authErr error
+	seen := make(map[string]struct{}, len(devices))
 	for _, device := range devices {
+		// A browser that lost its cookie and signed in again can leave two rows
+		// pointing at the same endpoint. Notify once; the newest row wins because
+		// the store lists it first.
+		key := subscriptionKey(device.Subscription)
+		if _, duplicate := seen[key]; duplicate {
+			continue
+		}
+		seen[key] = struct{}{}
+
 		switch err := n.Sender.Send(ctx, device.Subscription, msg); {
 		case err == nil:
 			res.Sent++
@@ -57,4 +67,15 @@ func (n *Fanout) NotifyUser(ctx context.Context, userID int64, msg Message) (Res
 		}
 	}
 	return res, authErr
+}
+
+// subscriptionKey identifies one device by its endpoint. A corrupt row falls
+// back to its raw JSON, so the sender still reports the failure once instead of
+// hiding it as a duplicate.
+func subscriptionKey(raw []byte) string {
+	var sub Subscription
+	if err := json.Unmarshal(raw, &sub); err == nil && sub.Endpoint != "" {
+		return sub.Endpoint
+	}
+	return string(raw)
 }

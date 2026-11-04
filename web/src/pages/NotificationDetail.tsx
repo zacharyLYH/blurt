@@ -92,7 +92,7 @@ export default function NotificationDetail() {
   }
 
   return (
-    <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-5 px-4 py-6 md:py-8">
+    <main className="mx-auto flex min-h-dvh w-full max-w-xl flex-col gap-5 px-4 pb-6 pt-[max(1.5rem,env(safe-area-inset-top))] md:pb-8 md:pt-8">
       <header className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-[0.16em] text-primary">Reminder</p>

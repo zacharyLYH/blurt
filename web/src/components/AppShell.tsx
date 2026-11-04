@@ -91,7 +91,7 @@ export function AppShell({ inbox, push, onSignOut, onOpenInbox, children }: AppS
 
   return (
     <div className="flex h-dvh flex-col overflow-hidden">
-      <header className="flex shrink-0 items-center gap-1.5 border-b border-border/60 bg-black/20 px-2 py-2">
+      <header className="flex shrink-0 items-center gap-1.5 border-b border-border/60 bg-black/20 px-2 pb-2 pt-[max(0.75rem,env(safe-area-inset-top))]">
         <DropdownMenu
           onOpenChange={(next) => {
             // Opening is the moment to re-ask: a question that landed while the

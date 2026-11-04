@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS User (
 -- in-memory map with a five-minute TTL (single use, attempt capped). A
 -- restart simply invalidates outstanding PINs.
 
--- One row per logged-in device. Opaque HttpOnly cookie; delete to revoke.
+-- One row per browser/device. The cookie is the login; ExpiresAt only revokes
+-- that login. PushSubscription is the device's notification opt-in and outlives
+-- cookie expiry. Delete the row to log out and stop push.
 CREATE TABLE IF NOT EXISTS Session (
     SessionId        INTEGER PRIMARY KEY,
     UserId           INTEGER NOT NULL REFERENCES User(UserId) ON DELETE CASCADE,
