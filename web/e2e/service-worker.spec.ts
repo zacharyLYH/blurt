@@ -37,9 +37,9 @@ test.describe('service worker', () => {
 
     await expect(page.getByTestId('calendar-month')).toBeVisible()
     await expect(page.getByTestId('push-status')).toBeVisible()
-    // The mic waits for a tap: entry belongs to the text box, which is what a
-    // cold PWA start can focus without user activation.
-    await expect(page.getByTestId('capture-text')).toBeFocused()
+    // The mic waits for the halo, and the composer waits for a tap: entry puts
+    // the caret nowhere.
+    await expect(page.getByTestId('capture-text')).not.toBeFocused()
     await expect(page.getByTestId('boom-countdown')).toHaveCount(0)
 
     await expect

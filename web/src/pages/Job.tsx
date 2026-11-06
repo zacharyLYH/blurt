@@ -111,7 +111,6 @@ export default function Job() {
         <div className="shrink-0 border-t border-border/60 bg-background/85 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
           <div className="mx-auto flex w-full max-w-3xl flex-col gap-1">
             <TextComposer
-              focus
               onSend={reply}
               onVoice={() => navigate(`/jobs/${id}/reply`)}
               voiceDisabled={!session}

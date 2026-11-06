@@ -123,9 +123,8 @@ export default function Calendar() {
   // Loading is derived: a month the server has not answered for yet is loading.
   const loading = data?.month !== month
 
-  // The mic waits for a tap. iOS will not open one on a cold PWA start, and a
-  // text box that is already focused is the door that always works; the halo
-  // still opens the boom in one tap.
+  // The mic waits for a tap. iOS will not open one on a cold PWA start, so the
+  // halo is the voice door and the composer is always there for typing.
   const [voiceOn, setVoiceOn] = useState(false)
   const { status: mic, note: micNote, session, retry: retryMic } = useMicrophone(voiceOn)
 
@@ -447,13 +446,6 @@ export default function Calendar() {
                   )}
                 </div>
               )}
-              <TextComposer
-                disabled={sending}
-                // Typing is the fallback when the mic cannot start, so the box
-                // takes the caret on entry and again after a capture lands.
-                focus={recorder.landed || !voiceOn}
-                onSend={submitText}
-              />
               <div className="flex items-center justify-between gap-2 px-2 text-xs text-muted-foreground">
                 <span
                   data-testid="mic-status"
@@ -486,6 +478,7 @@ export default function Calendar() {
                   {micNote}
                 </p>
               )}
+              <TextComposer disabled={sending} onSend={submitText} />
             </div>
           </div>
         </main>

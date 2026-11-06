@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { PullUpMic } from '@/components/PullUpMic'
 import { Button } from '@/components/ui/button'
@@ -6,8 +6,6 @@ import { Textarea } from '@/components/ui/textarea'
 
 interface ComposerProps {
   disabled?: boolean
-  // focus moves the caret here, which is where cancelling a capture lands.
-  focus: boolean
   onSend: (text: string) => Promise<boolean>
   // The voice door is optional: a screen with its own recorder (the calendar's
   // halo) hides this one instead of offering two ways into the same clip.
@@ -24,7 +22,6 @@ interface ComposerProps {
 // the chat's bottom bar, so it stays a single row until the text wraps.
 export function TextComposer({
   disabled = false,
-  focus,
   onSend,
   onVoice,
   voiceDisabled = false,
@@ -34,11 +31,6 @@ export function TextComposer({
 }: ComposerProps) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const ref = useRef<HTMLTextAreaElement | null>(null)
-
-  useEffect(() => {
-    if (focus) ref.current?.focus()
-  }, [focus])
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -56,7 +48,6 @@ export function TextComposer({
       className="flex items-end gap-1.5 rounded-3xl border border-border bg-card/80 p-1.5 pl-4 shadow-lg"
     >
       <Textarea
-        ref={ref}
         data-testid={textTestId}
         value={text}
         onChange={(event) => setText(event.target.value)}

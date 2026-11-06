@@ -10,8 +10,9 @@ test('records a clip, uploads it, and its question waits in the inbox', async ({
   await signIn(page, { name: 'Lam', email: uniqueEmail('voice') })
   await completeQuestionnaire(page)
 
-  // Entry belongs to the composer: no microphone until the halo asks for one.
-  await expect(page.getByTestId('capture-text')).toBeFocused()
+  // Entry is quiet: no microphone until the halo, no caret until the box is
+  // tapped.
+  await expect(page.getByTestId('capture-text')).not.toBeFocused()
   await expect(page.getByTestId('boom-countdown')).toHaveCount(0)
   await page.getByTestId('halo').click()
   // The mic opens and the boom is already recording: the countdown is the proof
@@ -31,9 +32,10 @@ test('records a clip, uploads it, and its question waits in the inbox', async ({
   await expect(page.getByTestId('inbox-item')).toHaveCount(1)
 })
 
-// Cancel is the way out of a clip the user does not want, and it puts them
-// straight into the composer rather than back at a menu.
-test('cancelling a capture lands in the composer', async ({ page }) => {
+// Cancel is the way out of a clip the user does not want. Closing the voice
+// screen must not steal focus into the composer and pop the keyboard; typing is
+// still one tap away.
+test('cancelling a capture leaves the composer unfocused', async ({ page }) => {
   await signIn(page, { name: 'Lam', email: uniqueEmail('cancel') })
   await completeQuestionnaire(page)
 
@@ -42,7 +44,8 @@ test('cancelling a capture lands in the composer', async ({ page }) => {
   await page.getByTestId('cancel-audio').click()
   await expect(page.getByTestId('boom-countdown')).toHaveCount(0)
 
-  // No extra click needed: the caret is already where typing goes.
+  await expect(page.getByTestId('capture-text')).not.toBeFocused()
+  await page.getByTestId('capture-text').click()
   await page.keyboard.type('buy glue')
   await expect(page.getByTestId('capture-text')).toHaveValue('buy glue')
 })

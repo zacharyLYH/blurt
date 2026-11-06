@@ -22,8 +22,8 @@ export type Recorder =
 //
 // `auto` starts recording the moment the mic is live, which is what makes the
 // boom the first thing either screen shows. Cancelling, and finishing a send,
-// both opt out; `landed` is how a caller knows to move focus to its own
-// fallback, and `reset` brings the recorder back for another clip.
+// both opt out; `landed` reports that the capture is over, and `reset` brings
+// the recorder back for another clip.
 export function useRecorder(
   session: MicSession | null,
   onSent: (recording: Recording) => Promise<void>,
