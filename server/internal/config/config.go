@@ -57,9 +57,9 @@ type STT struct {
 }
 
 // Helper is the home gateway the two cheap stages ask: prescreening and the memory tagger.
-// They share the gateway that serves phonon, so the URL and key fall back to the STT ones and
-// only the model differs per stage. The core turn is the one that rides the deployment's
-// hosted provider.
+// They share the host that serves phonon, so the URL and key fall back to the STT ones; the
+// route is the gateway's OpenAI chat route, and only the model differs per stage. The core
+// turn is the one that rides the deployment's hosted provider.
 type Helper struct {
 	URL       string
 	APIKey    string
@@ -196,9 +196,9 @@ func Load() (*Config, error) {
 	}
 	cfg.FakeClockFastForward = envDuration(&problems, "BLURT_FAKE_CLOCK_FAST_FORWARD_AMOUNT")
 
-	// The cheap stages ride the home gateway. They are not advisory: a capture that
-	// cannot be screened or checked could never be trusted, so the gateway and its
-	// three models are required unless the fake is on.
+	// The cheap stages ride the home gateway's OpenAI chat route. They are not advisory:
+	// a capture that cannot be screened or checked could never be trusted, so the gateway
+	// and its two models are required unless the fake is on.
 	cfg.Helper = Helper{
 		URL:       opt("BLURT_AUX_URL"),
 		APIKey:    opt("BLURT_AUX_API_KEY"),
@@ -208,6 +208,10 @@ func Load() (*Config, error) {
 	if cfg.Helper.URL == "" {
 		cfg.Helper.URL = cfg.STT.URL
 	}
+	// phonon and chat share the host but not the path: transcription stays on
+	// /v1/infer, chat is /v1/chat/completions. A BLURT_AUX_URL that still names the
+	// old route is mapped too, so the split needs no env change.
+	cfg.Helper.URL = gatewayChatURL(cfg.Helper.URL)
 	if cfg.Helper.APIKey == "" {
 		cfg.Helper.APIKey = cfg.STT.APIKey
 	}
@@ -245,6 +249,23 @@ func Load() (*Config, error) {
 		return nil, fmt.Errorf("invalid configuration:\n  %s", strings.Join(problems, "\n  "))
 	}
 	return cfg, nil
+}
+
+// gatewayChatURL maps a home-gateway route onto the OpenAI-compatible chat route.
+// The gateway keeps phonon on /v1/infer and serves chat at /v1/chat/completions; any
+// other URL is left as the operator wrote it.
+func gatewayChatURL(raw string) string {
+	trimmed := strings.TrimRight(raw, "/")
+	switch {
+	case strings.HasSuffix(trimmed, "/v1/chat/completions"):
+		return trimmed
+	case strings.HasSuffix(trimmed, "/v1/infer"):
+		return strings.TrimSuffix(trimmed, "/infer") + "/chat/completions"
+	case strings.HasSuffix(trimmed, "/v1"):
+		return trimmed + "/chat/completions"
+	default:
+		return raw
+	}
 }
 
 // checkHTTPURL rejects a typo at boot instead of failing every transcription.

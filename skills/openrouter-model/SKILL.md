@@ -9,10 +9,11 @@ The core planner — the bounded agent loop that places a capture as records or 
 question — rides the deployment's hosted provider, not the home gateway. Its settings
 (`BLURT_AGENT_MODEL`, `BLURT_AGENT_API_KEY`, optional `BLURT_AGENT_URL`) come from
 `.env`; `main.go` builds one `ModelClient` for every Job, so there is no per-user
-model setup. The prescreen, the post-agent check and the tagger stay on the home
-gateway (`skills/gateway-records`).
+model setup. The prescreen and the tagger stay on the home gateway
+(`skills/gateway-records`); the old post-agent check is gone.
 
-The endpoint is OpenAI-shaped, which is the difference from `/v1/infer`:
+Both chat routes are OpenAI-shaped. The home gateway's `/v1/infer` is only phonon's
+audio route now; its chat route is `/v1/chat/completions`. The hosted planner's body:
 
 ```sh
 curl -s https://openrouter.ai/api/v1/chat/completions \

@@ -77,7 +77,7 @@ func TestModelClientFinalizeSendsTheStructuredSchema(t *testing.T) {
 			`"text":"Call mum","zone":"Asia/Singapore","day":"tomorrow","time":"19:00",` +
 			`"recurrence":"none"}],"memories":[],` +
 			`"evidence":"they said tomorrow at 7pm","question":""}`
-		_, _ = w.Write(gatewayAnswer(t, "stop", answer))
+		_, _ = w.Write(openRouterAnswer(t, "stop", answer))
 	})
 
 	turn, err := gateway.Finalize(context.Background(), PlannerInput{
@@ -88,26 +88,26 @@ func TestModelClientFinalizeSendsTheStructuredSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Finalize: %v", err)
 	}
-	if got.Payload.Tools != nil {
-		t.Fatalf("tools = %+v, want none on the strict call", got.Payload.Tools)
+	if got.Tools != nil {
+		t.Fatalf("tools = %+v, want none on the strict call", got.Tools)
 	}
 
 	if got.Model != "local-model" {
 		t.Fatalf("model = %q, want the configured one", got.Model)
 	}
-	if got.Payload.MaxTokens != maxOutputTokens {
-		t.Fatalf("max_tokens = %d, want %d", got.Payload.MaxTokens, maxOutputTokens)
+	if got.MaxTokens != maxOutputTokens {
+		t.Fatalf("max_tokens = %d, want %d", got.MaxTokens, maxOutputTokens)
 	}
-	if got.Payload.ResponseFormat == nil || got.Payload.ResponseFormat.Type != "json_schema" ||
-		got.Payload.ResponseFormat.JSONSchema.Name != "planner" {
-		t.Fatalf("response format = %+v, want the record schema", got.Payload.ResponseFormat)
+	if got.ResponseFormat == nil || got.ResponseFormat.Type != "json_schema" ||
+		got.ResponseFormat.JSONSchema.Name != "planner" {
+		t.Fatalf("response format = %+v, want the record schema", got.ResponseFormat)
 	}
 	var schema struct {
 		Properties           map[string]any `json:"properties"`
 		Required             []string       `json:"required"`
 		AdditionalProperties bool           `json:"additionalProperties"`
 	}
-	if err := json.Unmarshal(got.Payload.ResponseFormat.JSONSchema.Schema, &schema); err != nil {
+	if err := json.Unmarshal(got.ResponseFormat.JSONSchema.Schema, &schema); err != nil {
 		t.Fatalf("decode schema: %v", err)
 	}
 	// Five fields, all required, and the object closed: that is the shape a strict
@@ -120,35 +120,35 @@ func TestModelClientFinalizeSendsTheStructuredSchema(t *testing.T) {
 	}
 	for _, field := range []string{"kind", "ops", "memories", "evidence", "question"} {
 		if _, ok := schema.Properties[field]; !ok {
-			t.Fatalf("schema = %s, want the %s field", got.Payload.ResponseFormat.JSONSchema.Schema, field)
+			t.Fatalf("schema = %s, want the %s field", got.ResponseFormat.JSONSchema.Schema, field)
 		}
 	}
 	// An op carries the verb, the row it names, and the fields the capture said.
 	for _, field := range []string{"intent", "reminder_id", "text", "zone", "day", "time", "recurrence"} {
-		if !strings.Contains(string(got.Payload.ResponseFormat.JSONSchema.Schema), `"`+field+`":{`) {
+		if !strings.Contains(string(got.ResponseFormat.JSONSchema.Schema), `"`+field+`":{`) {
 			t.Fatalf("schema = %s, want the %s field in an op",
-				got.Payload.ResponseFormat.JSONSchema.Schema, field)
+				got.ResponseFormat.JSONSchema.Schema, field)
 		}
 	}
 	// Every field may be the empty string, which is what makes "I am not sure"
 	// expressible — and on a change an empty field is "as it was" — and recurrence is an
 	// enum, so a pattern the server cannot read never even arrives.
-	if !strings.Contains(string(got.Payload.ResponseFormat.JSONSchema.Schema),
+	if !strings.Contains(string(got.ResponseFormat.JSONSchema.Schema),
 		`"enum":["","none","daily","weekly","monthly","yearly"]`) {
-		t.Fatalf("schema = %s, want the recurrence enum", got.Payload.ResponseFormat.JSONSchema.Schema)
+		t.Fatalf("schema = %s, want the recurrence enum", got.ResponseFormat.JSONSchema.Schema)
 	}
-	if len(got.Payload.Messages) != 2 {
-		t.Fatalf("messages = %d, want a system prompt and one user turn", len(got.Payload.Messages))
+	if len(got.Messages) != 2 {
+		t.Fatalf("messages = %d, want a system prompt and one user turn", len(got.Messages))
 	}
-	if got.Payload.Messages[0].Role != "system" || got.Payload.Messages[0].Content != AgentPrompt {
+	if got.Messages[0].Role != "system" || got.Messages[0].Content != AgentPrompt {
 		t.Fatal("the first message is not the agent prompt")
 	}
-	if !strings.HasSuffix(got.Payload.Messages[1].Content, "capture: call mum tomorrow at 7pm") {
-		t.Fatalf("user turn = %q, want the capture last", got.Payload.Messages[1].Content)
+	if !strings.HasSuffix(got.Messages[1].Content, "capture: call mum tomorrow at 7pm") {
+		t.Fatalf("user turn = %q, want the capture last", got.Messages[1].Content)
 	}
 	// A relative phrase cannot be resolved without knowing what day it is.
-	if !strings.Contains(got.Payload.Messages[1].Content, "now_local: 2026-10-24T18:30") {
-		t.Fatalf("user turn = %q, want the local clock in it", got.Payload.Messages[1].Content)
+	if !strings.Contains(got.Messages[1].Content, "now_local: 2026-10-24T18:30") {
+		t.Fatalf("user turn = %q, want the local clock in it", got.Messages[1].Content)
 	}
 
 	// What the strict call promises is the wire answer: the day token the model copied, not
@@ -253,14 +253,14 @@ func TestGatewayScreen(t *testing.T) {
 			t.Errorf("decode request: %v", err)
 			return
 		}
-		name := body.Payload.ResponseFormat.JSONSchema.Name
+		name := body.ResponseFormat.JSONSchema.Name
 		names = append(names, name)
 		switch name {
 		case "prescreen":
-			if !strings.HasSuffix(body.Payload.Messages[1].Content, "capture: buy glue at 6pm") {
-				t.Errorf("screen turn = %q", body.Payload.Messages[1].Content)
+			if !strings.HasSuffix(body.Messages[1].Content, "capture: buy glue at 6pm") {
+				t.Errorf("screen turn = %q", body.Messages[1].Content)
 			}
-			_, _ = w.Write(gatewayAnswer(t, "stop", `{"verdict":"ok","reason":"a thing to do"}`))
+			_, _ = w.Write(openRouterAnswer(t, "stop", `{"verdict":"ok","reason":"a thing to do"}`))
 		default:
 			t.Errorf("unexpected schema %q", name)
 		}
@@ -282,7 +282,7 @@ func TestGatewayScreen(t *testing.T) {
 // along for the Trace.
 func TestGatewayRefusesAnUnreadableAnswer(t *testing.T) {
 	gateway := modelServer(t, Settings{Model: "local-model"}, func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write(gatewayAnswer(t, "length", `{"kind":"records"`))
+		_, _ = w.Write(openRouterAnswer(t, "length", `{"kind":"records"`))
 	})
 
 	_, err := gateway.Finalize(context.Background(), PlannerInput{

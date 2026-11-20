@@ -1,27 +1,28 @@
 ---
 name: gateway-records
-description: Call the self-hosted gateway's chat route to turn a capture into structured Reminder and Memory records (Blurt's AgentLoop model). Use when a model answer is unparseable, a field comes back invented or truncated, or you need the exact /v1/infer body for a chat model.
+description: Call the self-hosted gateway's OpenAI chat route to turn a capture into structured Reminder and Memory records (Blurt's AgentLoop model). Use when a model answer is unparseable, a field comes back invented or truncated, or you need the exact /v1/chat/completions body for a chat model.
 ---
 
-# ModelClient records over /v1/infer
+# ModelClient records over /v1/chat/completions
 
-The gateway serves phonon (audio) and chat models over the same `/v1/infer` route
-with a different `payload`; laya and its typed decisions are gone. The chat route
-now answers Blurt's two cheap stages — prescreening and the memory tagger. The core planner rides the deployment's hosted provider, which
-speaks OpenAI's envelope: see [openrouter-model](../openrouter-model/SKILL.md).
+The gateway keeps phonon (audio) on its own `/v1/infer` route; chat models are
+OpenAI-compatible at `/v1/chat/completions` with a flat body. The chat route
+answers Blurt's two cheap stages — prescreening and the memory tagger. The core planner
+rides the deployment's hosted provider, which speaks the same shape: see
+[openrouter-model](../openrouter-model/SKILL.md).
 
-A chat model takes OpenAI-shaped messages plus a JSON schema, and answers with an
-OpenAI-shaped completion nested under `output`:
+A chat model takes OpenAI-shaped messages plus a JSON schema, and answers with a
+normal OpenAI completion:
 
 ```sh
-curl -s https://<gateway>/v1/infer -H "Authorization: Bearer $KEY" \
-  -H 'content-type: application/json' -d '{"model":"<model-id>","payload":{
+curl -s https://<gateway>/v1/chat/completions -H "Authorization: Bearer $KEY" \
+  -H 'content-type: application/json' -d '{"model":"<model-id>",
     "messages":[{"role":"system","content":"..."},{"role":"user","content":"..."}],
     "max_tokens":200,
-    "response_format":{"type":"json_schema","json_schema":{"name":"records","schema":{...}}}}}'
+    "response_format":{"type":"json_schema","json_schema":{"name":"records","schema":{...}}}}'
 ```
 
-The answer is at `output.choices[0].message.content` — and that content is a
+The answer is at `choices[0].message.content` — and that content is a
 **JSON string**, not an object, so it needs a second decode. There is no
 `tool_calls`: the schema is what constrains the model, which is why Blurt does not
 ask it to pick a tool.

@@ -1,14 +1,13 @@
-// The model port: what the AgentLoop asks for, and the two chat envelopes that answer it. The
+// The model port: what the AgentLoop asks for, and the chat routes that answer it. The
 // deployment names one endpoint, key and model, and every stage rides it: the screen, the
 // agent loop, the strict call behind it and the tagger.
 //
-// Two wire shapes, differing only in framing. The home gateway takes
-// {"model", "payload": {messages, tools, max_tokens, response_format}} and answers under
-// output.choices[0].message; an OpenAI-compatible provider takes messages at the top, answers
-// under choices[0].message, and needs `strict` on the schema plus require_parameters so the
-// router keeps a turn on an endpoint that can honour it. A schema-constrained turn and a tool
-// turn are mutually exclusive: a forced schema can never ask to look something up, and a turn
-// that offers tools names no schema.
+// One wire shape serves both. The home gateway speaks OpenAI-compatible chat at
+// /v1/chat/completions, so messages, tools, max_tokens and response_format sit at the top and
+// the answer lands under choices[0].message. A hosted router takes the same body but also
+// needs `strict` on the schema plus require_parameters so it keeps a turn on an endpoint that
+// can honour it. A schema-constrained turn and a tool turn are mutually exclusive: a forced
+// schema can never ask to look something up, and a turn that offers tools names no schema.
 package agent
 
 import (
@@ -148,8 +147,8 @@ type Model interface {
 	Tags(ctx context.Context, text string) ([]string, error)
 }
 
-// Provider selects the chat envelope, not the vendor: every supported provider is
-// an OpenAI-shaped chat route except the home gateway, which has its own body.
+// Provider selects the routing knobs, not the wire shape: both are OpenAI chat
+// routes now, but a hosted router also gets `strict` and require_parameters.
 type Provider string
 
 const (
@@ -268,14 +267,11 @@ type providerPrefs struct {
 	RequireParameters bool `json:"require_parameters"`
 }
 
-// gatewayRequest is the home gateway's body: a model plus a payload.
+// gatewayRequest is the home gateway's OpenAI-compatible chat body: the same flat
+// shape as any OpenAI route, minus the hosted router's knobs.
 type gatewayRequest struct {
-	Model       string       `json:"model"`
-	Temperature float64      `json:"temperature"`
-	Payload     gatewayInput `json:"payload"`
-}
-
-type gatewayInput struct {
+	Model          string          `json:"model"`
+	Temperature    float64         `json:"temperature,omitempty"`
 	Messages       []Message       `json:"messages"`
 	Tools          []Tool          `json:"tools,omitempty"`
 	MaxTokens      int             `json:"max_tokens"`
@@ -300,8 +296,8 @@ type replyChoice struct {
 	Message      Message `json:"message"`
 }
 
-// inferReply mirrors both envelopes: an OpenAI-compatible reply puts choices at
-// the top, and the home gateway nests them under output.
+// inferReply reads OpenAI choices at the top. The nested output form is kept for
+// older gateways; the current one answers at the top like any OpenAI route.
 type inferReply struct {
 	Choices []replyChoice `json:"choices"`
 	Output  struct {
@@ -321,9 +317,9 @@ func (r inferReply) first() (replyChoice, bool) {
 
 var _ Model = (*ModelClient)(nil)
 
-// NewModelClient builds the transport for the deployment's settings. Only
-// ProviderOpenRouter is not the gateway envelope, so an unset provider takes the
-// gateway path anyway.
+// NewModelClient builds the transport for the deployment's settings. An unset
+// provider takes the gateway path: the OpenAI chat route without the hosted
+// router's knobs.
 func NewModelClient(settings Settings) *ModelClient {
 	return &ModelClient{
 		settings: settings,
@@ -437,14 +433,12 @@ func (h *ModelClient) body(messages []Message, t turn) any {
 		}
 	}
 	return gatewayRequest{
-		Model:       h.settings.Model,
-		Temperature: h.settings.Temperature,
-		Payload: gatewayInput{
-			Messages:       messages,
-			Tools:          t.tools,
-			MaxTokens:      maxOutputTokens,
-			ResponseFormat: format,
-		},
+		Model:          h.settings.Model,
+		Temperature:    h.settings.Temperature,
+		Messages:       messages,
+		Tools:          t.tools,
+		MaxTokens:      maxOutputTokens,
+		ResponseFormat: format,
 	}
 }
 

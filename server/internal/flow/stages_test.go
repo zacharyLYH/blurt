@@ -41,9 +41,8 @@ func newStageScript(t *testing.T) (*httptest.Server, *stageScript) {
 	script := &stageScript{calls: map[string][]stageCall{}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		raw, _ := io.ReadAll(r.Body)
-		// The two envelopes put the schema and the tools in different places: the
-		// gateway nests them under payload, an OpenAI-compatible route keeps them at
-		// the top.
+		// Both wire shapes are still accepted: the current gateway is flat, and the
+		// nested payload form is the legacy one.
 		type format struct {
 			JSONSchema struct {
 				Name string `json:"name"`
@@ -153,10 +152,10 @@ func TestPipelineThreeStagesAskTheirOwnModel(t *testing.T) {
 	}
 
 	p.wantStages(t, script, map[string]stageCall{
-		"prescreen": {Model: screenModel, Envelope: "gateway"},
+		"prescreen": {Model: screenModel, Envelope: "openai"},
 		"agent":     {Model: plannerModel, Envelope: "openai"},
 		"planner":   {Model: plannerModel, Envelope: "openai"},
-		"tags":      {Model: tagModel, Envelope: "gateway"},
+		"tags":      {Model: tagModel, Envelope: "openai"},
 	})
 	// The planner named the run, and the three gateway models are in the Trace.
 	trace := p.lastTrace(t, job.JobID)

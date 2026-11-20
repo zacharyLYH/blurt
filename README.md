@@ -31,7 +31,7 @@ Boot panics on any gap. Every `BLURT_FAKE_*` switch is local/e2e only: never set
 | Var | What |
 | --- | --- |
 | `BLURT_STT_URL` `_API_KEY` `_MODEL` | phonon transcription route. Not OpenAI-shaped: base64 WAV data URI in, `{"output":{"text":"…"}}` out. `_MODEL` must be `phonon`; a wrong key gets a 401 that Blurt treats as permanent. |
-| `BLURT_PRESCREEN_MODEL` `BLURT_TAGS_MODEL` | the two cheap stages: prescreen and memory tagger. Same gateway as STT, so URL and key default to `BLURT_STT_*`; `BLURT_AUX_URL` / `BLURT_AUX_API_KEY` override. |
+| `BLURT_PRESCREEN_MODEL` `BLURT_TAGS_MODEL` | the two cheap stages: prescreen and memory tagger. Same gateway host as STT, so the key defaults to `BLURT_STT_API_KEY`; the URL defaults to the STT one and is mapped to the gateway's OpenAI chat route (`/v1/chat/completions`). `BLURT_AUX_URL` / `BLURT_AUX_API_KEY` override. |
 | `BLURT_AGENT_MODEL` `BLURT_AGENT_API_KEY` | the one core planner every user plans on. `BLURT_AGENT_URL` overrides the OpenRouter default. Required unless the fake is on. |
 | `BLURT_SMTP_*` | login-PIN mail. Gmail App Password (2FA required); nothing else to configure. `_USERNAME` is also the app's owner: that one account approves everyone else. |
 | `BLURT_PUBLIC_ORIGINS` | comma-separated CSRF allowlist. Empty = localhost:9996 + :5173 (dev only). Set it and localhost is no longer trusted unless listed. |
