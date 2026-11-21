@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"blurt/internal/agent"
+	"blurt/internal/config"
 )
 
 // helperTimeout bounds one helper call. The gateway answers in a second or two, so this is the
@@ -66,13 +67,9 @@ func helperArmFor(t *testing.T, prompt string, requests *wire) (helperArm, strin
 	if base == "" || key == "" {
 		return helperArm{}, "set BLURT_STT_URL and BLURT_STT_API_KEY (or the BLURT_AUX_* pair) to score the helper stages"
 	}
-	// The gateway keeps phonon on /v1/infer and serves chat at /v1/chat/completions;
-	// map the STT route the same way config.go does.
-	if trimmed := strings.TrimRight(base, "/"); strings.HasSuffix(trimmed, "/v1/infer") {
-		base = strings.TrimSuffix(trimmed, "/infer") + "/chat/completions"
-	} else if strings.HasSuffix(trimmed, "/v1") {
-		base = trimmed + "/chat/completions"
-	}
+	// The gateway serves audio at /v1/audio/transcriptions and chat at
+	// /v1/chat/completions; map the STT route the same way config.go does.
+	base = config.GatewayChatURL(base)
 	stages := []struct {
 		name        string
 		key         string

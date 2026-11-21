@@ -60,6 +60,28 @@ func TestLoadValid(t *testing.T) {
 	if cfg.Agent.Model != "liquid/lfm-2.5-24b-a2b" || cfg.Agent.APIKey != "sk-or-test" {
 		t.Fatalf("agent = %+v, want the deployment model", cfg.Agent)
 	}
+	if cfg.STT.URL != "https://stt.example.com/v1/audio/transcriptions" {
+		t.Fatalf("stt url = %q", cfg.STT.URL)
+	}
+	if cfg.Helper.URL != "https://stt.example.com/v1/chat/completions" {
+		t.Fatalf("helper url = %q, want the chat route on the STT host", cfg.Helper.URL)
+	}
+}
+
+// The audio and chat routes share a host but not a path. Both the current audio
+// route and the legacy /v1/infer alias map onto chat; anything else is left alone.
+func TestGatewayChatURL(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://gw/v1/audio/transcriptions": "https://gw/v1/chat/completions",
+		"https://gw/v1/infer":                "https://gw/v1/chat/completions",
+		"https://gw/v1":                      "https://gw/v1/chat/completions",
+		"https://gw/v1/chat/completions":     "https://gw/v1/chat/completions",
+		"https://gw/custom":                  "https://gw/custom",
+	} {
+		if got := GatewayChatURL(raw); got != want {
+			t.Fatalf("GatewayChatURL(%q) = %q, want %q", raw, got, want)
+		}
+	}
 }
 
 func TestLoadReportsEveryMissingValue(t *testing.T) {
@@ -284,7 +306,8 @@ func TestAuxStagesRequireAModel(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.Helper.URL != cfg.STT.URL || cfg.Helper.APIKey != cfg.STT.APIKey {
-		t.Fatalf("aux gateway = %+v, want the STT gateway", cfg.Helper)
+	wantURL := "https://stt.example.com/v1/chat/completions"
+	if cfg.Helper.URL != wantURL || cfg.Helper.APIKey != cfg.STT.APIKey {
+		t.Fatalf("aux gateway = %+v, want %s + the STT key", cfg.Helper, wantURL)
 	}
 }

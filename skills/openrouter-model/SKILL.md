@@ -12,8 +12,9 @@ question — rides the deployment's hosted provider, not the home gateway. Its s
 model setup. The prescreen and the tagger stay on the home gateway
 (`skills/gateway-records`); the old post-agent check is gone.
 
-Both chat routes are OpenAI-shaped. The home gateway's `/v1/infer` is only phonon's
-audio route now; its chat route is `/v1/chat/completions`. The hosted planner's body:
+Both chat routes are OpenAI-shaped. The home gateway's
+`/v1/audio/transcriptions` is phonon's audio route; its chat route is
+`/v1/chat/completions`. The hosted planner's body:
 
 ```sh
 curl -s https://openrouter.ai/api/v1/chat/completions \

@@ -23,7 +23,7 @@ PY
 ```
 
 The clip is only as good as its transcript: check it against the real gateway
-before committing a new one (`skills/voice-capture` has the `/v1/infer` body).
+before committing a new one (`skills/voice-capture` has the audio request body).
 A case pins the words it needs with `transcript_has`, never the whole sentence
 phonon returns.
 

@@ -47,9 +47,9 @@ type VAPID struct {
 	Subject    string
 }
 
-// STT is the phonon gateway Blurt sends captures to. The route is the
-// gateway's own /v1/infer, not an OpenAI-compatible one: a base64 WAV data URI
-// in, {"output": {"text": "..."}} out.
+// STT is the phonon gateway Blurt sends captures to. The route is
+// OpenAI-compatible: multipart/form-data with a `file` part, and
+// {"text": "..."} back.
 type STT struct {
 	URL    string
 	APIKey string
@@ -151,16 +151,16 @@ func Load() (*Config, error) {
 
 	cfg.FakePIN = envBool(&problems, "BLURT_FAKE_PIN")
 
-	// phonon is reached over the gateway's own transcription route. The fake is
-	// the local/e2e escape hatch, so a real URL is required otherwise.
+	// phonon is reached over the gateway's OpenAI audio route. The fake is the
+	// local/e2e escape hatch, so a real URL is required otherwise.
 	cfg.FakeSTT = envBool(&problems, "BLURT_FAKE_STT")
 	cfg.STT = STT{
 		URL:    opt("BLURT_STT_URL"),
 		APIKey: opt("BLURT_STT_API_KEY"),
 		Model:  opt("BLURT_STT_MODEL"),
 	}
-	// The gateway serves exactly one audio model and rejects any other id, so
-	// the default must be the id it answers to.
+	// The gateway pins its configured audio checkpoint, so the model field is
+	// advisory; the default keeps OpenAI clients and traces readable.
 	if cfg.STT.Model == "" {
 		cfg.STT.Model = "phonon"
 	}
@@ -208,10 +208,11 @@ func Load() (*Config, error) {
 	if cfg.Helper.URL == "" {
 		cfg.Helper.URL = cfg.STT.URL
 	}
-	// phonon and chat share the host but not the path: transcription stays on
-	// /v1/infer, chat is /v1/chat/completions. A BLURT_AUX_URL that still names the
-	// old route is mapped too, so the split needs no env change.
-	cfg.Helper.URL = gatewayChatURL(cfg.Helper.URL)
+	// phonon and chat share the host but not the path: transcription is
+	// /v1/audio/transcriptions, chat is /v1/chat/completions. A BLURT_AUX_URL
+	// that still names the old /v1/infer route is mapped too, so the split
+	// needs no env change.
+	cfg.Helper.URL = GatewayChatURL(cfg.Helper.URL)
 	if cfg.Helper.APIKey == "" {
 		cfg.Helper.APIKey = cfg.STT.APIKey
 	}
@@ -251,14 +252,17 @@ func Load() (*Config, error) {
 	return cfg, nil
 }
 
-// gatewayChatURL maps a home-gateway route onto the OpenAI-compatible chat route.
-// The gateway keeps phonon on /v1/infer and serves chat at /v1/chat/completions; any
-// other URL is left as the operator wrote it.
-func gatewayChatURL(raw string) string {
+// GatewayChatURL maps a home-gateway route onto the OpenAI-compatible chat
+// route. The gateway serves audio at /v1/audio/transcriptions (and used to use
+// /v1/infer) and chat at /v1/chat/completions; any other URL is left as the
+// operator wrote it.
+func GatewayChatURL(raw string) string {
 	trimmed := strings.TrimRight(raw, "/")
 	switch {
 	case strings.HasSuffix(trimmed, "/v1/chat/completions"):
 		return trimmed
+	case strings.HasSuffix(trimmed, "/audio/transcriptions"):
+		return strings.TrimSuffix(trimmed, "/audio/transcriptions") + "/chat/completions"
 	case strings.HasSuffix(trimmed, "/v1/infer"):
 		return strings.TrimSuffix(trimmed, "/infer") + "/chat/completions"
 	case strings.HasSuffix(trimmed, "/v1"):

@@ -227,7 +227,7 @@ One report per submission, keyed by its own id. A notification is the Reminder a
 
 Audio is mono 16 kHz PCM WAV, around 32 KB/s. Upload one binary blob on send and keep it temporarily for retry. Save the Job and return; STT and agent run asynchronously.
 
-Capture pins the browser audio graph to 16 kHz mono, then rewrites whatever the browser encoded — WebM/Opus on Chrome, AAC on Safari — into mono 16 kHz PCM WAV, which is the only shape the transcription gateway accepts. The server re-verifies that shape from the blob header, and the blob is capped at one minute. phonon is called over the gateway's own route, not an OpenAI-compatible one: one JSON body carrying a base64 WAV data URI, `{"output": {"text": "..."}}` back. The bearer key is required; a missing or wrong key is a 401 and a permanent failure.
+Capture pins the browser audio graph to 16 kHz mono, then rewrites whatever the browser encoded — WebM/Opus on Chrome, AAC on Safari — into mono 16 kHz PCM WAV, which is the only shape the transcription gateway accepts. The server re-verifies that shape from the blob header, and the blob is capped at one minute. phonon is called over the gateway's OpenAI-compatible audio route: `multipart/form-data` with the WAV as a `file` part, and `{"text": "..."}` back. The bearer key is required; a missing or wrong key is a 401 and a permanent failure.
 
 Convert speech to English. If STT fails or the clip is not legible, reply in the Job Conversation: “I couldn't process that. Please say it again or type it.” Send a push notification. System-One may provide transcript-quality signals or alternate entity spellings; the frontier LLM decides whether the user needs to repeat.
 

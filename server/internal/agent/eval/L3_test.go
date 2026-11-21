@@ -205,7 +205,9 @@ func sttTranscriber() stt.Transcriber {
 	})
 }
 
-// sttModel is the id the transcription worker reports; the gateway takes one.
+// sttModel is the model field sent with the audio upload. The gateway pins its
+// configured checkpoint, so this is advisory but keeps traces and OpenAI clients
+// consistent.
 func sttModel() string {
 	if model := envValue("BLURT_STT_MODEL"); model != "" {
 		return model

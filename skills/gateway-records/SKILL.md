@@ -5,7 +5,7 @@ description: Call the self-hosted gateway's OpenAI chat route to turn a capture 
 
 # ModelClient records over /v1/chat/completions
 
-The gateway keeps phonon (audio) on its own `/v1/infer` route; chat models are
+The gateway serves phonon (audio) at `/v1/audio/transcriptions`; chat models are
 OpenAI-compatible at `/v1/chat/completions` with a flat body. The chat route
 answers Blurt's two cheap stages — prescreening and the memory tagger. The core planner
 rides the deployment's hosted provider, which speaks the same shape: see

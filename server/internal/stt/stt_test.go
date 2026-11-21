@@ -2,9 +2,9 @@ package stt
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,27 +14,33 @@ import (
 	"blurt/internal/failure"
 )
 
-// The gateway route is not OpenAI's: one JSON body carrying a base64 WAV data
-// URI, and the transcript under output.text. This pins that contract, including
-// the bearer key and the model id the gateway checks.
+// The gateway route is OpenAI's audio shape: multipart/form-data with a WAV
+// `file` part and the transcript under text. This pins that contract, including
+// the bearer key, the model field and the part's filename/content type.
 func TestHTTPTranscribe(t *testing.T) {
-	var gotModel, gotAudio, gotAuth, gotType string
+	var gotModel, gotAuth, gotType, gotFilename, gotFileType string
+	var gotAudio []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			t.Errorf("method = %s, want POST", r.Method)
 		}
 		gotAuth = r.Header.Get("Authorization")
 		gotType = r.Header.Get("Content-Type")
-		var body inferRequest
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Errorf("decode body: %v", err)
+		if err := r.ParseMultipartForm(1 << 20); err != nil {
+			t.Errorf("parse form: %v", err)
 			return
 		}
-		gotModel, gotAudio = body.Model, body.Payload.Audio
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id": "req_1", "model": "phonon",
-			"output": map[string]string{"text": "  buy glue  "},
-		})
+		gotModel = r.FormValue("model")
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			t.Errorf("form file: %v", err)
+			return
+		}
+		defer file.Close()
+		gotFilename = header.Filename
+		gotFileType = header.Header.Get("Content-Type")
+		gotAudio, _ = io.ReadAll(file)
+		_ = json.NewEncoder(w).Encode(map[string]string{"text": "  buy glue  "})
 	}))
 	defer server.Close()
 
@@ -46,11 +52,18 @@ func TestHTTPTranscribe(t *testing.T) {
 	if text != "buy glue" {
 		t.Fatalf("text = %q", text)
 	}
-	if gotModel != "phonon" || gotAuth != "Bearer secret" || gotType != "application/json" {
-		t.Fatalf("model=%q auth=%q type=%q", gotModel, gotAuth, gotType)
+	if gotModel != "phonon" || gotAuth != "Bearer secret" {
+		t.Fatalf("model=%q auth=%q", gotModel, gotAuth)
 	}
-	if want := audioPrefix + base64.StdEncoding.EncodeToString([]byte("audio bytes")); gotAudio != want {
-		t.Fatalf("audio = %q, want %q", gotAudio, want)
+	if !strings.HasPrefix(gotType, "multipart/form-data; boundary=") {
+		t.Fatalf("content type = %q, want multipart/form-data", gotType)
+	}
+	if gotFilename != audioFilename || gotFileType != audioContentType {
+		t.Fatalf("file = %q (%q), want %q (%q)",
+			gotFilename, gotFileType, audioFilename, audioContentType)
+	}
+	if string(gotAudio) != "audio bytes" {
+		t.Fatalf("audio = %q", gotAudio)
 	}
 }
 

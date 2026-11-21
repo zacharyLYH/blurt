@@ -1,19 +1,20 @@
 // Package stt turns a captured audio blob into text. phonon is reached over the
-// gateway's own route, which is not OpenAI's: the body carries the audio as a
-// base64 WAV data URI and the transcript comes back under output.text. The HTTP
-// client is behind an interface because the worker's retry and fallback rules
-// are what we test.
+// gateway's OpenAI-compatible audio route: multipart/form-data with a `file`
+// part, and the transcript comes back as {"text": "..."}. The HTTP client is
+// behind an interface because the worker's retry and fallback rules are what we
+// test.
 package stt
 
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +23,12 @@ import (
 	"blurt/internal/failure"
 )
 
-// audioPrefix declares the payload as a WAV data URI. Blurt only ever captures
-// WAV, so it is a constant rather than a parameter.
-const audioPrefix = "data:audio/wav;base64,"
+const (
+	// audioFilename gives the multipart part a name the runtime can key on.
+	audioFilename = "capture.wav"
+	// audioContentType is the only shape Blurt captures.
+	audioContentType = "audio/wav"
+)
 
 // FakeOK is the mode the server boots with when BLURT_FAKE_STT is on: every
 // clip comes back as FakeTranscript. The other modes exist for the worker's
@@ -40,8 +44,8 @@ type Transcriber interface {
 	Transcribe(ctx context.Context, audio io.Reader) (string, error)
 }
 
-// HTTP calls phonon. The route is the gateway's own /v1/infer; it takes a
-// base64 WAV data URI and answers {"output": {"text": "..."}}.
+// HTTP calls phonon over the gateway's OpenAI audio route. It sends a
+// multipart/form-data body with one `file` part and reads {"text": "..."}.
 type HTTP struct {
 	url    string
 	apiKey string
@@ -71,20 +75,10 @@ func NewHTTP(cfg config.STT) *HTTP {
 	}
 }
 
-// inferRequest is the gateway's body: model plus a payload object.
-type inferRequest struct {
-	Model   string `json:"model"`
-	Payload struct {
-		Audio string `json:"audio"`
-	} `json:"payload"`
-}
-
-// inferReply needs only the text. Timestamps are never requested, so the
-// answer stays one line instead of a segment list.
-type inferReply struct {
-	Output struct {
-		Text string `json:"text"`
-	} `json:"output"`
+// transcriptionReply needs only the text. Timestamps are never requested, so
+// the answer stays one line instead of a segment list.
+type transcriptionReply struct {
+	Text string `json:"text"`
 }
 
 func (h *HTTP) Transcribe(ctx context.Context, audio io.Reader) (string, error) {
@@ -92,9 +86,7 @@ func (h *HTTP) Transcribe(ctx context.Context, audio io.Reader) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("stt: read audio: %w", err)
 	}
-	request := inferRequest{Model: h.model}
-	request.Payload.Audio = audioPrefix + base64.StdEncoding.EncodeToString(raw)
-	body, err := json.Marshal(request)
+	body, contentType, err := h.form(raw)
 	if err != nil {
 		return "", fmt.Errorf("stt: build request: %w", err)
 	}
@@ -103,7 +95,7 @@ func (h *HTTP) Transcribe(ctx context.Context, audio io.Reader) (string, error) 
 	if err != nil {
 		return "", fmt.Errorf("stt: build request: %w", err)
 	}
-	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Type", contentType)
 	if h.apiKey != "" {
 		req.Header.Set("Authorization", "Bearer "+h.apiKey)
 	}
@@ -117,11 +109,40 @@ func (h *HTTP) Transcribe(ctx context.Context, audio io.Reader) (string, error) 
 		return "", failure.ReadRefusal("stt", res)
 	}
 
-	var reply inferReply
+	var reply transcriptionReply
 	if err := json.NewDecoder(io.LimitReader(res.Body, 1<<20)).Decode(&reply); err != nil {
 		return "", fmt.Errorf("stt: decode transcript: %w", err)
 	}
-	return strings.TrimSpace(reply.Output.Text), nil
+	return strings.TrimSpace(reply.Text), nil
+}
+
+// form builds the OpenAI audio body: one WAV file part plus the model id. The
+// gateway pins its configured checkpoint, so `model` is only there for clients
+// that expect the OpenAI field.
+func (h *HTTP) form(raw []byte) ([]byte, string, error) {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+
+	header := textproto.MIMEHeader{}
+	header.Set("Content-Disposition",
+		fmt.Sprintf(`form-data; name="file"; filename="%s"`, audioFilename))
+	header.Set("Content-Type", audioContentType)
+	part, err := writer.CreatePart(header)
+	if err != nil {
+		return nil, "", err
+	}
+	if _, err := part.Write(raw); err != nil {
+		return nil, "", err
+	}
+	if h.model != "" {
+		if err := writer.WriteField("model", h.model); err != nil {
+			return nil, "", err
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, "", err
+	}
+	return body.Bytes(), writer.FormDataContentType(), nil
 }
 
 // NewFake returns a transcriber for a mode the worker tests inject.
